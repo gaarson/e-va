@@ -1,0 +1,27 @@
+#!/bin/bash
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+AGENT_HOME="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+
+PROJECT_ROOT="$(pwd)"
+
+export AGENT_HOME
+export PROJECT_ROOT
+
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    export ENV_PATH="$PROJECT_ROOT/.env"
+elif [ -f "$AGENT_HOME/.env" ]; then
+    export ENV_PATH="$AGENT_HOME/.env"
+fi
+
+LUA_VERSION=$(lua -v 2>&1 | awk '{print $2}' | cut -d. -f1,2)
+
+export LUA_PATH="$AGENT_HOME/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?/init.lua;;"
+export LUA_CPATH="$AGENT_HOME/lua_modules/lib/lua/${LUA_VERSION}/?.so;;"
+
+exec lua "$AGENT_HOME/agent.lua" "$@"

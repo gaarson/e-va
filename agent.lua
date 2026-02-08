@@ -1,222 +1,205 @@
 -- agent.lua
--- Автономный агент для рефакторинга без привязки к Neovim
--- Usage: lua agent.lua <path/to/file> "<instruction>"
-
-local config_module = require("config")
-local llm_handler = require("llm_handler")
+local config = require("config").get()
 local utils = require("utils")
-local patcher = require("patcher") -- Твой существующий модуль
-local lfs = require("lfs")
-local io = require("io")
+local llm = require("llm_handler")
+local patcher = require("patcher")
 
--- Простая проверка аргументов (argv check)
-local target_file = arg[1]
+local start_file = arg[1]
 local instruction = arg[2]
 
-if not target_file or not instruction then
-    print("Usage: lua agent.lua <path/to/file> \"<instruction>\"")
+if not instruction then
+    print("Usage: eva [file] \"<instruction>\"")
     os.exit(1)
 end
 
--- Загружаем конфиг
-local cfg = config_module.get()
-local project_root = cfg.PROJECT_ROOT or lfs.currentdir()
+-- === STATE ===
+local KNOWLEDGE_BASE = {} 
+local CHAT_HISTORY = {}
+local LAST_TOOL_CMD = ""
+local REPEAT_COUNT = 0
 
--- Проверяем существование файла (stat syscall)
-local attr = lfs.attributes(target_file)
-if not attr then
-    print("Error: Target file not found: " .. target_file)
-    os.exit(1)
+local function normalize_path(p)
+    return utils.trim(p):gsub("^%./", "")
 end
 
--- Основной цикл агента
-local function run_autonomous_agent(file_path, task)
-    print("\n--- Starting Autonomous Agent ---")
-    print("Target: " .. file_path)
-    print("Task: " .. task)
+local function update_knowledge(path, content)
+    KNOWLEDGE_BASE[normalize_path(path)] = content
+end
+
+local function get_memory_block()
+    local mem = "\n\n=== OPEN FILES (CONTEXT) ===\n"
+    local count = 0
+    for path, content in pairs(KNOWLEDGE_BASE) do
+        count = count + 1
+        local display_content = content
+        if #content > 8000 then
+            display_content = content:sub(1, 8000) .. "\n...[TRUNCATED]..."
+        end
+        mem = mem .. string.format("FILE: %s\n```\n%s\n```\n", path, display_content)
+    end
+    if count == 0 then mem = mem .. "(None)\n" end
+    return mem
+end
+
+-- Init
+if start_file then
+    local content = utils.read_file(start_file)
+    if content then update_knowledge(start_file, content) end
+end
+
+table.insert(CHAT_HISTORY, { role = "user", content = "TASK: " .. instruction })
+
+local MAX_TURNS = 20
+local turn = 0
+
+print(">>> AGENT INITIALIZED. Goal: " .. instruction)
+
+while turn < MAX_TURNS do
+    turn = turn + 1
+    print(string.format("\n[Turn %d] Thinking...", turn))
+
+    -- 1. Build Prompt
+    local messages_payload = {}
+    table.insert(messages_payload, { role = "system", content = config.SYSTEM_PROMPT })
     
-    local conversation_history = {}
+    -- История диалога
+    for _, msg in ipairs(CHAT_HISTORY) do table.insert(messages_payload, msg) end
     
-    -- 1. System Prompt (Задаем роль инженера)
-    if cfg.SYSTEM_PROMPT then
-        table.insert(conversation_history, { role = "system", content = cfg.SYSTEM_PROMPT })
+    -- Память файлов
+    table.insert(messages_payload, { role = "system", content = get_memory_block() })
+
+    -- !!! ГЛАВНЫЙ ФИКС: Вставляем напоминание ПОСЛЕДНИМ сообщением !!!
+    -- Это заставляет модель вернуть фокус на формат XML
+    table.insert(messages_payload, { 
+        role = "system", 
+        content = "IMPORTANT: Do not explain your plan. Output ONLY the next <cmd>...<cmd> or a Patch block now." 
+    })
+
+    -- 2. LLM Request
+    local payload = {
+        model = config.API_MODEL,
+        messages = messages_payload,
+        temperature = config.TEMPERATURE,
+        max_tokens = 2048
+    }
+
+    local response_data = llm.send_request(payload)
+    if not response_data then print("FATAL: Network error."); break end
+    
+    local raw_content = llm.extract_content(response_data) or ""
+    
+    -- Debug Output
+    print("---------------------------------------------------")
+    print(">>> RAW LLM RESPONSE:\n" .. raw_content)
+    print("---------------------------------------------------")
+
+    local clean_response = llm.clean_code_blocks(raw_content)
+
+    -- 3. Parse Actions
+    local current_cmd = clean_response:match("<cmd>(.-)</cmd>")
+    
+    -- Fallback for Markdown blocks
+    if not current_cmd then
+        -- Иногда они пишут `read_file:test.lua`
+        local backtick_cmd = clean_response:match("`([^`]+)`") 
+        if backtick_cmd and (backtick_cmd:match("list_") or backtick_cmd:match("read_") or backtick_cmd:match("search_")) then
+            current_cmd = backtick_cmd
+        end
     end
 
-    -- 2. Читаем целевой файл (I/O Read)
-    local content, err = utils.read_file_content(file_path)
-    if not content then
-        print("Critical Error: Cannot read file. " .. (err or ""))
-        return
-    end
+    local tool_executed = false
+    local tool_output = ""
+    local force_stop = false
 
-    -- Формируем первый запрос
-    local initial_prompt = string.format(
-        "Task: %s\n\nTarget File: %s\nContent:\n```%s\n%s\n```\n\n" ..
-        "If you need to analyze dependencies (imports/requires), request them using: 'read file `path/to/dependency`'. " ..
-        "If you are ready to fix/refactor, provide the Unified Diff (patch).",
-        task, file_path, utils.get_file_extension(file_path), content
-    )
-    
-    table.insert(conversation_history, { role = "user", content = initial_prompt })
+    -- Добавляем ответ ассистента в историю
+    table.insert(CHAT_HISTORY, { role = "assistant", content = raw_content })
 
-    local max_turns = 10 -- Дадим ему больше свободы для исследования зависимостей
-    local current_turn = 0
+    if current_cmd and current_cmd == LAST_TOOL_CMD then
+        REPEAT_COUNT = REPEAT_COUNT + 1
+        print("\n>>> WARNING: Agent repeating command: " .. current_cmd)
+        tool_output = "SYSTEM ERROR: You just executed this command. Check your plan and do something else."
+        tool_executed = true
+        if REPEAT_COUNT >= 4 then force_stop = true end
+    else
+        REPEAT_COUNT = 0
+        LAST_TOOL_CMD = current_cmd or ""
 
-    while current_turn < max_turns do
-        current_turn = current_turn + 1
-        print(string.format("\n[Turn %d] Thinking...", current_turn))
+        if current_cmd then
+            local cmd_content = utils.trim(current_cmd)
+            print("\n>>> EXEC: " .. cmd_content)
 
-        -- Подготовка payload для запроса
-        local request_data = {
-            model = cfg.API_MODEL,
-            messages = conversation_history,
-            stream = false,
-            options = {
-            temperature = 0.0, -- Ставь 0.0 для кодинга (максимальная точность)
-            top_k = 20,        -- Ограничивает выборку токенов (меньше бреда)
-            top_p = 0.9,       -- Nucleus sampling
-            num_ctx = 64000     -- Контекстное окно (важно для Qwen)
-          }
-        }
-
-        -- Network I/O
-        local response_data, err = llm_handler.send_request(request_data)
-        if not response_data then
-            print("Error: API Request failed: ", err)
-            break
-        end
-
-        local response_text, think_text = llm_handler.extract_response_and_think_content(
-            llm_handler.extract_response_text(response_data)
-        )
-
-        if response_text:match("<DONE>") then
-            print("\n>>> AGENT: Task completed successfully. Exiting.")
-            break
-        end
-
-        if not response_text then
-            print("Error: Empty response from LLM.")
-            break
-        end
-
-        -- Логируем "мысли" (если модель поддерживает Chain of Thought)
-        if think_text then
-            print("\n[DeepSeek Thought]:\n" .. think_text .. "\n")
-        end
-        
-        -- Добавляем ответ в историю
-        table.insert(conversation_history, { 
-            role = "assistant", 
-            content = (think_text and ("<think>"..think_text.."</think>\n") or "") .. response_text 
-        })
-
-        -- === АНАЛИЗ ДЕЙСТВИЙ (Decision Tree) ===
-
-        -- Действие A: Применение патча
-        local is_patch = llm_handler.is_patch_format(response_text)
-        if is_patch then
-            print("\n>>> Detected PATCH. Applying to filesystem...")
-            
-            -- Используем твой patcher.lua напрямую, минуя neovim
-            -- Нам нужно собрать ext_utils, так как patcher их требует
-            local patch_utils = {
-                safe_os_execute = utils.safe_os_execute,
-                write_file = utils.write_file,
-                read_file_content = utils.read_file_content,
-                join_path = utils.join_path
-            }
-
-            local pre_patch_content = content -- Запоминаем текущее состояние (которое мы читали в начале или обновили)
-        
-        -- Если переменная content устарела (из-за прошлых итераций), лучше перечитать:
-            pre_patch_content = utils.read_file_content(file_path)
-
-            local success, msg = patcher.apply_patch(
-                file_path, 
-                response_text, 
-                cfg.PATCH_COMMAND, 
-                cfg.TEMP_DIR, 
-                patch_utils
-            )
-
-            print(msg) -- Результат патчинга
-
-            if success then
-              print(">>> SUCCESS: Patcher reported success. Verifying content changes...")
-              
-              -- 1. Читаем файл заново
-              local new_content, err_r = utils.read_file_content(file_path)
-              if not new_content then break end
-
-              -- [[ NEW: CONTENT COMPARISON ]]
-              if new_content == pre_patch_content then
-                   print(">>> WARNING: File content is IDENTIAL after patch. The patch did nothing.")
-                   table.insert(conversation_history, {
-                      role = "user",
-                      content = "The `patch` command reported success, but the file content did NOT change.\n" ..
-                                "This means your patch was likely valid syntax but matched nothing (context mismatch).\n" ..
-                                "Please REVIEW the file content again and provide a CORRECTED patch with proper context lines."
-                  })
-                  -- Не прерываем, даем шанс исправить
-              else
-                  -- Если контент изменился, ТОЛЬКО ТОГДА запускаем верификацию логики
-                  table.insert(conversation_history, {
-                      role = "user",
-                      content = "The patch was applied and file changed. Here is the UPDATED file:\n" ..
-                                "```" .. utils.get_file_extension(file_path) .. "\n" ..
-                                new_content .. "\n" ..
-                                "```\n\n" ..
-                                "VERIFICATION: Does this code NOW match the instruction?\n" ..
-                                "If YES: reply <DONE>\n" ..
-                                "If NO: provide a new patch."
-                  })
-              end
-              
-          else
-              -- (Старая логика FAIL)
-              print(">>> FAIL: Patch rejected...")
-              -- ...
-          end
-        -- Действие B: Запрос на чтение другого файла (Dependency resolution)
-        else
-            local requested_file = llm_handler.find_file_request(response_text)
-            if requested_file then
-                print("\n>>> Agent requested to read file: " .. requested_file)
-                
-                -- Пытаемся найти файл относительно корня проекта
-                local abs_path = utils.join_path(project_root, requested_file)
-                local dep_content, read_err = utils.read_file_content(abs_path)
-
-                if dep_content then
-                    print(">>> File read successfully. Sending context to Agent.")
-                    table.insert(conversation_history, {
-                        role = "user",
-                        content = string.format(
-                            "Content of `%s`:\n```%s\n%s\n```\nContinue your analysis.",
-                            requested_file, utils.get_file_extension(requested_file), dep_content
-                        )
-                    })
+            if cmd_content:match("^read_file:") then
+                local path = normalize_path(cmd_content:match("^read_file:(.+)"))
+                if path:match("path/to") or path == "file" or path == "filename" then
+                     tool_output = "SYSTEM ERROR: Use REAL filenames from list_files."
+                elseif KNOWLEDGE_BASE[path] then
+                     tool_output = "SYSTEM: File '"..path.."' is ALREADY open."
                 else
-                    print(">>> Error reading dependency: " .. (read_err or "Unknown"))
-                    table.insert(conversation_history, {
-                        role = "user",
-                        content = "Could not read file `" .. requested_file .. "`. Error: " .. (read_err or "File not found")
-                    })
+                     local c = utils.read_file(config.PROJECT_ROOT.."/"..path)
+                     if c then
+                         update_knowledge(path, c)
+                         tool_output = "SUCCESS: Read " .. path
+                     else
+                         tool_output = "ERROR: File not found: " .. path
+                     end
                 end
+                tool_executed = true
+
+            elseif cmd_content:match("^search_project:") then
+                local pat = cmd_content:match("^search_project:(.+)")
+                local res = utils.search_project(config.PROJECT_ROOT, pat)
+                tool_output = "SEARCH RESULTS:\n" .. res
+                tool_executed = true
+
+            elseif cmd_content == "list_files" then
+                local res = utils.list_files_recursive(config.PROJECT_ROOT)
+                tool_output = "FILES TREE:\n" .. res
+                tool_executed = true
+            
+            elseif cmd_content == "finished" then
+                print("\n>>> TASK COMPLETED.")
+                force_stop = true
             else
-                -- Действие C: Просто болтовня (Chatting)
-                print("\n[Agent says]: " .. response_text)
-                print("\nNo action detected. Continuing loop...")
-                -- Можно добавить прерывание или вопрос пользователю, но для автономии пусть продолжает
-                table.insert(conversation_history, {
-                    role = "user",
-                    content = "Please proceed with the task. Provide a patch or request more files if needed."
-                })
+                tool_output = "SYSTEM ERROR: Unknown command format. Use <cmd>...</cmd>."
+                tool_executed = true
             end
         end
+
+        -- PATCH LOGIC
+        if clean_response:match("<<<<<<< SEARCH") then
+            print("\n>>> ATTEMPTING PATCH...")
+            local explicit_file = clean_response:match("File:%s*([%w%./_%-]+)%s*\n*<<<<<<< SEARCH")
+            if explicit_file then explicit_file = explicit_file:gsub("`", "") end
+
+            local target_file = explicit_file
+            if target_file and KNOWLEDGE_BASE[target_file] then
+                print(">>> Target File: " .. target_file)
+                local succ, res = patcher.apply_search_replace(KNOWLEDGE_BASE[target_file], clean_response)
+                if succ then
+                    utils.write_file(config.PROJECT_ROOT.."/"..target_file, res)
+                    update_knowledge(target_file, res)
+                    tool_output = tool_output .. "\nSUCCESS: Patched " .. target_file
+                else
+                    tool_output = tool_output .. "\nPATCH ERROR: " .. res
+                end
+            else
+                 tool_output = tool_output .. "\nSYSTEM ERROR: You MUST write 'File: filename' immediately before '<<<<<<< SEARCH'."
+            end
+            tool_executed = true
+        end
+    end
+
+    if force_stop then break end
+
+    if tool_executed then
+        if #tool_output > 6000 then tool_output = tool_output:sub(1, 6000) .. "\n...[TRUNCATED]" end
+        table.insert(CHAT_HISTORY, { role = "user", content = tool_output })
+    else
+        print(">>> NO ACTION DETECTED. Nudging agent...")
+        -- Жесткий пинок с примером
+        table.insert(CHAT_HISTORY, { 
+            role = "user", 
+            content = "SYSTEM ERROR: You did not output a command. Output EXACTLY: <cmd>list_files</cmd> or <cmd>read_file:filename</cmd>." 
+        })
     end
 end
-
--- Запуск
-run_autonomous_agent(target_file, instruction)

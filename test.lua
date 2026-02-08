@@ -1,8 +1,3 @@
-function calculate_area(radius)
-    if radius < 0 then
-        error("Radius cannot be negative")
-    end
-    return math.pi * radius * radius
-end
+local m = require("math_test")
 
-print(calculate_area(10))
+print(m.PI * 10 * 10)
