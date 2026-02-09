@@ -2,6 +2,28 @@
 local M = {}
 local io = require("io")
 
+-- === NEW: PATH RESOLVER ===
+function M.resolve_relative_path(root, raw_path)
+    -- Убираем лишние пробелы
+    local p = M.trim(raw_path)
+    
+    -- Убираем точку в начале (./file -> file)
+    p = p:gsub("^%./", "")
+    
+    -- Если путь начинается с корня проекта (абсолютный), обрезаем корень
+    -- Экранируем спецсимволы в root для паттерна (-, ., и т.д.)
+    local escaped_root = root:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+    
+    -- Пытаемся найти корень в начале пути
+    local s, e = p:find("^" .. escaped_root)
+    if s then
+        -- Отрезаем корень и возможный слеш в начале
+        p = p:sub(e + 1):gsub("^/", "")
+    end
+    
+    return p
+end
+
 function M.read_file(path)
     local f, err = io.open(path, "rb")
     if not f then return nil, err end
@@ -11,6 +33,7 @@ function M.read_file(path)
 end
 
 function M.write_file(path, content)
+    print(">>> [DISK WRITE] " .. path)
     local f, err = io.open(path, "wb")
     if not f then return false, err end
     local ok, w_err = f:write(content)
@@ -23,71 +46,48 @@ function M.trim(s)
     return (s:gsub("^%s*(.-)%s*$", "%1"))
 end
 
--- == CONTEXT MAPPER ==
--- Эвристический парсер для создания "карты" файла (экономия токенов)
 function M.get_file_outline(path)
+    -- (Оставляем как было в прошлом ответе)
     local content, err = M.read_file(path)
-    if not content then return "Error reading file: " .. tostring(err) end
-
+    if not content then return "Error: " .. tostring(err) end
+    
     local outline = {}
     local line_num = 0
-    
-    -- Простые паттерны для Lua, Python, JS, C
-    -- Это "Dirty Hack", но работает быстрее чем полноценный AST парсер
     for line in content:gmatch("[^\r\n]+") do
         line_num = line_num + 1
-        local clean_line = M.trim(line)
-        
-        -- Ловим определения функций, классов, экспорты
-        if clean_line:match("^function") or 
-           clean_line:match("^local%s+function") or
-           clean_line:match("^class") or
-           clean_line:match("^def%s") or -- python
-           clean_line:match("^export") or
-           clean_line:match("M%..-%s=") then
-            
-            table.insert(outline, string.format("%03d: %s", line_num, clean_line))
+        local clean = M.trim(line)
+        if clean:match("^function") or clean:match("^class") or clean:match("^def") or clean:match("^export") or clean:match("M%..-%s=") then
+            table.insert(outline, string.format("%03d: %s", line_num, clean))
         end
     end
-
-    if #outline == 0 then
-        return "(No structural definitions found. File might be flat script or text.)"
+    if #outline == 0 then return "(No definitions)" end
+    if #outline > 50 then
+        local t = {}
+        for i=1,50 do table.insert(t, outline[i]) end
+        return table.concat(t, "\n") .. "\n...[Truncated]"
     end
-    
     return table.concat(outline, "\n")
 end
 
 function M.list_files_recursive(root_path)
-    -- Используем чистый `find` для совместимости, rg опционален
-    -- Исключаем git и прочий мусор
-    local cmd = string.format("find '%s' -type f -not -path '*/.*' -not -path '*/node_modules/*' -not -path '*/lua_modules/*' 2>/dev/null", root_path)
-    
+    -- (Оставляем как было)
+    local cmd = string.format("find '%s' -type f -not -path '*/.*' -not -path '*/node_modules/*' -not -path '*/__pycache__/*' 2>/dev/null", root_path)
     local p = io.popen(cmd)
-    if not p then return "Error: find command failed" end
-    
-    local output = p:read("*a")
+    if not p then return "Error" end
+    local out = p:read("*a")
     p:close()
-
-    local files = {}
-    local limit = 200
-    local count = 0
     
-    for line in output:gmatch("[^\r\n]+") do
-        -- Убираем префикс ./
-        local clean_path = line:gsub("^%./", ""):gsub("^"..root_path.."/?", "")
-        if clean_path ~= "" then
+    local files = {}
+    local count = 0
+    for line in out:gmatch("[^\r\n]+") do
+        -- Убираем root из вывода find, чтобы список был красивым и относительным
+        local rel = M.resolve_relative_path(root_path, line)
+        if rel ~= "" then
             count = count + 1
-            if count <= limit then
-                table.insert(files, clean_path)
-            end
+            if count <= 300 then table.insert(files, rel) end
         end
     end
-    
-    local res = table.concat(files, "\n")
-    if count > limit then
-        res = res .. "\n... [TRUNCATED " .. (count - limit) .. " files]"
-    end
-    return res
+    return table.concat(files, "\n")
 end
 
 return M
