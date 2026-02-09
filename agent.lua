@@ -8,198 +8,230 @@ local start_file = arg[1]
 local instruction = arg[2]
 
 if not instruction then
-    print("Usage: eva [file] \"<instruction>\"")
+    print("Usage: eva [file_hint] \"<instruction>\"")
     os.exit(1)
 end
 
--- === STATE ===
-local KNOWLEDGE_BASE = {} 
+-- === STATE MACHINE ===
+local STATES = {
+    RESEARCH = "RESEARCH",
+    CODING = "CODING"
+}
+local CURRENT_STATE = STATES.RESEARCH
+
+-- === MEMORY ===
+local KNOWLEDGE_BASE = {} -- path -> content
+local FILE_STATES = {}    -- path -> "READ" | "PATCHED"
 local CHAT_HISTORY = {}
-local LAST_TOOL_CMD = ""
-local REPEAT_COUNT = 0
+local LAST_MSG_HASH = ""
+local LOOP_COUNT = 0
 
 local function normalize_path(p)
     return utils.trim(p):gsub("^%./", "")
 end
 
-local function update_knowledge(path, content)
-    KNOWLEDGE_BASE[normalize_path(path)] = content
+local function get_system_prompt()
+    if CURRENT_STATE == STATES.RESEARCH then
+        return config.PROMPT_RESEARCH
+    else
+        return config.PROMPT_CODING
+    end
 end
 
-local function get_memory_block()
-    local mem = "\n\n=== OPEN FILES (CONTEXT) ===\n"
+local function get_context_block()
+    local mem = "\n\n=== MEMORY (OPEN FILES) ===\n"
     local count = 0
     for path, content in pairs(KNOWLEDGE_BASE) do
         count = count + 1
-        local display_content = content
-        if #content > 8000 then
-            display_content = content:sub(1, 8000) .. "\n...[TRUNCATED]..."
+        local status = FILE_STATES[path] or "READ"
+        local display = content
+        
+        -- Truncation logic
+        if #content > 12000 then
+            display = content:sub(1, 4000) .. "\n...[TRUNCATED: Use search to find details]...\n" .. content:sub(-3000)
         end
-        mem = mem .. string.format("FILE: %s\n```\n%s\n```\n", path, display_content)
+        
+        mem = mem .. string.format("FILE (%s): %s\n```\n%s\n```\n", status, path, display)
     end
-    if count == 0 then mem = mem .. "(None)\n" end
+    if count == 0 then mem = mem .. "(No files loaded. Use read_file to load context)\n" end
     return mem
 end
 
--- Init
+-- === INITIALIZATION ===
+local initial_msg = "TASK: " .. instruction
 if start_file then
-    local content = utils.read_file(start_file)
-    if content then update_knowledge(start_file, content) end
+    print(">>> PRE-LOADING: " .. start_file)
+    -- Нормализуем путь сразу
+    local norm_path = normalize_path(start_file)
+    local content = utils.read_file(norm_path)
+    
+    if content then
+        -- 1. Кладём в память
+        KNOWLEDGE_BASE[norm_path] = content
+        -- 2. Ставим статус READ (прочитан)
+        FILE_STATES[norm_path] = "READ"
+        
+        initial_msg = initial_msg .. "\n(CONTEXT: File '" .. norm_path .. "' is ALREADY loaded in memory. Look at the MEMORY block. Start analyzing it immediately.)"
+    else
+        print(">>> WARNING: Could not pre-load " .. start_file)
+        initial_msg = initial_msg .. "\n(Hint: User pointed to '" .. start_file .. "', but I failed to read it. Please check it manually.)"
+    end
 end
 
-table.insert(CHAT_HISTORY, { role = "user", content = "TASK: " .. instruction })
+table.insert(CHAT_HISTORY, { role = "user", content = initial_msg })
 
-local MAX_TURNS = 20
 local turn = 0
+local MAX_TURNS = 35 -- Чуть увеличили лимит
 
-print(">>> AGENT INITIALIZED. Goal: " .. instruction)
+print(">>> E-VA INITIALIZED.")
+print(">>> MODE: " .. CURRENT_STATE)
 
+-- === MAIN LOOP ===
 while turn < MAX_TURNS do
     turn = turn + 1
-    print(string.format("\n[Turn %d] Thinking...", turn))
-
-    -- 1. Build Prompt
-    local messages_payload = {}
-    table.insert(messages_payload, { role = "system", content = config.SYSTEM_PROMPT })
     
-    -- История диалога
-    for _, msg in ipairs(CHAT_HISTORY) do table.insert(messages_payload, msg) end
+    -- 1. Prompt Building
+    local messages = {}
+    table.insert(messages, { role = "system", content = get_system_prompt() })
+    table.insert(messages, { role = "system", content = get_context_block() })
+    for _, msg in ipairs(CHAT_HISTORY) do table.insert(messages, msg) end
     
-    -- Память файлов
-    table.insert(messages_payload, { role = "system", content = get_memory_block() })
+    -- Nudge (Пинки)
+    local reminder = "CURRENT PHASE: " .. CURRENT_STATE .. "."
+    if CURRENT_STATE == STATES.CODING then
+        reminder = reminder .. " DO NOT re-read files you just patched. Trust your memory. Proceed to the next file."
+    end
+    table.insert(messages, { role = "system", content = reminder })
 
-    -- !!! ГЛАВНЫЙ ФИКС: Вставляем напоминание ПОСЛЕДНИМ сообщением !!!
-    -- Это заставляет модель вернуть фокус на формат XML
-    table.insert(messages_payload, { 
-        role = "system", 
-        content = "IMPORTANT: Do not explain your plan. Output ONLY the next <cmd>...<cmd> or a Patch block now." 
-    })
+    print(string.format("\n[Turn %d | %s] Thinking...", turn, CURRENT_STATE))
 
     -- 2. LLM Request
     local payload = {
         model = config.API_MODEL,
-        messages = messages_payload,
+        messages = messages,
         temperature = config.TEMPERATURE,
         max_tokens = 2048
     }
-
+    
     local response_data = llm.send_request(payload)
-    if not response_data then print("FATAL: Network error."); break end
+    if not response_data then print("FATAL: Network error"); break end
     
     local raw_content = llm.extract_content(response_data) or ""
-    
-    -- Debug Output
-    print("---------------------------------------------------")
-    print(">>> RAW LLM RESPONSE:\n" .. raw_content)
-    print("---------------------------------------------------")
-
     local clean_response = llm.clean_code_blocks(raw_content)
 
-    -- 3. Parse Actions
-    local current_cmd = clean_response:match("<cmd>(.-)</cmd>")
-    
-    -- Fallback for Markdown blocks
-    if not current_cmd then
-        -- Иногда они пишут `read_file:test.lua`
-        local backtick_cmd = clean_response:match("`([^`]+)`") 
-        if backtick_cmd and (backtick_cmd:match("list_") or backtick_cmd:match("read_") or backtick_cmd:match("search_")) then
-            current_cmd = backtick_cmd
+    if not clean_response:match("<cmd>") and not clean_response:match("<<<<<<< SEARCH") then
+        local lower = clean_response:lower()
+        if lower:match("mission accomplished") or 
+           lower:match("successfully completed") or 
+           lower:match("all changes have been applied") then
+            
+            print(">>> DETECTED COMPLETION SPEECH. Auto-terminating.")
+            print(">>> FINAL MESSAGE: " .. clean_response)
+            os.exit(0)
         end
     end
 
-    local tool_executed = false
-    local tool_output = ""
-    local force_stop = false
-
-    -- Добавляем ответ ассистента в историю
+    print(">>> RESP: " .. raw_content:sub(1, 150) .. "...") 
     table.insert(CHAT_HISTORY, { role = "assistant", content = raw_content })
 
-    if current_cmd and current_cmd == LAST_TOOL_CMD then
-        REPEAT_COUNT = REPEAT_COUNT + 1
-        print("\n>>> WARNING: Agent repeating command: " .. current_cmd)
-        tool_output = "SYSTEM ERROR: You just executed this command. Check your plan and do something else."
-        tool_executed = true
-        if REPEAT_COUNT >= 4 then force_stop = true end
-    else
-        REPEAT_COUNT = 0
-        LAST_TOOL_CMD = current_cmd or ""
-
-        if current_cmd then
-            local cmd_content = utils.trim(current_cmd)
-            print("\n>>> EXEC: " .. cmd_content)
-
-            if cmd_content:match("^read_file:") then
-                local path = normalize_path(cmd_content:match("^read_file:(.+)"))
-                if path:match("path/to") or path == "file" or path == "filename" then
-                     tool_output = "SYSTEM ERROR: Use REAL filenames from list_files."
-                elseif KNOWLEDGE_BASE[path] then
-                     tool_output = "SYSTEM: File '"..path.."' is ALREADY open."
-                else
-                     local c = utils.read_file(config.PROJECT_ROOT.."/"..path)
-                     if c then
-                         update_knowledge(path, c)
-                         tool_output = "SUCCESS: Read " .. path
-                     else
-                         tool_output = "ERROR: File not found: " .. path
-                     end
-                end
-                tool_executed = true
-
-            elseif cmd_content:match("^search_project:") then
-                local pat = cmd_content:match("^search_project:(.+)")
-                local res = utils.search_project(config.PROJECT_ROOT, pat)
-                tool_output = "SEARCH RESULTS:\n" .. res
-                tool_executed = true
-
-            elseif cmd_content == "list_files" then
-                local res = utils.list_files_recursive(config.PROJECT_ROOT)
-                tool_output = "FILES TREE:\n" .. res
-                tool_executed = true
-            
-            elseif cmd_content == "finished" then
-                print("\n>>> TASK COMPLETED.")
-                force_stop = true
-            else
-                tool_output = "SYSTEM ERROR: Unknown command format. Use <cmd>...</cmd>."
-                tool_executed = true
-            end
+    -- 3. Loop Protection
+    if clean_response == LAST_MSG_HASH then
+        LOOP_COUNT = LOOP_COUNT + 1
+        print(">>> WARNING: Loop detected (" .. LOOP_COUNT .. ")")
+        if LOOP_COUNT >= 2 then
+            -- Injecting a user message to break the loop
+            table.insert(CHAT_HISTORY, { role = "user", content = "SYSTEM ALERT: You are repeating yourself. STOP. If you finished the file, move to the next one. If you are done, output <cmd>finished</cmd>." })
         end
+        if LOOP_COUNT > 4 then break end
+    else
+        LOOP_COUNT = 0
+        LAST_MSG_HASH = clean_response
+    end
 
-        -- PATCH LOGIC
-        if clean_response:match("<<<<<<< SEARCH") then
-            print("\n>>> ATTEMPTING PATCH...")
-            local explicit_file = clean_response:match("File:%s*([%w%./_%-]+)%s*\n*<<<<<<< SEARCH")
-            if explicit_file then explicit_file = explicit_file:gsub("`", "") end
+    -- 4. Action Parsing
+    local tool_output = ""
+    local cmd_found = false
 
-            local target_file = explicit_file
-            if target_file and KNOWLEDGE_BASE[target_file] then
-                print(">>> Target File: " .. target_file)
-                local succ, res = patcher.apply_search_replace(KNOWLEDGE_BASE[target_file], clean_response)
-                if succ then
-                    utils.write_file(config.PROJECT_ROOT.."/"..target_file, res)
-                    update_knowledge(target_file, res)
-                    tool_output = tool_output .. "\nSUCCESS: Patched " .. target_file
-                else
-                    tool_output = tool_output .. "\nPATCH ERROR: " .. res
-                end
+    -- Commands
+    for cmd in clean_response:gmatch("<cmd>(.-)</cmd>") do
+        cmd_found = true
+        local action = utils.trim(cmd)
+        print(">>> ACTION: " .. action)
+
+        if action == "list_files" then
+            tool_output = tool_output .. "\n[LS]:\n" .. utils.list_files_recursive(config.PROJECT_ROOT)
+        
+        elseif action:match("^read_file:") then
+            local f = normalize_path(action:match("^read_file:(.+)"))
+            
+            -- SMART CACHE PROTECTION
+            -- Если файл уже в памяти и мы в режиме кодинга, не даем читать его снова просто так
+            if KNOWLEDGE_BASE[f] and CURRENT_STATE == STATES.CODING then
+                 tool_output = tool_output .. "\n[SYSTEM]: File '" .. f .. "' is ALREADY in your memory (see above). DO NOT read it again. Apply your patch or move to the next file."
             else
-                 tool_output = tool_output .. "\nSYSTEM ERROR: You MUST write 'File: filename' immediately before '<<<<<<< SEARCH'."
+                local c = utils.read_file(f)
+                if c then
+                    KNOWLEDGE_BASE[f] = c
+                    FILE_STATES[f] = "READ"
+                    tool_output = tool_output .. "\n[READ]: Loaded " .. f .. " (" .. #c .. " bytes)"
+                else
+                    tool_output = tool_output .. "\n[ERROR]: File not found " .. f
+                end
             end
-            tool_executed = true
+
+        elseif action:match("^map_file:") then
+            local f = normalize_path(action:match("^map_file:(.+)"))
+            if KNOWLEDGE_BASE[f] then
+                 tool_output = tool_output .. "\n[SYSTEM]: File is already loaded. Look at the MEMORY block above."
+            else
+                local map = utils.get_file_outline(f)
+                tool_output = tool_output .. "\n[MAP " .. f .. "]:\n" .. map
+            end
+
+        elseif action == "start_coding" then
+            CURRENT_STATE = STATES.CODING
+            tool_output = tool_output .. "\n[SYSTEM]: Phase switched to CODING. Focus on applying changes. Stop analyzing."
+
+        elseif action == "finished" then
+            print(">>> MISSION ACCOMPLISHED.")
+            os.exit(0)
         end
     end
 
-    if force_stop then break end
+    -- Patches
+    if CURRENT_STATE == STATES.CODING and clean_response:match("<<<<<<< SEARCH") then
+        local target_file = clean_response:match("File:%s*([%w%./_%-]+)")
+        if target_file then target_file = normalize_path(target_file) end
 
-    if tool_executed then
-        if #tool_output > 6000 then tool_output = tool_output:sub(1, 6000) .. "\n...[TRUNCATED]" end
+        if target_file and KNOWLEDGE_BASE[target_file] then
+            print(">>> PATCHING: " .. target_file)
+            local ok, res, count = patcher.apply_search_replace(KNOWLEDGE_BASE[target_file], clean_response)
+
+            if ok then
+                if count and count == 0 then
+                    tool_output = tool_output .. "\n[SYSTEM]: Patch accepted, but NO CHANGES were needed (Search == Replace). Proceed to next file."
+                else
+                    utils.write_file(target_file, res)
+                    KNOWLEDGE_BASE[target_file] = res
+                    FILE_STATES[target_file] = "PATCHED"
+                    tool_output = tool_output .. "\n[SUCCESS]: Patch applied to " .. target_file .. ". Proceed."
+                end
+                cmd_found = true
+            else
+                tool_output = tool_output .. "\n[PATCH ERROR]: " .. res
+                cmd_found = true
+            end
+        else
+            tool_output = tool_output .. "\n[ERROR]: You must read_file:" .. (target_file or "???") .. " before patching it."
+            cmd_found = true
+        end
+    end
+
+    if not cmd_found then
+        tool_output = "[SYSTEM ERROR]: No command found. Use <cmd>...</cmd> or a PATCH block."
+    end
+
+    if tool_output ~= "" then
         table.insert(CHAT_HISTORY, { role = "user", content = tool_output })
-    else
-        print(">>> NO ACTION DETECTED. Nudging agent...")
-        -- Жесткий пинок с примером
-        table.insert(CHAT_HISTORY, { 
-            role = "user", 
-            content = "SYSTEM ERROR: You did not output a command. Output EXACTLY: <cmd>list_files</cmd> or <cmd>read_file:filename</cmd>." 
-        })
     end
 end
