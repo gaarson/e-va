@@ -10,7 +10,7 @@ local function merge_tables(t1, t2)
     return res
 end
 
--- profile: таблица из config (LLM_MAIN или LLM_SCOUT)
+
 function M.send_request(profile, messages, override_params)
     if not profile or not profile.url then
         logger.error("LLM Profile missing or invalid URL")
@@ -21,7 +21,7 @@ function M.send_request(profile, messages, override_params)
     req.headers:upsert(":method", "POST")
     req.headers:upsert("content-type", "application/json")
 
-    -- Слияние параметров: Defaults -> Profile Params -> Override
+    
     local payload = merge_tables({
         model = profile.model,
         messages = messages,
@@ -32,7 +32,7 @@ function M.send_request(profile, messages, override_params)
         payload = merge_tables(payload, override_params)
     end
     
-    -- logger.debug("Request Payload", payload) -- Раскомментируй для дебага
+    
 
     local body = json:encode(payload)
     if not body then return nil, "JSON Encode error" end
@@ -61,7 +61,7 @@ end
 
 function M.clean_code_blocks(text)
     if not text then return "" end
-    -- Убираем обертку markdown, если она есть
+ 
     local clean = text:gsub("^```%w*\n", ""):gsub("\n```$", "")
     return clean
 end

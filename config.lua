@@ -5,15 +5,15 @@ function M.get()
     local cfg = {}
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
-    -- Базовые параметры генерации
+
     local BASE_PARAMS = {
         max_tokens = 8192,
-        temperature = 0.1, -- Низкая температура для точности
+        temperature = 0.1,
         top_k = 20,
         stream = false
     }
 
-    -- Параметры сэмплинга (TabbyAPI style)
+    
     local PARAMS_TABBY = {
         min_p = 0.05,
         token_healing = true,
@@ -32,9 +32,9 @@ function M.get()
         return res
     end
 
-    -- === ПРОФИЛИ МОДЕЛЕЙ ===
+ 
     
-    -- Main: Для написания кода (Coding phase)
+  
     cfg.LLM_MAIN = {
         name = "BRAIN (Main)",
         url = "http://192.168.0.116:5000/v1/chat/completions",
@@ -42,7 +42,7 @@ function M.get()
         params = merge(BASE_PARAMS, PARAMS_TABBY)
     }
 
-    -- Scout: Для поиска и планирования (Research & Planning)
+ 
     cfg.LLM_SCOUT = {
         name = "SCOUT (Research)",
         url = "http://192.168.0.116:5000/v1/chat/completions",
@@ -50,14 +50,14 @@ function M.get()
         params = merge(BASE_PARAMS, PARAMS_TABBY)
     }
 
-    -- === REGEX ===
-    -- NIL означает, что мы НЕ ограничиваем вывод жестким шаблоном. 
-    -- Это нужно, чтобы модель могла писать "Thinking: ..." перед командой.
+ 
+
+    
     cfg.REGEX_RESEARCH = nil 
     cfg.REGEX_PLANNING = nil
     cfg.REGEX_CODING = nil
 
-    -- === PROMPTS ===
+    
 
     cfg.PROMPT_RESEARCH = [[
 You are a Senior System Architect.

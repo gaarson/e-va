@@ -16,7 +16,7 @@ if not instruction then
     os.exit(1)
 end
 
--- === SYSTEM STATES ===
+
 local STATES = {
     RESEARCH = "RESEARCH",
     PLANNING = "PLANNING",
@@ -24,15 +24,14 @@ local STATES = {
 }
 local CURRENT_STATE = STATES.RESEARCH
 
--- === MEMORY & CONTEXT ===
-local KNOWLEDGE_BASE = {} -- Путь -> Контент
-local FILE_STATES = {}    -- Путь -> Статус (READ, PATCHED)
-local CHAT_HISTORY = {}   -- Список сообщений
-local EXECUTION_PLAN = {} -- Список задач из фазы PLANNING
+local KNOWLEDGE_BASE = {}
+local FILE_STATES = {}
+local CHAT_HISTORY = {}
+local EXECUTION_PLAN = {} 
 local CURRENT_TASK_INDEX = 1
-local RECENT_HASHES = {}  -- Для детектора петель
+local RECENT_HASHES = {}  
 
--- === HELPER: Path Normalization ===
+
 local function normalize_path_arg(p)
     if not p then return "" end
     local clean_p = utils.trim(p):gsub("^path=", ""):gsub("^file=", ""):gsub("['\"]", "")
@@ -49,9 +48,9 @@ local function normalize_path_arg(p)
     return resolved .. range_part
 end
 
--- === LOOP DETECTION ===
+
 local function check_loop(content)
-    -- Простейший хеш - сама строка (можно обрезать для экономии)
+    
     local hash = content:sub(1, 100) .. (#content)
     local count = 0
     for _, h in ipairs(RECENT_HASHES) do
@@ -62,14 +61,14 @@ local function check_loop(content)
     return count
 end
 
--- === CONTEXT BUILDER ===
+
 local function get_memory_block()
     local mem = "\n\n=== MEMORY (OPEN FILES) ===\n"
     local count = 0
     for path, content in pairs(KNOWLEDGE_BASE) do
         count = count + 1
         local status = FILE_STATES[path] or "READ"
-        -- Защита от переполнения: Если файл огромный, режем
+        
         local display = content
         if #content > 12000 then
             display = content:sub(1, 4000) .. "\n...[SNIP: " .. (#content - 6000) .. " chars]...\n" .. content:sub(-2000)
@@ -97,12 +96,12 @@ local function get_system_prompt()
 end
 
 local function prune_history()
-    -- Оставляем контекст "свежим". Держим около 20 сообщений.
+    
     if #CHAT_HISTORY > 20 then
         local new_hist = {}
-        table.insert(new_hist, CHAT_HISTORY[1]) -- Всегда помним главную задачу
+        table.insert(new_hist, CHAT_HISTORY[1]) 
         
-        -- Оставляем последние 14 (7 пар запрос-ответ)
+        
         local start_idx = #CHAT_HISTORY - 14
         if start_idx < 2 then start_idx = 2 end
         
@@ -113,7 +112,7 @@ local function prune_history()
     end
 end
 
--- === INITIALIZATION ===
+
 local initial_msg = "TASK: " .. instruction
 if start_file then
     logger.info("Pre-loading start file: " .. start_file)
@@ -132,7 +131,7 @@ table.insert(CHAT_HISTORY, { role = "user", content = initial_msg })
 
 logger.info("System Initialized.", { root = config.PROJECT_ROOT })
 
--- === MAIN LOOP ===
+
 local MAX_TURNS = 50
 local turn = 0
 
@@ -145,7 +144,7 @@ while turn < MAX_TURNS do
     table.insert(messages, { role = "system", content = get_memory_block() })
     for _, msg in ipairs(CHAT_HISTORY) do table.insert(messages, msg) end
 
-    -- Выбор профиля LLM
+    
     local current_profile = config.LLM_MAIN
     local current_regex = config.REGEX_CODING 
     
@@ -171,11 +170,11 @@ while turn < MAX_TURNS do
     local raw_content = llm.extract_content(response_data) or ""
     local clean_response = llm.clean_code_blocks(raw_content)
 
-    -- === VERBOSE LOGGING ===
+    
     print("\n\27[35m>>> AI ("..CURRENT_STATE.."):\27[0m " .. raw_content .. (#raw_content > 300 and "..." or ""))
     table.insert(CHAT_HISTORY, { role = "assistant", content = raw_content })
 
-    -- === LOOP CHECK ===
+    
     local loop_hits = check_loop(clean_response)
     if loop_hits >= 2 then
         logger.warn("Loop detected (" .. loop_hits .. " hits)")
@@ -187,7 +186,7 @@ while turn < MAX_TURNS do
     local tool_output = ""
     local cmd_executed = false
 
-    -- === STATE: RESEARCH ===
+    
     if CURRENT_STATE == STATES.RESEARCH then
         for cmd in clean_response:gmatch("<cmd>(.-)</cmd>") do
             cmd_executed = true
@@ -209,7 +208,7 @@ while turn < MAX_TURNS do
                      print("    -> Cached.")
                 else
                     local read_arg = config.PROJECT_ROOT .. "/" .. f_arg
-                    if f_arg:find(":") then -- Восстановление полного пути для диапазона
+                    if f_arg:find(":") then 
                         local suffix = f_arg:match("(:.+)")
                         read_arg = config.PROJECT_ROOT .. "/" .. path_only .. suffix
                     end
@@ -244,12 +243,12 @@ while turn < MAX_TURNS do
             end
         end
 
-    -- === STATE: PLANNING ===
+    
     elseif CURRENT_STATE == STATES.PLANNING then
         local json_start = clean_response:find("%[")
         if json_start then
              local potential_json = clean_response:sub(json_start)
-             -- Пытаемся найти закрывающую скобку
+             
              local json_end = potential_json:match(".*%](.*)")
              if json_end then 
                  potential_json = potential_json:sub(1, #potential_json - #json_end)
@@ -270,7 +269,7 @@ while turn < MAX_TURNS do
              tool_output = tool_output .. "\n[ERROR]: No JSON list found. Create the execution plan."
         end
 
-    -- === STATE: CODING ===
+    
     elseif CURRENT_STATE == STATES.CODING then
         if clean_response:match("<<<<<<< SEARCH") then
              local task = EXECUTION_PLAN[CURRENT_TASK_INDEX]
@@ -322,7 +321,7 @@ while turn < MAX_TURNS do
     end
 
     if not cmd_executed and tool_output == "" then
-        -- Если модель просто "подумала" (есть Thinking), не ругаем её
+        
         if not raw_content:match("Thinking:") then
             tool_output = "[SYSTEM]: Waiting for command. Status: " .. CURRENT_STATE
         end

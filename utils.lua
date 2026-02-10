@@ -62,7 +62,6 @@ function M.write_file(path, content)
 end
 
 function M.list_files_recursive(root_path)
-    -- Используем rg --files
     local cmd = string.format("rg --files --hidden --glob '!.git/' --color never '%s' 2>/dev/null", root_path)
     local p = io.popen(cmd)
     if not p then return "Error listing files" end
@@ -84,7 +83,6 @@ end
 
 function M.grep_files(root_path, query)
     local safe_query = query:gsub("'", "'\\''")
-    -- Используем rg --no-heading
     local cmd = string.format("rg -n --no-heading --hidden --glob '!.git/' --color never '%s' '%s' | head -n 30", safe_query, root_path)
     local p = io.popen(cmd)
     if not p then return "Error running rg" end
