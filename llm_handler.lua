@@ -1,7 +1,7 @@
 local M = {}
 local http = require("http.request")
 local json = require("JSON")
-local config = require("config").get()
+local logger = require("logger")
 
 local function merge_tables(t1, t2)
     local res = {}
@@ -10,20 +10,29 @@ local function merge_tables(t1, t2)
     return res
 end
 
-function M.send_request(messages, override_params)
-    local req = http.new_from_uri(config.API_URL)
+-- profile: таблица из config (LLM_MAIN или LLM_SCOUT)
+function M.send_request(profile, messages, override_params)
+    if not profile or not profile.url then
+        logger.error("LLM Profile missing or invalid URL")
+        return nil, "Invalid Profile"
+    end
+
+    local req = http.new_from_uri(profile.url)
     req.headers:upsert(":method", "POST")
     req.headers:upsert("content-type", "application/json")
 
+    -- Слияние параметров: Defaults -> Profile Params -> Override
     local payload = merge_tables({
-        model = config.API_MODEL,
+        model = profile.model,
         messages = messages,
         stream = false
-    }, config.GENERATION_PARAMS)
+    }, profile.params or {})
 
     if override_params then
         payload = merge_tables(payload, override_params)
     end
+    
+    -- logger.debug("Request Payload", payload) -- Раскомментируй для дебага
 
     local body = json:encode(payload)
     if not body then return nil, "JSON Encode error" end
@@ -34,11 +43,15 @@ function M.send_request(messages, override_params)
     if not headers then return nil, "Connection failed" end
 
     local body_str = stream:get_body_as_string()
-    if headers:get(":status") ~= "200" then
-        return nil, "HTTP " .. headers:get(":status") .. ": " .. body_str
+    local status = headers:get(":status")
+    
+    if status ~= "200" then
+        logger.error("API Error: " .. status, body_str)
+        return nil, "HTTP " .. status .. ": " .. body_str
     end
 
-    return json:decode(body_str)
+    local response = json:decode(body_str)
+    return response
 end
 
 function M.extract_content(data)
@@ -48,6 +61,7 @@ end
 
 function M.clean_code_blocks(text)
     if not text then return "" end
+    -- Убираем обертку markdown, если она есть
     local clean = text:gsub("^```%w*\n", ""):gsub("\n```$", "")
     return clean
 end

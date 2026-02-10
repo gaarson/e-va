@@ -1,8 +1,12 @@
-local config = require("config").get()
+local config_module = require("config")
 local utils = require("utils")
 local llm = require("llm_handler")
 local patcher = require("patcher")
+local logger = require("logger")
+local json = require("JSON")
 local os = require("os")
+
+local config = config_module.get()
 
 local start_file = arg[1]
 local instruction = arg[2]
@@ -12,285 +16,318 @@ if not instruction then
     os.exit(1)
 end
 
+-- === SYSTEM STATES ===
 local STATES = {
     RESEARCH = "RESEARCH",
+    PLANNING = "PLANNING",
     CODING = "CODING"
 }
 local CURRENT_STATE = STATES.RESEARCH
 
-local KNOWLEDGE_BASE = {}
-local FILE_STATES = {}
-local CHAT_HISTORY = {}
-local LAST_MSG_HASH = ""
-local LOOP_COUNT = 0
+-- === MEMORY & CONTEXT ===
+local KNOWLEDGE_BASE = {} -- Путь -> Контент
+local FILE_STATES = {}    -- Путь -> Статус (READ, PATCHED)
+local CHAT_HISTORY = {}   -- Список сообщений
+local EXECUTION_PLAN = {} -- Список задач из фазы PLANNING
+local CURRENT_TASK_INDEX = 1
+local RECENT_HASHES = {}  -- Для детектора петель
 
-local function clean_command_arg(arg_str)
-    if not arg_str then return "" end
-    local s = utils.trim(arg_str)
-    s = s:gsub("^path=", "")
-    s = s:gsub("^filename=", "")
-    s = s:gsub("^file=", "")
-    s = s:gsub("['\"]", "")
-    return utils.trim(s)
-end
-
--- === FIX: Robust normalization ===
+-- === HELPER: Path Normalization ===
 local function normalize_path_arg(p)
-    local clean_p = clean_command_arg(p)
+    if not p then return "" end
+    local clean_p = utils.trim(p):gsub("^path=", ""):gsub("^file=", ""):gsub("['\"]", "")
     
-    -- Пытаемся отделить путь от диапазона.
-    -- Ищем двоеточие, за которым (возможно через мусор) идут цифры
     local path_part = clean_p
     local range_part = ""
-    
     local s_idx = clean_p:find(":%D*%d+")
     if s_idx then
         path_part = clean_p:sub(1, s_idx - 1)
         range_part = clean_p:sub(s_idx)
     end
 
-    local resolved = ""
-    if utils.resolve_relative_path then
-        resolved = utils.resolve_relative_path(config.PROJECT_ROOT, path_part)
-    else
-        resolved = path_part:gsub("^%./", "")
-        local root_pattern = config.PROJECT_ROOT:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
-        resolved = resolved:gsub("^" .. root_pattern .. "/?", "")
-    end
-    
+    local resolved = utils.resolve_relative_path(config.PROJECT_ROOT, path_part)
     return resolved .. range_part
 end
 
-local function get_system_prompt()
-    if CURRENT_STATE == STATES.RESEARCH then
-        return config.PROMPT_RESEARCH
-    else
-        return config.PROMPT_CODING
+-- === LOOP DETECTION ===
+local function check_loop(content)
+    -- Простейший хеш - сама строка (можно обрезать для экономии)
+    local hash = content:sub(1, 100) .. (#content)
+    local count = 0
+    for _, h in ipairs(RECENT_HASHES) do
+        if h == hash then count = count + 1 end
     end
+    table.insert(RECENT_HASHES, hash)
+    if #RECENT_HASHES > 5 then table.remove(RECENT_HASHES, 1) end
+    return count
 end
 
-local function get_context_block()
+-- === CONTEXT BUILDER ===
+local function get_memory_block()
     local mem = "\n\n=== MEMORY (OPEN FILES) ===\n"
     local count = 0
     for path, content in pairs(KNOWLEDGE_BASE) do
         count = count + 1
         local status = FILE_STATES[path] or "READ"
+        -- Защита от переполнения: Если файл огромный, режем
         local display = content
-
         if #content > 12000 then
-            display = content:sub(1, 4000) .. "\n...[TRUNCATED: Use search to find details]...\n" .. content:sub(-3000)
+            display = content:sub(1, 4000) .. "\n...[SNIP: " .. (#content - 6000) .. " chars]...\n" .. content:sub(-2000)
         end
-
         mem = mem .. string.format("FILE (%s): %s\n```\n%s\n```\n", status, path, display)
     end
-    if count == 0 then mem = mem .. "(No files loaded. Use read_file to load context)\n" end
+    if count == 0 then mem = mem .. "(No files loaded.)\n" end
     return mem
 end
 
-local initial_msg = "TASK: " .. instruction
+local function get_system_prompt()
+    if CURRENT_STATE == STATES.RESEARCH then
+        return config.PROMPT_RESEARCH
+    elseif CURRENT_STATE == STATES.PLANNING then
+        return config.PROMPT_PLANNING
+    elseif CURRENT_STATE == STATES.CODING then
+        local task = EXECUTION_PLAN[CURRENT_TASK_INDEX]
+        if not task then return "ERROR: No task found." end
+        return string.format(config.PROMPT_CODING_TEMPLATE, 
+            CURRENT_TASK_INDEX, #EXECUTION_PLAN, 
+            task.file or "Unknown", 
+            task.instruction or "Unknown"
+        )
+    end
+end
 
+local function prune_history()
+    -- Оставляем контекст "свежим". Держим около 20 сообщений.
+    if #CHAT_HISTORY > 20 then
+        local new_hist = {}
+        table.insert(new_hist, CHAT_HISTORY[1]) -- Всегда помним главную задачу
+        
+        -- Оставляем последние 14 (7 пар запрос-ответ)
+        local start_idx = #CHAT_HISTORY - 14
+        if start_idx < 2 then start_idx = 2 end
+        
+        for i = start_idx, #CHAT_HISTORY do
+            table.insert(new_hist, CHAT_HISTORY[i])
+        end
+        CHAT_HISTORY = new_hist
+    end
+end
+
+-- === INITIALIZATION ===
+local initial_msg = "TASK: " .. instruction
 if start_file then
-    print(">>> PRE-LOADING: " .. start_file)
+    logger.info("Pre-loading start file: " .. start_file)
     local rel_path = normalize_path_arg(start_file)
     local full_path = config.PROJECT_ROOT .. "/" .. rel_path
-
     local content = utils.read_file_range(full_path)
     if content then
         KNOWLEDGE_BASE[rel_path] = content
         FILE_STATES[rel_path] = "READ"
-        initial_msg = initial_msg .. "\n(CONTEXT: File '" .. rel_path .. "' is ALREADY loaded in MEMORY.)"
+        initial_msg = initial_msg .. "\n(CONTEXT: File '" .. rel_path .. "' loaded into MEMORY.)"
     else
-        print(">>> WARNING: Could not pre-load " .. full_path)
+        logger.warn("Could not load start file: " .. full_path)
     end
 end
-
 table.insert(CHAT_HISTORY, { role = "user", content = initial_msg })
 
-local turn = 0
-local MAX_TURNS = 35
+logger.info("System Initialized.", { root = config.PROJECT_ROOT })
 
-print(">>> E-VA INITIALIZED.")
-print(">>> MODE: " .. CURRENT_STATE)
+-- === MAIN LOOP ===
+local MAX_TURNS = 50
+local turn = 0
 
 while turn < MAX_TURNS do
     turn = turn + 1
+    prune_history()
 
     local messages = {}
     table.insert(messages, { role = "system", content = get_system_prompt() })
-    table.insert(messages, { role = "system", content = get_context_block() })
+    table.insert(messages, { role = "system", content = get_memory_block() })
     for _, msg in ipairs(CHAT_HISTORY) do table.insert(messages, msg) end
 
-    local reminder = "CURRENT PHASE: " .. CURRENT_STATE .. "."
-    if CURRENT_STATE == STATES.CODING then
-        reminder = reminder .. " Focus on patching. Do not re-read files found in MEMORY. DO NOT use <cmd>patch</cmd>."
-    end
-    table.insert(messages, { role = "system", content = reminder })
-
-    print(string.format("\n[Turn %d | %s] Thinking...", turn, CURRENT_STATE))
-
-    local current_regex = nil
+    -- Выбор профиля LLM
+    local current_profile = config.LLM_MAIN
+    local current_regex = config.REGEX_CODING 
+    
     if CURRENT_STATE == STATES.RESEARCH then
+        current_profile = config.LLM_SCOUT
         current_regex = config.REGEX_RESEARCH
-    else
-        current_regex = config.REGEX_CODING
+    elseif CURRENT_STATE == STATES.PLANNING then
+        current_profile = config.LLM_SCOUT
+        current_regex = config.REGEX_PLANNING
     end
 
-    local response_data = llm.send_request(messages, {
+    logger.info(string.format("[TURN %d] Phase: %s", turn, CURRENT_STATE))
+
+    local response_data, err = llm.send_request(current_profile, messages, {
         regex_pattern = current_regex
     })
-    
-    if not response_data then print("FATAL: Network error"); break end
+
+    if not response_data then
+        logger.error("Network Error: " .. (err or "unknown"))
+        break
+    end
 
     local raw_content = llm.extract_content(response_data) or ""
     local clean_response = llm.clean_code_blocks(raw_content)
 
-    print(">>> RESP: " .. raw_content:sub(1, 150) .. "...")
+    -- === VERBOSE LOGGING ===
+    print("\n\27[35m>>> AI ("..CURRENT_STATE.."):\27[0m " .. raw_content .. (#raw_content > 300 and "..." or ""))
     table.insert(CHAT_HISTORY, { role = "assistant", content = raw_content })
 
-    if clean_response == LAST_MSG_HASH then
-        LOOP_COUNT = LOOP_COUNT + 1
-        print(">>> WARNING: Loop detected (" .. LOOP_COUNT .. ")")
-        if LOOP_COUNT >= 2 then
-             table.insert(CHAT_HISTORY, { role = "user", content = "SYSTEM ALERT: You are repeating yourself. STOP. If you finished the task, output <cmd>finished</cmd>." })
-        end
-        if LOOP_COUNT > 4 then break end
-    else
-        LOOP_COUNT = 0
-        LAST_MSG_HASH = clean_response
-    end
-
-    if not clean_response:match("<cmd>") and not clean_response:match("<<<<<<< SEARCH") then
-        local lower = clean_response:lower()
-        if lower:match("mission accomplished") or
-           lower:match("successfully completed") or
-           lower:match("changes have been applied") then
-            print(">>> DETECTED COMPLETION SPEECH. Auto-terminating.")
-            os.exit(0)
+    -- === LOOP CHECK ===
+    local loop_hits = check_loop(clean_response)
+    if loop_hits >= 2 then
+        logger.warn("Loop detected (" .. loop_hits .. " hits)")
+        if loop_hits >= 4 then
+             table.insert(CHAT_HISTORY, { role = "user", content = "SYSTEM ALERT: You are repeating the same action. STOP. Change strategy." })
         end
     end
 
     local tool_output = ""
-    local cmd_found = false
+    local cmd_executed = false
 
-    -- === COMMAND PARSING ===
-    for cmd in clean_response:gmatch("<cmd>(.-)</cmd>") do
-        cmd_found = true
-        local action = utils.trim(cmd)
-        print(">>> ACTION: " .. action)
+    -- === STATE: RESEARCH ===
+    if CURRENT_STATE == STATES.RESEARCH then
+        for cmd in clean_response:gmatch("<cmd>(.-)</cmd>") do
+            cmd_executed = true
+            local action = utils.trim(cmd)
+            print("\27[33m>>> CMD:\27[0m " .. action)
 
-        if action == "list_files" then
-            tool_output = tool_output .. "\n[LS]:\n" .. utils.list_files_recursive(config.PROJECT_ROOT)
-
-        elseif action:match("^read_file:") then
-            local raw_arg = action:match("^read_file:(.+)")
-            local f_arg = normalize_path_arg(raw_arg)
+            if action == "list_files" then
+                local listing = utils.list_files_recursive(config.PROJECT_ROOT)
+                tool_output = tool_output .. "\n[LS]:\n" .. listing
+                print("    -> Listed " .. select(2, listing:gsub('\n', '\n')) .. " files.")
             
-            -- Проверка на диапазон
-            local is_range = f_arg:find(":%D*%d+") ~= nil
-            local path_only = f_arg
-            
-            if is_range then
-                local s_idx = f_arg:find(":%D*%d+")
-                path_only = f_arg:sub(1, s_idx - 1)
-            end
-
-            if KNOWLEDGE_BASE[path_only] and not is_range then
-                 tool_output = tool_output .. "\n[SYSTEM]: File '" .. path_only .. "' is ALREADY fully loaded."
-            else
-                local full_read_path = config.PROJECT_ROOT .. "/" .. (path_only)
-                local read_arg = f_arg
-                if is_range then
-                     -- Формируем аргумент для utils (добавляем root к пути, но оставляем диапазон)
-                     local s_idx = f_arg:find(":%D*%d+")
-                     local range_suffix = f_arg:sub(s_idx)
-                     read_arg = (config.PROJECT_ROOT .. "/" .. path_only) .. range_suffix
-                end
-
-                local c = utils.read_file_range(read_arg)
+            elseif action:match("^read_file:") then
+                local raw_arg = action:match("^read_file:(.+)")
+                local f_arg = normalize_path_arg(raw_arg)
+                local path_only = f_arg:match("^([^:]+)") or f_arg
                 
-                if c then
-                    if is_range then
-                        tool_output = tool_output .. "\n[READ PARTIAL " .. f_arg .. "]:\n" .. c
-                    else
-                        KNOWLEDGE_BASE[f_arg] = c
-                        FILE_STATES[f_arg] = "READ"
-                        tool_output = tool_output .. "\n[READ FULL]: Loaded " .. f_arg .. " ("..#c.." bytes)"
-                    end
+                if KNOWLEDGE_BASE[path_only] and not f_arg:find(":") then
+                     tool_output = tool_output .. "\n[SYSTEM]: File '" .. path_only .. "' is already in MEMORY."
+                     print("    -> Cached.")
                 else
-                    tool_output = tool_output .. "\n[ERROR]: File or Range not found: '"..read_arg.."'"
+                    local read_arg = config.PROJECT_ROOT .. "/" .. f_arg
+                    if f_arg:find(":") then -- Восстановление полного пути для диапазона
+                        local suffix = f_arg:match("(:.+)")
+                        read_arg = config.PROJECT_ROOT .. "/" .. path_only .. suffix
+                    end
+                    
+                    local c = utils.read_file_range(read_arg)
+                    if c then
+                        if f_arg:find(":") then
+                            tool_output = tool_output .. "\n[PARTIAL READ]:\n" .. c
+                            print("    -> Partial read.")
+                        else
+                            KNOWLEDGE_BASE[path_only] = c
+                            FILE_STATES[path_only] = "READ"
+                            tool_output = tool_output .. "\n[SYSTEM]: File '" .. path_only .. "' loaded into MEMORY."
+                            print("    -> Loaded " .. #c .. " bytes.")
+                        end
+                    else
+                         tool_output = tool_output .. "\n[ERROR]: File not found: " .. path_only
+                         print("    -> Error: Not found.")
+                    end
                 end
+
+            elseif action:match("^search:") then
+                local query = action:match("^search:(.+)")
+                local grep_res = utils.grep_files(config.PROJECT_ROOT, query)
+                tool_output = tool_output .. "\n[SEARCH RESULT]:\n" .. grep_res
+                print("    -> Grep finished.")
+
+            elseif action == "create_plan" then
+                CURRENT_STATE = STATES.PLANNING
+                tool_output = tool_output .. "\n[SYSTEM]: Phase -> PLANNING. Output JSON now."
+                print(">>> TRANSITION: Research Complete.")
             end
+        end
 
-        elseif action:match("^map_file:") then
-             local raw_arg = action:match("^map_file:(.+)")
-             local f = normalize_path_arg(raw_arg)
-
-             if KNOWLEDGE_BASE[f] then
-                  tool_output = tool_output .. "\n[SYSTEM]: File is loaded. Check MEMORY block."
-             else
-                  local full_map_path = config.PROJECT_ROOT .. "/" .. f
-                  local map = utils.get_file_outline(full_map_path)
-                  tool_output = tool_output .. "\n[MAP " .. f .. "]:\n" .. map
+    -- === STATE: PLANNING ===
+    elseif CURRENT_STATE == STATES.PLANNING then
+        local json_start = clean_response:find("%[")
+        if json_start then
+             local potential_json = clean_response:sub(json_start)
+             -- Пытаемся найти закрывающую скобку
+             local json_end = potential_json:match(".*%](.*)")
+             if json_end then 
+                 potential_json = potential_json:sub(1, #potential_json - #json_end)
              end
 
-        elseif action == "start_coding" then
-            CURRENT_STATE = STATES.CODING
-            tool_output = tool_output .. "\n[SYSTEM]: Phase switched to CODING. You can now use SEARCH/REPLACE blocks. DO NOT use <cmd>patch</cmd>."
-
-        elseif action == "finished" then
-            print(">>> MISSION ACCOMPLISHED.")
-            os.exit(0)
-            
-        elseif action:match("^patch:") then
-             -- === CRITICAL FIX: Handle hallucinated patch command ===
-             tool_output = tool_output .. "\n[SYSTEM ERROR]: <cmd>patch:...</cmd> is NOT a valid command. You must write the code block directly using the format:\nFile: ...\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE"
-        end
-    end
-
-    -- 6. Patching Logic
-    if CURRENT_STATE == STATES.CODING and clean_response:match("<<<<<<< SEARCH") then
-        if not clean_response:match(">>>>>>> REPLACE") then
-            tool_output = tool_output .. "\n[SYNTAX ERROR]: You started a '<<<<<<< SEARCH' block but didn't close it with '>>>>>>> REPLACE'. Please rewrite the COMPLETE block."
-            cmd_found = true -- Считаем, что команда была, но ошибочная
+             local plan, j_err = json:decode(potential_json)
+             if plan and type(plan) == "table" and #plan > 0 then
+                 EXECUTION_PLAN = plan
+                 CURRENT_STATE = STATES.CODING
+                 CURRENT_TASK_INDEX = 1
+                 logger.info("Plan accepted", plan)
+                 tool_output = tool_output .. "\n[SYSTEM]: Plan accepted. Switching to CODING. Starting Task 1."
+                 cmd_executed = true
+             else
+                 tool_output = tool_output .. "\n[ERROR]: Invalid JSON. Please output ONLY the JSON list."
+             end
         else
-            local raw_file = clean_response:match("File:%s*([%w%./_%-]+)")
-            -- Добавляем normalize, чтобы убрать лишнее
-            local target_file = raw_file and normalize_path_arg(raw_file)
+             tool_output = tool_output .. "\n[ERROR]: No JSON list found. Create the execution plan."
+        end
 
-            if target_file and KNOWLEDGE_BASE[target_file] then
-                print(">>> PATCHING: " .. target_file)
-                local ok, res, count = patcher.apply_search_replace(KNOWLEDGE_BASE[target_file], clean_response)
-
-                if ok then
-                    if count and count == 0 then
-                        tool_output = tool_output .. "\n[SYSTEM]: Patch valid, but NO CHANGES were needed (content matches). Proceed."
-                    else
-                        local write_path = config.PROJECT_ROOT .. "/" .. target_file
-                        local wrote_ok, w_err = utils.write_file(write_path, res)
-
-                        if wrote_ok then
-                            KNOWLEDGE_BASE[target_file] = res
-                            FILE_STATES[target_file] = "PATCHED"
-                            tool_output = tool_output .. "\n[SUCCESS]: Saved changes to " .. target_file .. "."
-                        else
-                             tool_output = tool_output .. "\n[DISK ERROR]: Could not write file: " .. tostring(w_err)
-                        end
-                    end
-                else
-                    -- Важно: возвращаем ошибку патчера модели
-                    tool_output = tool_output .. "\n[PATCH ERROR]: " .. res
-                end
-                cmd_found = true
-            else
-                tool_output = tool_output .. "\n[ERROR]: Target file '" .. (target_file or "nil") .. "' not found in MEMORY. Use read_file first."
-                cmd_found = true
-            end
+    -- === STATE: CODING ===
+    elseif CURRENT_STATE == STATES.CODING then
+        if clean_response:match("<<<<<<< SEARCH") then
+             local task = EXECUTION_PLAN[CURRENT_TASK_INDEX]
+             local raw_file = clean_response:match("File:%s*([%w%./_%-]+)")
+             local target_file = normalize_path_arg(raw_file or (task and task.file))
+             
+             if target_file and KNOWLEDGE_BASE[target_file] then
+                 local ok, res, count = patcher.apply_search_replace(KNOWLEDGE_BASE[target_file], clean_response)
+                 if ok then
+                     if count == 0 then
+                         tool_output = tool_output .. "\n[SYSTEM]: No changes needed (content matches)."
+                     else
+                         local w_ok, w_err = utils.write_file(config.PROJECT_ROOT .. "/" .. target_file, res)
+                         if w_ok then
+                             KNOWLEDGE_BASE[target_file] = res
+                             FILE_STATES[target_file] = "PATCHED"
+                             tool_output = tool_output .. "\n[SUCCESS]: File patched and saved."
+                             print("\27[32m>>> PATCH APPLIED: " .. target_file .. "\27[0m")
+                             
+                             CURRENT_TASK_INDEX = CURRENT_TASK_INDEX + 1
+                             if CURRENT_TASK_INDEX > #EXECUTION_PLAN then
+                                 print("\27[32m>>> MISSION ACCOMPLISHED.\27[0m")
+                                 os.exit(0)
+                             else
+                                 tool_output = tool_output .. "\n[SYSTEM]: Proceeding to Task " .. CURRENT_TASK_INDEX .. "..."
+                             end
+                         else
+                             tool_output = tool_output .. "\n[DISK ERROR]: " .. tostring(w_err)
+                         end
+                     end
+                 else
+                     tool_output = tool_output .. "\n[PATCH ERROR]: " .. res
+                 end
+             else
+                 tool_output = tool_output .. "\n[ERROR]: File not in memory. Read it first?"
+             end
+             cmd_executed = true
+             
+        elseif clean_response:match("<cmd>task_complete</cmd>") then
+             CURRENT_TASK_INDEX = CURRENT_TASK_INDEX + 1
+             if CURRENT_TASK_INDEX > #EXECUTION_PLAN then
+                 print("\27[32m>>> MISSION ACCOMPLISHED.\27[0m")
+                 os.exit(0)
+             else
+                 tool_output = tool_output .. "\n[SYSTEM]: Proceeding to Task " .. CURRENT_TASK_INDEX .. "..."
+             end
+             cmd_executed = true
         end
     end
 
-    if not cmd_found then
-        tool_output = "[SYSTEM ERROR]: No valid XML command or Patch block found."
+    if not cmd_executed and tool_output == "" then
+        -- Если модель просто "подумала" (есть Thinking), не ругаем её
+        if not raw_content:match("Thinking:") then
+            tool_output = "[SYSTEM]: Waiting for command. Status: " .. CURRENT_STATE
+        end
     end
+
     if tool_output ~= "" then
         table.insert(CHAT_HISTORY, { role = "user", content = tool_output })
     end

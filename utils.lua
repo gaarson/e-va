@@ -1,31 +1,27 @@
 local M = {}
 local io = require("io")
 
+function M.trim(s)
+    if not s then return "" end
+    return (s:gsub("^%s*(.-)%s*$", "%1"))
+end
+
 function M.resolve_relative_path(root, raw_path)
     local p = M.trim(raw_path)
     p = p:gsub("^%./", "")
     local escaped_root = root:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
-    local s, e = p:find("^" .. escaped_root)
-    if s then
-        p = p:sub(e + 1):gsub("^/", "")
+    if p:find("^" .. escaped_root) then
+        p = p:sub(#root + 2)
     end
-    return p
+    return p:gsub("^/", "")
 end
 
 function M.read_file_range(raw_path_arg)
-    -- === FIX: Robust parsing ===
-    -- Модель может написать: "file.lua:10-20", "file.lua:line 10 to 20", "file.lua:start_line-10..."
-    -- Ищем разделитель двоеточие, за которым следуют цифры
-    
     local path = raw_path_arg
-    local start_line = nil
-    local end_line = nil
+    local start_line, end_line
 
-    -- Пытаемся найти паттерн "путь:цифры...цифры"
-    -- %D* означает "любое количество НЕ цифр"
     local p, s, e = raw_path_arg:match("^(.-):%D*(%d+)%D+(%d+)%D*$")
-    
-    if p and s and e then
+    if p then
         path = p
         start_line = tonumber(s)
         end_line = tonumber(e)
@@ -36,7 +32,7 @@ function M.read_file_range(raw_path_arg)
 
     local content = {}
     local line_num = 0
-    
+
     if start_line and end_line then
         for line in f:lines() do
             line_num = line_num + 1
@@ -46,9 +42,6 @@ function M.read_file_range(raw_path_arg)
             if line_num > end_line then break end
         end
         f:close()
-        if #content == 0 then
-            return "(Empty range or End of File reached)"
-        end
         return table.concat(content, "\n")
     else
         f:close()
@@ -61,45 +54,18 @@ function M.read_file_range(raw_path_arg)
 end
 
 function M.write_file(path, content)
-    print(">>> [DISK WRITE] " .. path)
     local f, err = io.open(path, "wb")
     if not f then return false, err end
     local ok, w_err = f:write(content)
     f:close()
-    if not ok then return false, w_err end
-    return true
-end
-
-function M.trim(s)
-    return (s:gsub("^%s*(.-)%s*$", "%1"))
-end
-
-function M.get_file_outline(path)
-    local content, err = M.read_file_range(path)
-    if not content then return "Error: " .. tostring(err) end
-
-    local outline = {}
-    local line_num = 0
-    for line in content:gmatch("[^\r\n]+") do
-        line_num = line_num + 1
-        local clean = M.trim(line)
-        if clean:match("^function") or clean:match("^class") or clean:match("^def") or clean:match("^export") or clean:match("M%..-%s=") then
-            table.insert(outline, string.format("%03d: %s", line_num, clean))
-        end
-    end
-    if #outline == 0 then return "(No definitions)" end
-    if #outline > 50 then
-        local t = {}
-        for i=1,50 do table.insert(t, outline[i]) end
-        return table.concat(t, "\n") .. "\n...[Truncated]"
-    end
-    return table.concat(outline, "\n")
+    return ok, w_err
 end
 
 function M.list_files_recursive(root_path)
-    local cmd = string.format("find '%s' -type f -not -path '*/.*' -not -path '*/node_modules/*' -not -path '*/__pycache__/*' 2>/dev/null", root_path)
+    -- Используем rg --files
+    local cmd = string.format("rg --files --hidden --glob '!.git/' --color never '%s' 2>/dev/null", root_path)
     local p = io.popen(cmd)
-    if not p then return "Error" end
+    if not p then return "Error listing files" end
     local out = p:read("*a")
     p:close()
 
@@ -109,10 +75,24 @@ function M.list_files_recursive(root_path)
         local rel = M.resolve_relative_path(root_path, line)
         if rel ~= "" then
             count = count + 1
-            if count <= 700 then table.insert(files, rel) end
+            if count <= 600 then table.insert(files, rel) end
         end
     end
+    if count == 0 then return "(No files found)" end
     return table.concat(files, "\n")
+end
+
+function M.grep_files(root_path, query)
+    local safe_query = query:gsub("'", "'\\''")
+    -- Используем rg --no-heading
+    local cmd = string.format("rg -n --no-heading --hidden --glob '!.git/' --color never '%s' '%s' | head -n 30", safe_query, root_path)
+    local p = io.popen(cmd)
+    if not p then return "Error running rg" end
+    local out = p:read("*a")
+    p:close()
+    
+    if #out == 0 then return "(No matches found)" end
+    return out
 end
 
 return M
