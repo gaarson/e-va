@@ -88,7 +88,6 @@ function M.grep_files(root_path, query)
     if not p then return "Error running rg" end
     local out = p:read("*a")
     p:close()
-    
     if #out == 0 then return "(No matches found)" end
     return out
 end

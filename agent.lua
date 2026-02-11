@@ -23,19 +23,18 @@ local STATES = {
     CODING = "CODING"
 }
 local CURRENT_STATE = STATES.RESEARCH
-
 local KNOWLEDGE_BASE = {}
 local FILE_STATES = {}
 local CHAT_HISTORY = {}
-local EXECUTION_PLAN = {} 
+local EXECUTION_PLAN = {}
 local CURRENT_TASK_INDEX = 1
-local RECENT_HASHES = {}  
+local RECENT_HASHES = {}
 
 
 local function normalize_path_arg(p)
     if not p then return "" end
     local clean_p = utils.trim(p):gsub("^path=", ""):gsub("^file=", ""):gsub("['\"]", "")
-    
+
     local path_part = clean_p
     local range_part = ""
     local s_idx = clean_p:find(":%D*%d+")
@@ -50,7 +49,7 @@ end
 
 
 local function check_loop(content)
-    
+
     local hash = content:sub(1, 100) .. (#content)
     local count = 0
     for _, h in ipairs(RECENT_HASHES) do
@@ -68,7 +67,7 @@ local function get_memory_block()
     for path, content in pairs(KNOWLEDGE_BASE) do
         count = count + 1
         local status = FILE_STATES[path] or "READ"
-        
+
         local display = content
         if #content > 12000 then
             display = content:sub(1, 4000) .. "\n...[SNIP: " .. (#content - 6000) .. " chars]...\n" .. content:sub(-2000)
@@ -96,15 +95,14 @@ local function get_system_prompt()
 end
 
 local function prune_history()
-    
+
     if #CHAT_HISTORY > 20 then
         local new_hist = {}
         table.insert(new_hist, CHAT_HISTORY[1]) 
-        
-        
+
         local start_idx = #CHAT_HISTORY - 14
         if start_idx < 2 then start_idx = 2 end
-        
+
         for i = start_idx, #CHAT_HISTORY do
             table.insert(new_hist, CHAT_HISTORY[i])
         end
@@ -144,10 +142,9 @@ while turn < MAX_TURNS do
     table.insert(messages, { role = "system", content = get_memory_block() })
     for _, msg in ipairs(CHAT_HISTORY) do table.insert(messages, msg) end
 
-    
     local current_profile = config.LLM_MAIN
     local current_regex = config.REGEX_CODING 
-    
+
     if CURRENT_STATE == STATES.RESEARCH then
         current_profile = config.LLM_SCOUT
         current_regex = config.REGEX_RESEARCH
@@ -170,11 +167,9 @@ while turn < MAX_TURNS do
     local raw_content = llm.extract_content(response_data) or ""
     local clean_response = llm.clean_code_blocks(raw_content)
 
-    
     print("\n\27[35m>>> AI ("..CURRENT_STATE.."):\27[0m " .. raw_content .. (#raw_content > 300 and "..." or ""))
     table.insert(CHAT_HISTORY, { role = "assistant", content = raw_content })
 
-    
     local loop_hits = check_loop(clean_response)
     if loop_hits >= 2 then
         logger.warn("Loop detected (" .. loop_hits .. " hits)")
@@ -186,7 +181,6 @@ while turn < MAX_TURNS do
     local tool_output = ""
     local cmd_executed = false
 
-    
     if CURRENT_STATE == STATES.RESEARCH then
         for cmd in clean_response:gmatch("<cmd>(.-)</cmd>") do
             cmd_executed = true
@@ -197,12 +191,10 @@ while turn < MAX_TURNS do
                 local listing = utils.list_files_recursive(config.PROJECT_ROOT)
                 tool_output = tool_output .. "\n[LS]:\n" .. listing
                 print("    -> Listed " .. select(2, listing:gsub('\n', '\n')) .. " files.")
-            
             elseif action:match("^read_file:") then
                 local raw_arg = action:match("^read_file:(.+)")
                 local f_arg = normalize_path_arg(raw_arg)
                 local path_only = f_arg:match("^([^:]+)") or f_arg
-                
                 if KNOWLEDGE_BASE[path_only] and not f_arg:find(":") then
                      tool_output = tool_output .. "\n[SYSTEM]: File '" .. path_only .. "' is already in MEMORY."
                      print("    -> Cached.")
@@ -212,7 +204,6 @@ while turn < MAX_TURNS do
                         local suffix = f_arg:match("(:.+)")
                         read_arg = config.PROJECT_ROOT .. "/" .. path_only .. suffix
                     end
-                    
                     local c = utils.read_file_range(read_arg)
                     if c then
                         if f_arg:find(":") then
@@ -243,12 +234,10 @@ while turn < MAX_TURNS do
             end
         end
 
-    
     elseif CURRENT_STATE == STATES.PLANNING then
         local json_start = clean_response:find("%[")
         if json_start then
              local potential_json = clean_response:sub(json_start)
-             
              local json_end = potential_json:match(".*%](.*)")
              if json_end then 
                  potential_json = potential_json:sub(1, #potential_json - #json_end)
@@ -269,45 +258,35 @@ while turn < MAX_TURNS do
              tool_output = tool_output .. "\n[ERROR]: No JSON list found. Create the execution plan."
         end
 
-    
     elseif CURRENT_STATE == STATES.CODING then
         if clean_response:match("<<<<<<< SEARCH") then
              local task = EXECUTION_PLAN[CURRENT_TASK_INDEX]
              local raw_file = clean_response:match("File:%s*([%w%./_%-]+)")
              local target_file = normalize_path_arg(raw_file or (task and task.file))
-             
+
              if target_file and KNOWLEDGE_BASE[target_file] then
                  local ok, res, count = patcher.apply_search_replace(KNOWLEDGE_BASE[target_file], clean_response)
                  if ok then
-                     if count == 0 then
-                         tool_output = tool_output .. "\n[SYSTEM]: No changes needed (content matches)."
+                     local w_ok, w_err = utils.write_file(config.PROJECT_ROOT .. "/" .. target_file, res)
+                     if w_ok then
+                         KNOWLEDGE_BASE[target_file] = res
+                         FILE_STATES[target_file] = "PATCHED"
+                         tool_output = tool_output .. "\n[SUCCESS]: Changes applied to " .. target_file
+                         print("\27[32m>>> PATCH APPLIED: " .. target_file .. "\27[0m")
                      else
-                         local w_ok, w_err = utils.write_file(config.PROJECT_ROOT .. "/" .. target_file, res)
-                         if w_ok then
-                             KNOWLEDGE_BASE[target_file] = res
-                             FILE_STATES[target_file] = "PATCHED"
-                             tool_output = tool_output .. "\n[SUCCESS]: File patched and saved."
-                             print("\27[32m>>> PATCH APPLIED: " .. target_file .. "\27[0m")
-                             
-                             CURRENT_TASK_INDEX = CURRENT_TASK_INDEX + 1
-                             if CURRENT_TASK_INDEX > #EXECUTION_PLAN then
-                                 print("\27[32m>>> MISSION ACCOMPLISHED.\27[0m")
-                                 os.exit(0)
-                             else
-                                 tool_output = tool_output .. "\n[SYSTEM]: Proceeding to Task " .. CURRENT_TASK_INDEX .. "..."
-                             end
-                         else
-                             tool_output = tool_output .. "\n[DISK ERROR]: " .. tostring(w_err)
-                         end
+                         tool_output = tool_output .. "\n[DISK ERROR]: " .. tostring(w_err)
                      end
                  else
-                     tool_output = tool_output .. "\n[PATCH ERROR]: " .. res
+                     logger.warn("Patch failed", res)
+                     tool_output = tool_output .. "\n[PATCH ERROR]: The SEARCH block did not match the file content perfectly (ignoring whitespace).\n" 
+                     tool_output = tool_output .. "Error details: " .. res .. "\n"
+                     tool_output = tool_output .. "ACTION: Read the file content again if needed, and strictly copy the existing lines into the SEARCH block."
                  end
              else
-                 tool_output = tool_output .. "\n[ERROR]: File not in memory. Read it first?"
+                 tool_output = tool_output .. "\n[ERROR]: File '"..tostring(target_file).."' not found in MEMORY. Use <cmd>read_file:path</cmd> first."
              end
              cmd_executed = true
-             
+
         elseif clean_response:match("<cmd>task_complete</cmd>") then
              CURRENT_TASK_INDEX = CURRENT_TASK_INDEX + 1
              if CURRENT_TASK_INDEX > #EXECUTION_PLAN then
@@ -321,7 +300,6 @@ while turn < MAX_TURNS do
     end
 
     if not cmd_executed and tool_output == "" then
-        
         if not raw_content:match("Thinking:") then
             tool_output = "[SYSTEM]: Waiting for command. Status: " .. CURRENT_STATE
         end

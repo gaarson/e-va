@@ -8,11 +8,10 @@ function M.get()
 
     local BASE_PARAMS = {
         max_tokens = 8192,
-        temperature = 0.1,
-        top_k = 20,
+        temperature = 0.0,
+        top_p = 0.95,
         stream = false
     }
-
     
     local PARAMS_TABBY = {
         min_p = 0.05,
@@ -118,14 +117,18 @@ TASK: %s
 CRITICAL RULES:
 1. The file content is loaded in MEMORY.
 2. Output a SEARCH/REPLACE block to apply the changes.
-3. If the file is already correct, output <cmd>task_complete</cmd>.
+3. The SEARCH block must contain an EXACT COPY of the lines from the file (whitespace is ignored, but content must match).
+4. If you fail to match, check the file content in MEMORY again.
+5. If the file is already correct, output <cmd>task_complete</cmd>.
 
 FORMAT:
 File: path/to/file.ext
 <<<<<<< SEARCH
-    original line
+    original line 1
+    original line 2
 =======
-    modified line
+    modified line 1
+    modified line 2
 >>>>>>> REPLACE
 ]]
 
