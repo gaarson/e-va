@@ -2,24 +2,20 @@ local M = {}
 
 local function split_lines(text)
     local lines = {}
+    if not text then return lines end
+    -- Нормализация переносов
     text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
     
-    local pos = 1
-    while true do
-        local first, last = text:find("\n", pos)
-        if first then
-            table.insert(lines, text:sub(pos, first - 1))
-            pos = last + 1
-        else
-            table.insert(lines, text:sub(pos))
-            break
-        end
+    -- В Lua 5.1 gmatch работает так же
+    for line in text:gmatch("([^\n]*)\n?") do
+        table.insert(lines, line)
     end
+    -- Удаляем последний пустой элемент, если он есть (артефакт gmatch)
+    if #lines > 0 and lines[#lines] == "" then table.remove(lines) end
     return lines
 end
 
-local function normalize_line(line)
-    if not line then return "" end
+local function normalize(line)
     return line:gsub("%s+", "")
 end
 
@@ -29,11 +25,14 @@ function M.apply_search_replace(original_content, llm_response)
     end
 
     local file_lines = split_lines(original_content)
-    local changes_made = 0
+    local changes_applied = 0
     local errors = {}
 
     for search_block, replace_block in llm_response:gmatch("<<<<<<< SEARCH%s*\n(.-)\n=======%s*\n(.-)\n>>>>>>> REPLACE") do
         
+        -- Флаг для эмуляции continue
+        local should_process = true
+
         search_block = search_block:gsub("\n$", "")
         replace_block = replace_block:gsub("\n$", "")
 
@@ -41,51 +40,61 @@ function M.apply_search_replace(original_content, llm_response)
         local replace_lines = split_lines(replace_block)
 
         if #search_lines == 0 then
-            table.insert(errors, "Empty SEARCH block found (skipped).")
-        else
-            local match_found = false
-            local start_idx = -1
+            table.insert(errors, "Empty SEARCH block.")
+            should_process = false
+        end
 
+        if should_process then
+            -- 1. Scan
+            local candidates = {}
+            -- В Lua 5.1 циклы обычные
             for i = 1, #file_lines - #search_lines + 1 do
                 local match = true
                 for j = 1, #search_lines do
-                    if normalize_line(file_lines[i + j - 1]) ~= normalize_line(search_lines[j]) then
+                    if normalize(file_lines[i + j - 1]) ~= normalize(search_lines[j]) then
                         match = false
                         break
                     end
                 end
-
                 if match then
-                    start_idx = i
-                    match_found = true
-                    break
+                    table.insert(candidates, i)
                 end
             end
 
-            if match_found then
+            -- 2. Analyze
+            if #candidates == 0 then
+                table.insert(errors, string.format(
+                    "SEARCH block not found.\nLooking for:\n'%s'...", 
+                    search_lines[1] or "?"
+                ))
+            elseif #candidates > 1 then
+                table.insert(errors, string.format(
+                    "Ambiguous SEARCH block! Found %d occurrences (lines %s).",
+                    #candidates, table.concat(candidates, ", ")
+                ))
+            else
+                -- 3. Apply
+                local start_idx = candidates[1]
+                
+                -- Удаляем старое
                 for _ = 1, #search_lines do
                     table.remove(file_lines, start_idx)
                 end
-                for j = #replace_lines, 1, -1 do
-                    table.insert(file_lines, start_idx, replace_lines[j])
+                
+                -- Вставляем новое (в обратном порядке, чтобы сохранить индексы при вставке в одну точку)
+                for k = #replace_lines, 1, -1 do
+                    table.insert(file_lines, start_idx, replace_lines[k])
                 end
-                changes_made = changes_made + 1
-            else
-                local first_line = search_lines[1] or "???"
-                if #first_line > 50 then first_line = first_line:sub(1, 47) .. "..." end
-                table.insert(errors, string.format("Block mismatch starting with: '%s'", first_line))
+                
+                changes_applied = changes_applied + 1
             end
         end
     end
 
-    if changes_made > 0 then
-        return true, table.concat(file_lines, "\n"), changes_made
+    if changes_applied > 0 then
+        return true, table.concat(file_lines, "\n"), changes_applied
     else
-        if #errors > 0 then
-            return false, "Patch failed. Errors:\n" .. table.concat(errors, "\n")
-        else
-            return false, "No valid SEARCH/REPLACE blocks found in LLM response."
-        end
+        return false, "Patch Failed:\n" .. table.concat(errors, "\n")
     end
 end
 

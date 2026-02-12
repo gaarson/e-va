@@ -5,33 +5,19 @@ function M.get()
     local cfg = {}
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
-    local BASE_PARAMS = {
-        max_tokens = 8192,
-        temperature = 0.1,
-        top_p = 0.95,
-        stream = true
+    -- === LLM PARAMS ===
+    local BASE_PARAMS = { stream = true }
+    
+    -- Main Brain (Creative & Logic)
+    local PARAMS_BRAIN = {
+        max_tokens = 8192, temperature = 0.2, top_p = 0.9,
+        repeat_penalty = 1.1, token_healing = true
     }
 
-    local PARAMS_TABBY = {
-        min_p = 0.05,
-        token_healing = true,
-        add_bos_token = true,
-        ban_eos_token = false,
-        dry_multiplier = 0.8,
-        dry_base = 1.75,
-        dry_allowed_length = 2,
-        dry_sequence_breakers = {"\n", ":", "\"", ".", ";", "!", "?", ">"}
-    }
-
-    local PARAMS_LLAMA = {
-        repeat_penalty = 1.15,  -- Классический штраф за повторы (1.0 = выкл)
-        presence_penalty = 0.0, -- Штраф за появление токена
-        frequency_penalty = 0.0,-- Штраф за частоту
-        tfs_z = 1.0,            -- Tail Free Sampling (1.0 = выкл)
-        mirostat = 0,           -- 0 = выкл, 2 = Mirostat v2 (хорош для длинных текстов)
-        mirostat_tau = 5.0,
-        mirostat_eta = 0.1,
-        ignore_eos = false      -- Аналог ban_eos_token, но для llama.cpp
+    -- Scout/Analyzer (Precise)
+    local PARAMS_PRECISE = {
+        max_tokens = 4096, temperature = 0.0, top_p = 0.1,
+        repeat_penalty = 1.2
     }
 
     local function merge(base, specific)
@@ -42,77 +28,71 @@ function M.get()
     end
 
     cfg.LLM_MAIN = {
-        -- name = "BRAIN (Main)",
-        -- url = "http://192.168.0.116:5001/v1/chat/completions",
-        -- model = "glm-4.7-flash-claude-4.5-opus.iq4_xs.gguf",
-        -- params = merge(BASE_PARAMS, PARAMS_LLAMA)
-        name = "BRAIN (Main)",
+        name = "BRAIN",
         url = "http://192.168.0.116:5000/v1/chat/completions",
-        model = "Qwen_Qwen3-Coder-30B-A3B-Instruct-EXL3-4.0bpw", 
-        params = merge(BASE_PARAMS, PARAMS_TABBY)
+        model = "Qwen_Qwen3-Coder-30B-Instruct", -- Пример
+        params = merge(BASE_PARAMS, PARAMS_BRAIN)
     }
 
     cfg.LLM_SCOUT = {
-        -- name = "SCOUT (Research)",
-        -- url = "http://192.168.0.116:5001/v1/chat/completions",
-        -- model = "glm-4.7-flash-claude-4.5-opus.iq4_xs.gguf",
-        -- params = merge(BASE_PARAMS, PARAMS_LLAMA)
-        name = "SCOUT (Research)",
+        name = "SCOUT",
         url = "http://192.168.0.116:5000/v1/chat/completions",
-        model = "Qwen_Qwen3-Coder-30B-A3B-Instruct-EXL3-4.0bpw",
-        params = merge(BASE_PARAMS, PARAMS_TABBY)
+        model = "Qwen_Qwen3-Coder-30B-Instruct",
+        params = merge(BASE_PARAMS, PARAMS_PRECISE)
     }
 
-    cfg.REGEX_RESEARCH = nil
-    cfg.REGEX_PLANNING = nil
-    cfg.REGEX_CODING = nil
+    -- === PROMPTS ===
 
-    cfg.PROMPT_RESEARCH = [[
-You are a Senior System Architect.
-CURRENT PHASE: RESEARCH.
+    -- 1. ANALYSIS PROMPT (BOOTSTRAP)
+    cfg.PROMPT_ANALYSIS = [[
+You are the CHIEF ARCHITECT. 
+TASK: Analyze the project file tree and define the development environment.
+
+INPUT: A list of file paths.
 
 OBJECTIVE:
-Locate ALL code required for the task. You must understand the data flow between Backend and Frontend.
+1. Identify the **Tech Stack** (Languages, Frameworks, Build Tools).
+2. Identify the **Project Type** (Monorepo, Microservice, SPA, Script, Library).
+3. Define the **Persona** needed for this task (e.g., "Senior React Developer", "Systems C Engineer", "DevOps Specialist").
+4. Spot **Conventions** (naming, folder structure).
 
-RULES:
-1. **THINK FIRST**: Briefly analyze the situation before issuing a command.
-2. DO NOT read the same file twice. Check "MEMORY" first.
-3. USE <cmd>search:text</cmd> to find specific definitions.
-4. When you understand the full scope, output <cmd>create_plan</cmd>.
-
-TOOLS:
-- <cmd>list_files</cmd> : See file structure (uses ripgrep).
-- <cmd>search:text_query</cmd> : Grep files (uses ripgrep).
-- <cmd>read_file:path</cmd> : Read file content.
-- <cmd>create_plan</cmd> : Done researching. Switch to Planning.
-
-EXAMPLE:
-Thinking: I need to find where the Product model is defined to see the new fields.
-<cmd>search:class Product</cmd>
+OUTPUT: Return ONLY a JSON object. No markdown, no text.
+{
+  "stack": ["Lua", "C", "Make"],
+  "type": "Embedded Scripting",
+  "persona": "Senior Systems Engineer (Lua/C)",
+  "conventions": "Modular Lua architecture, C bindings separate",
+  "summary": "This is a high-performance agent system written in Lua with C extensions."
+}
 ]]
 
+    -- 2. DYNAMIC SYSTEM HEADER (Injected into other prompts)
+    cfg.PROMPT_IDENTITY_TEMPLATE = [[
+=== PROJECT IDENTITY ===
+ROLE: %s
+STACK: %s
+CONTEXT: %s
+========================
+]]
+
+    -- 3. RESEARCH PROMPT
+    cfg.PROMPT_RESEARCH = [[
+CURRENT PHASE: RESEARCH.
+OBJECTIVE: Locate ALL files necessary for the user's request.
+Use <cmd>list_files</cmd> (already scanned) and <cmd>read_file:path</cmd>.
+Do not assume file contents. Read them.
+When you have sufficient context, output <cmd>create_plan</cmd>.
+]]
+
+    -- 4. PLANNING PROMPT
     cfg.PROMPT_PLANNING = [[
-You are the Execution Planner.
 CURRENT PHASE: PLANNING.
-
-GOAL: Create a precise JSON plan to implement the changes found during RESEARCH.
-
-CRITICAL INSTRUCTION:
-Break down tasks into ATOMIC file modifications. Do not group unrelated files.
-
-FORMAT:
-[
-  {
-    "file": "frontend/components/Table.jsx",
-    "instruction": "Inject 'new_field' column into the table header and body."
-  },
-  {
-    "file": "frontend/components/Table.css",
-    "instruction": "Add 'overflow-x: auto' to the .table-container class."
-  }
-]
+Create a JSON execution plan based on the loaded files.
+Format:
+[{"file": "path", "instruction": "detail"}, ...]
 ]]
 
+    -- 5. CODING PROMPT
     cfg.PROMPT_CODING_TEMPLATE = [[
 You are a Code Patcher Engine (Diff Generator).
 CURRENT PHASE: CODING (Task %d of %d).

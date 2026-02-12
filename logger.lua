@@ -1,11 +1,14 @@
 local M = {}
 local io = require("io")
+local os = require("os")
+
+-- Создаем папку логов при старте, если нет
+os.execute("mkdir -p logs")
 
 local function inspect_impl(root, options)
     options = options or {}
     local depth = options.depth or 3
     local cache = { [root] = "." }
-    
     local function _dump(t, space, name, level)
         if level > depth then return space .. tostring(t) .. "..." end
         local temp = {}
@@ -43,6 +46,20 @@ end
 function M.error(msg, data)
     local d_str = data and inspect_impl(data) or ""
     io.stderr:write(string.format("\27[31m[ERROR]\27[0m %s %s\n", msg, d_str))
+end
+
+-- НОВАЯ ФУНКЦИЯ: Пишет сырой текст в файл
+function M.log_context(turn, phase, content)
+    local filename = string.format("logs/turn_%03d_%s.log", turn, phase)
+    local f = io.open(filename, "w")
+    if f then
+        f:write(content)
+        f:close()
+        -- Не спамим в консоль, но даем знать
+        -- print(string.format("\27[90m[DEBUG] Context saved to %s\27[0m", filename))
+    else
+        io.stderr:write("[LOGGER] Failed to write log: " .. filename .. "\n")
+    end
 end
 
 return M

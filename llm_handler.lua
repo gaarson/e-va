@@ -25,6 +25,9 @@ function M.send_request(profile, messages, options)
     req.headers:upsert("content-type", "application/json")
     req.headers:upsert("accept", "text/event-stream") -- Важно для SSE
 
+    local headers, stream = req:go(60) -- 60 sec timeout for headers
+    if not headers then return nil, "Connection timeout or failed" end
+
     local payload = merge_tables({
         model = profile.model,
         messages = messages,
