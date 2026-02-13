@@ -13,7 +13,6 @@ local ctx = Context.new(config)
 local STATES = { RESEARCH = "RESEARCH", PLANNING = "PLANNING", CODING = "CODING" }
 local CURRENT_STATE = STATES.RESEARCH
 
--- Parse Args
 local start_file = arg[1]
 local instruction = arg[2]
 
@@ -22,10 +21,8 @@ if not instruction then
     if not instruction then print("Usage: eva [file] \"<instruction>\""); os.exit(1) end
 end
 
--- 1. ANALYSIS PHASE
 Analyzer.run(ctx, llm)
 
--- Init
 local initial_msg = "TASK: " .. instruction
 if start_file then
     local norm_start = require("utils").normalize_path(config.PROJECT_ROOT, start_file)
@@ -43,7 +40,6 @@ local turn = 0
 while turn < MAX_TURNS do
     turn = turn + 1
 
-    -- Формируем промпт
     local sys_prompt_text = ""
     if CURRENT_STATE == STATES.RESEARCH then sys_prompt_text = config.PROMPT_RESEARCH
     elseif CURRENT_STATE == STATES.PLANNING then sys_prompt_text = config.PROMPT_PLANNING
@@ -51,7 +47,9 @@ while turn < MAX_TURNS do
         local task = ctx.execution_plan[ctx.current_task_index]
         sys_prompt_text = string.format(config.PROMPT_CODING_TEMPLATE,
             ctx.current_task_index, #ctx.execution_plan,
-            task.file or "unknown", task.instruction or "unknown")
+            task.file or "unknown", 
+            task.instruction or "unknown",
+            task.file or "unknown") -- Arg 5 provided here (File: %s)
     end
 
     local full_system_prompt = ctx:get_identity_prompt() .. "\n" .. sys_prompt_text
@@ -63,8 +61,6 @@ while turn < MAX_TURNS do
 
     for _, msg in ipairs(ctx.chat_history) do table.insert(messages, msg) end
 
-    -- === LOGGING CONTEXT ===
-    -- Собираем всё в один текстовый блок для сохранения
     local debug_dump = "=== SYSTEM PROMPT ===\n" .. full_system_prompt .. "\n\n"
     debug_dump = debug_dump .. "=== CONTEXT REPORT ===\n" .. ctx:get_report() .. "\n\n"
     debug_dump = debug_dump .. "=== MEMORY BLOCK ===\n" .. ctx:get_memory_block() .. "\n\n"
@@ -73,9 +69,7 @@ while turn < MAX_TURNS do
         debug_dump = debug_dump .. string.format("[%s]: %s\n---\n", m.role, m.content)
     end
     logger.log_context(turn, CURRENT_STATE, debug_dump)
-    -- =======================
 
-    -- Выбор профиля
     local profile = (CURRENT_STATE == STATES.CODING) and config.LLM_MAIN or config.LLM_SCOUT
 
     logger.info(string.format("[TURN %d] Phase: %s", turn, CURRENT_STATE))
@@ -93,21 +87,17 @@ while turn < MAX_TURNS do
 
     local content = llm.extract_content(response_data) or ""
     table.insert(ctx.chat_history, { role = "assistant", content = content })
-    
-    -- Логируем ответ
+
     logger.log_context(turn, CURRENT_STATE .. "_RESPONSE", content)
 
-    -- Обработка ответа
     local tool_out = ""
     local transition = false
 
-    -- 1. Patching
     if CURRENT_STATE == STATES.CODING and content:match("<<<<<<< SEARCH") then
         local ok, out = tool_executor.try_apply_patch(content, ctx)
         tool_out = tool_out .. out
     end
 
-    -- 2. Planning JSON
     if CURRENT_STATE == STATES.PLANNING then
         local json_match = content:match("%[.*%]")
         if json_match then
@@ -120,9 +110,9 @@ while turn < MAX_TURNS do
                  local first_task = ctx.execution_plan[1]
                  if first_task.file then ctx:touch_file(first_task.file) end
 
-                 table.insert(ctx.chat_history, { 
-                    role = "user", 
-                    content = string.format("PLAN APPROVED.\nSTARTING TASK 1/%d: %s\nInstruction: %s", 
+                 table.insert(ctx.chat_history, {
+                    role = "user",
+                    content = string.format("PLAN APPROVED.\nSTARTING TASK 1/%d: %s\nInstruction: %s",
                         #plan, first_task.file, first_task.instruction)
                  })
                  tool_out = "\n[SYSTEM]: Phase changed to CODING."
@@ -132,7 +122,6 @@ while turn < MAX_TURNS do
         end
     end
 
-    -- 3. Commands
     for cmd in content:gmatch("<cmd>(.-)</cmd>") do
         local res = tool_executor.execute(cmd, ctx)
         tool_out = tool_out .. (res.output or "")
@@ -149,9 +138,9 @@ while turn < MAX_TURNS do
                 local next_task = ctx.execution_plan[ctx.current_task_index]
                 ctx.chat_history = {}
                 if next_task.file then ctx:touch_file(next_task.file) end
-                table.insert(ctx.chat_history, { 
-                    role = "user", 
-                    content = string.format("TASK COMPLETE.\nSTARTING TASK %d/%d: %s\nInstruction: %s", 
+                table.insert(ctx.chat_history, {
+                    role = "user",
+                    content = string.format("TASK COMPLETE.\nSTARTING TASK %d/%d: %s\nInstruction: %s",
                         ctx.current_task_index, #ctx.execution_plan, next_task.file, next_task.instruction)
                 })
                 tool_out = "\n[SYSTEM]: Ready for next task."

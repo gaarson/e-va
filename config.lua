@@ -5,18 +5,18 @@ function M.get()
     local cfg = {}
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
-    -- === LLM PARAMS ===
     local BASE_PARAMS = { stream = true }
-    
-    -- Main Brain (Creative & Logic)
+
+    -- TWEAKED PARAMS:
+    -- 1. temperature понижена для кодинга (меньше фантазий).
+    -- 2. repeat_penalty поднята до 1.2 (убивает циклы в CSS/JSON).
     local PARAMS_BRAIN = {
         max_tokens = 8192, temperature = 0.2, top_p = 0.9,
-        repeat_penalty = 1.1, token_healing = true
+        repeat_penalty = 1.2, token_healing = true
     }
 
-    -- Scout/Analyzer (Precise)
     local PARAMS_PRECISE = {
-        max_tokens = 4096, temperature = 0.0, top_p = 0.1,
+        max_tokens = 4096, temperature = 0.1, top_p = 0.1,
         repeat_penalty = 1.2
     }
 
@@ -30,7 +30,7 @@ function M.get()
     cfg.LLM_MAIN = {
         name = "BRAIN",
         url = "http://192.168.0.116:5000/v1/chat/completions",
-        model = "Qwen_Qwen3-Coder-30B-Instruct", -- Пример
+        model = "Qwen_Qwen3-Coder-30B-Instruct",
         params = merge(BASE_PARAMS, PARAMS_BRAIN)
     }
 
@@ -41,11 +41,8 @@ function M.get()
         params = merge(BASE_PARAMS, PARAMS_PRECISE)
     }
 
-    -- === PROMPTS ===
-
-    -- 1. ANALYSIS PROMPT (BOOTSTRAP)
     cfg.PROMPT_ANALYSIS = [[
-You are the CHIEF ARCHITECT. 
+You are the CHIEF ARCHITECT.
 TASK: Analyze the project file tree and define the development environment.
 
 INPUT: A list of file paths.
@@ -66,7 +63,6 @@ OUTPUT: Return ONLY a JSON object. No markdown, no text.
 }
 ]]
 
-    -- 2. DYNAMIC SYSTEM HEADER (Injected into other prompts)
     cfg.PROMPT_IDENTITY_TEMPLATE = [[
 === PROJECT IDENTITY ===
 ROLE: %s
@@ -75,24 +71,37 @@ CONTEXT: %s
 ========================
 ]]
 
-    -- 3. RESEARCH PROMPT
     cfg.PROMPT_RESEARCH = [[
 CURRENT PHASE: RESEARCH.
 OBJECTIVE: Locate ALL files necessary for the user's request.
-Use <cmd>list_files</cmd> (already scanned) and <cmd>read_file:path</cmd>.
-Do not assume file contents. Read them.
-When you have sufficient context, output <cmd>create_plan</cmd>.
+
+TOOLS:
+1. <cmd>list_files</cmd> (View structure)
+2. <cmd>read_file:path</cmd> (Load content)
+3. <cmd>search:query</cmd> (Grep project)
+
+STRATEGY:
+- If you don't know where code is, USE SEARCH.
+- If the user asks for UI changes, LOOK FOR RELATED CSS/STYLES files.
+- DO NOT read the same file twice. Check your history.
+- When you have sufficient context, output <cmd>create_plan</cmd>.
 ]]
 
-    -- 4. PLANNING PROMPT
     cfg.PROMPT_PLANNING = [[
 CURRENT PHASE: PLANNING.
 Create a JSON execution plan based on the loaded files.
+
+RULES:
+1. If modifying a component (.jsx/.tsx), check if its STYLES (.css/.scss) also need modification.
+2. If so, create a SEPARATE task for the CSS file. Do not assume you can edit two files in one task.
+
 Format:
-[{"file": "path", "instruction": "detail"}, ...]
+[
+  {"file": "path/to/Component.jsx", "instruction": "Modify HTML structure..."},
+  {"file": "path/to/Component.css", "instruction": "Add new styles..."}
+]
 ]]
 
-    -- 5. CODING PROMPT
     cfg.PROMPT_CODING_TEMPLATE = [[
 You are a Code Patcher Engine (Diff Generator).
 CURRENT PHASE: CODING (Task %d of %d).
@@ -102,14 +111,18 @@ INSTRUCTION: %s
 
 === CONTEXT STATUS ===
 1. The TARGET FILE content is strictly loaded in the **MEMORY** block above.
-2. The file currently **DOES NOT MATCH** the instruction.
-3. Your ONLY job is to generate a **SEARCH/REPLACE** block to fix it.
+2. Your ONLY job is to generate a **SEARCH/REPLACE** block to fix it.
+
+=== EXIT STRATEGY (CRITICAL) ===
+If the last message in CHAT HISTORY is a "[SUCCESS]" confirmation:
+YOU MUST IMMEDIATELY OUTPUT: <cmd>task_complete</cmd>
+Do not explain, do not summarize. Just exit.
 
 === STRICT EXECUTION RULES ===
 1. **NO READING**: Do NOT output <cmd>read_file</cmd>. The file is already in Memory. USE IT.
-2. **NO LAZY EXITS**: Do NOT output <cmd>task_complete</cmd> until you have output a valid <<<<<<< SEARCH block and confirmed the patch.
+2. **NO LAZY EXITS**: Do NOT output <cmd>task_complete</cmd> UNTIL you have successfully applied the patch (received [SUCCESS]).
 3. **EXACT MATCH**: The `<<<<<<< SEARCH` block must be an EXACT COPY of the existing code (including whitespace) from the Memory.
-4. **THINKING PROCESS**: Start with "Thinking:" to locate the exact lines to change.
+4. **BRIVITY**: Keep the SEARCH block minimal (3-5 lines of context) if possible, to avoid generation loops.
 
 === REQUIRED OUTPUT FORMAT ===
 Thinking:

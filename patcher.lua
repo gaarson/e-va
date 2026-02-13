@@ -3,14 +3,11 @@ local M = {}
 local function split_lines(text)
     local lines = {}
     if not text then return lines end
-    -- Нормализация переносов
     text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
     
-    -- В Lua 5.1 gmatch работает так же
     for line in text:gmatch("([^\n]*)\n?") do
         table.insert(lines, line)
     end
-    -- Удаляем последний пустой элемент, если он есть (артефакт gmatch)
     if #lines > 0 and lines[#lines] == "" then table.remove(lines) end
     return lines
 end
@@ -30,7 +27,6 @@ function M.apply_search_replace(original_content, llm_response)
 
     for search_block, replace_block in llm_response:gmatch("<<<<<<< SEARCH%s*\n(.-)\n=======%s*\n(.-)\n>>>>>>> REPLACE") do
         
-        -- Флаг для эмуляции continue
         local should_process = true
 
         search_block = search_block:gsub("\n$", "")
@@ -45,9 +41,7 @@ function M.apply_search_replace(original_content, llm_response)
         end
 
         if should_process then
-            -- 1. Scan
             local candidates = {}
-            -- В Lua 5.1 циклы обычные
             for i = 1, #file_lines - #search_lines + 1 do
                 local match = true
                 for j = 1, #search_lines do
@@ -61,7 +55,6 @@ function M.apply_search_replace(original_content, llm_response)
                 end
             end
 
-            -- 2. Analyze
             if #candidates == 0 then
                 table.insert(errors, string.format(
                     "SEARCH block not found.\nLooking for:\n'%s'...", 
@@ -73,15 +66,12 @@ function M.apply_search_replace(original_content, llm_response)
                     #candidates, table.concat(candidates, ", ")
                 ))
             else
-                -- 3. Apply
                 local start_idx = candidates[1]
                 
-                -- Удаляем старое
                 for _ = 1, #search_lines do
                     table.remove(file_lines, start_idx)
                 end
                 
-                -- Вставляем новое (в обратном порядке, чтобы сохранить индексы при вставке в одну точку)
                 for k = #replace_lines, 1, -1 do
                     table.insert(file_lines, start_idx, replace_lines[k])
                 end

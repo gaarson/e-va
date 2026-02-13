@@ -6,18 +6,14 @@ function M.trim(s)
     return (s:gsub("^%s*(.-)%s*$", "%1"))
 end
 
--- Критически важно: превращает "path='src/main.js'" в "src/main.js"
 function M.normalize_path(root, raw_path)
     if not raw_path then return "" end
-    -- Убираем префиксы path=, file=, кавычки и пробелы
     local p = M.trim(raw_path)
     p = p:gsub("^path=", ""):gsub("^file=", ""):gsub("['\"]", "")
     p = M.trim(p)
-    
-    -- Убираем ./ в начале
+
     p = p:gsub("^%./", "")
-    
-    -- Разрешаем относительные пути
+
     local escaped_root = root:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
     if p:find("^" .. escaped_root) then
         p = p:sub(#root + 2)
@@ -42,13 +38,12 @@ function M.write_file(path, content)
 end
 
 function M.list_files_recursive(root_path)
-    -- Используем rg для скорости и игнорирования мусора (.git, node_modules)
-    local cmd = string.format("rg --files --hidden --glob '!.git/' --color never '%s' 2>/dev/null | head -n 600", root_path)
+    local cmd = string.format("rg --files --hidden --glob '!.git/' --color never '%s' 2>/dev/null", root_path)
     local p = io.popen(cmd)
     if not p then return "Error listing files" end
     local out = p:read("*a")
     p:close()
-    
+
     local files = {}
     for line in out:gmatch("[^\r\n]+") do
         local rel = M.normalize_path(root_path, line)
@@ -56,6 +51,11 @@ function M.list_files_recursive(root_path)
     end
     if #files == 0 then return "(No files found)" end
     return table.concat(files, "\n")
+end
+
+function M.shell_quote(str)
+    if not str then return "''" end
+    return "'" .. str:gsub("'", "'\\''") .. "'"
 end
 
 return M
