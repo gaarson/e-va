@@ -4,7 +4,7 @@ local function split_lines(text)
     local lines = {}
     if not text then return lines end
     text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
-    
+
     for line in text:gmatch("([^\n]*)\n?") do
         table.insert(lines, line)
     end
@@ -12,8 +12,10 @@ local function split_lines(text)
     return lines
 end
 
+-- Нормализация: trim + сжатие внутренних пробелов в один
 local function normalize(line)
-    return line:gsub("%s+", "")
+    local trimmed = line:match("^%s*(.-)%s*$") or ""
+    return trimmed:gsub("%s+", " ")
 end
 
 function M.apply_search_replace(original_content, llm_response)
@@ -26,9 +28,8 @@ function M.apply_search_replace(original_content, llm_response)
     local errors = {}
 
     for search_block, replace_block in llm_response:gmatch("<<<<<<< SEARCH%s*\n(.-)\n=======%s*\n(.-)\n>>>>>>> REPLACE") do
-        
-        local should_process = true
 
+        local should_process = true
         search_block = search_block:gsub("\n$", "")
         replace_block = replace_block:gsub("\n$", "")
 
@@ -50,14 +51,12 @@ function M.apply_search_replace(original_content, llm_response)
                         break
                     end
                 end
-                if match then
-                    table.insert(candidates, i)
-                end
+                if match then table.insert(candidates, i) end
             end
 
             if #candidates == 0 then
                 table.insert(errors, string.format(
-                    "SEARCH block not found.\nLooking for:\n'%s'...", 
+                    "SEARCH block not found.\nLooking for:\n'%s'...",
                     search_lines[1] or "?"
                 ))
             elseif #candidates > 1 then
@@ -67,15 +66,10 @@ function M.apply_search_replace(original_content, llm_response)
                 ))
             else
                 local start_idx = candidates[1]
-                
-                for _ = 1, #search_lines do
-                    table.remove(file_lines, start_idx)
-                end
-                
+                for _ = 1, #search_lines do table.remove(file_lines, start_idx) end
                 for k = #replace_lines, 1, -1 do
                     table.insert(file_lines, start_idx, replace_lines[k])
                 end
-                
                 changes_applied = changes_applied + 1
             end
         end

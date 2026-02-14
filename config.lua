@@ -5,6 +5,24 @@ function M.get()
     local cfg = {}
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
+    cfg.LIMITS = {
+        -- Максимальный размер контекста модели (Hard Limit)
+        MAX_CONTEXT = 32000, 
+        
+        -- Сколько токенов резервируем под ответ модели (Output buffer)
+        RESERVED_OUTPUT = 2000,
+        
+        -- Примерный вес системного промпта и инструкций (Identity + Tool Defs)
+        SYSTEM_PROMPT_ESTIMATE = 1500,
+        
+        -- Баланс памяти: 0.7 = 70% под Файлы, 30% под Историю Чата
+        MEMORY_RATIO = 0.7,
+        
+        -- Эвристика: кол-во символов на 1 токен (для подсчета без токенайзера)
+        -- 3.5 - безопасное значение для кода и смешанного текста
+        CHARS_PER_TOKEN = 3.5
+    }
+
     local BASE_PARAMS = { stream = true }
 
     -- TWEAKED PARAMS:
