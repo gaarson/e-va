@@ -7,17 +7,13 @@ function M.get()
 
     cfg.LIMITS = {
         -- Максимальный размер контекста модели (Hard Limit)
-        MAX_CONTEXT = 32000, 
-        
+        MAX_CONTEXT = 120000,
         -- Сколько токенов резервируем под ответ модели (Output buffer)
-        RESERVED_OUTPUT = 2000,
-        
+        RESERVED_OUTPUT = 6000,
         -- Примерный вес системного промпта и инструкций (Identity + Tool Defs)
-        SYSTEM_PROMPT_ESTIMATE = 1500,
-        
+        SYSTEM_PROMPT_ESTIMATE = 3000,
         -- Баланс памяти: 0.7 = 70% под Файлы, 30% под Историю Чата
-        MEMORY_RATIO = 0.7,
-        
+        MEMORY_RATIO = 0.8,
         -- Эвристика: кол-во символов на 1 токен (для подсчета без токенайзера)
         -- 3.5 - безопасное значение для кода и смешанного текста
         CHARS_PER_TOKEN = 3.5
@@ -25,9 +21,6 @@ function M.get()
 
     local BASE_PARAMS = { stream = true }
 
-    -- TWEAKED PARAMS:
-    -- 1. temperature понижена для кодинга (меньше фантазий).
-    -- 2. repeat_penalty поднята до 1.2 (убивает циклы в CSS/JSON).
     local PARAMS_BRAIN = {
         max_tokens = 8192, temperature = 0.2, top_p = 0.9,
         repeat_penalty = 1.2, token_healing = true
@@ -91,18 +84,28 @@ CONTEXT: %s
 
     cfg.PROMPT_RESEARCH = [[
 CURRENT PHASE: RESEARCH.
-OBJECTIVE: Locate ALL files necessary for the user's request.
+OBJECTIVE: Locate relevant code and understand the architecture without reading full files.
 
-TOOLS:
-1. <cmd>list_files</cmd> (View structure)
-2. <cmd>read_file:path</cmd> (Load content)
-3. <cmd>search:query</cmd> (Grep project)
+=== CONTEXT STATUS ===
+The FILE TREE is ALREADY loaded in the System Prompt above.
+DO NOT use <cmd>list_files</cmd> unless the tree is empty.
 
-STRATEGY:
-- If you don't know where code is, USE SEARCH.
-- If the user asks for UI changes, LOOK FOR RELATED CSS/STYLES files.
-- DO NOT read the same file twice. Check your history.
-- When you have sufficient context, output <cmd>create_plan</cmd>.
+=== STRATEGY (GREP-FIRST APPROACH) ===
+1. **SEARCH FIRST**: Use <cmd>search:query</cmd> to find specific function definitions, variable usages, or text classes.
+   - Example: <cmd>search:class PdfGeneration</cmd>
+   - Example: <cmd>search:def save_preset</cmd>
+
+2. **INSPECT CONTEXT**: Once you have line numbers from search, use <cmd>read_chunk:file:start-end</cmd>.
+   - Read +/- 20 lines around the match to understand the logic.
+   - SAVE TOKENS: Do NOT read the whole file if you only need one function.
+
+3. **ANALYZE IMPORTS**: If you need to see dependencies, read the top of the file:
+   - <cmd>read_chunk:src/main.js:1-50</cmd>
+
+=== RULES ===
+- **PROHIBITED**: Do NOT use <cmd>read_file</cmd> (full read) unless the file is very small (< 100 lines) or absolutely necessary.
+- **AGGREGATE**: You can issue multiple commands in one response (e.g., search for 3 different terms).
+- **EXIT**: When you have enough information to build a plan, output <cmd>create_plan</cmd>.
 ]]
 
     cfg.PROMPT_PLANNING = [[
@@ -132,19 +135,22 @@ INSTRUCTION: %s
 2. Your ONLY job is to generate a **SEARCH/REPLACE** block to fix it.
 
 === EXIT STRATEGY (CRITICAL) ===
-If the last message in CHAT HISTORY is a "[SUCCESS]" confirmation:
-YOU MUST IMMEDIATELY OUTPUT: <cmd>task_complete</cmd>
-Do not explain, do not summarize. Just exit.
+1. If the last message in CHAT HISTORY is a "[SUCCESS]" confirmation:
+   YOU MUST IMMEDIATELY OUTPUT: <cmd>task_complete</cmd>
+   (Do not explain, do not summarize. Just exit.)
+
+2. **[SKIP RULE]**: If the file ALREADY contains the requested features or NO changes are needed:
+   YOU MUST IMMEDIATELY OUTPUT: <cmd>task_complete</cmd>
+   (Do not generate a fake patch. Do not loop thinking about it. Just exit.)
 
 === STRICT EXECUTION RULES ===
 1. **NO READING**: Do NOT output <cmd>read_file</cmd>. The file is already in Memory. USE IT.
-2. **NO LAZY EXITS**: Do NOT output <cmd>task_complete</cmd> UNTIL you have successfully applied the patch (received [SUCCESS]).
-3. **EXACT MATCH**: The `<<<<<<< SEARCH` block must be an EXACT COPY of the existing code (including whitespace) from the Memory.
-4. **BRIVITY**: Keep the SEARCH block minimal (3-5 lines of context) if possible, to avoid generation loops.
+2. **EXACT MATCH**: The `<<<<<<< SEARCH` block must be an EXACT COPY of the existing code (including whitespace) from the Memory.
+3. **BRIVITY**: Keep the SEARCH block minimal (3-5 lines of context) if possible.
 
 === REQUIRED OUTPUT FORMAT ===
 Thinking:
-I found the lines... I will replace them with...
+I found the lines... I will replace them with... (OR: The file is already correct, exiting.)
 
 File: %s
 <<<<<<< SEARCH

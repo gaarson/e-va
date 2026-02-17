@@ -1,84 +1,100 @@
 local M = {}
-
-local function split_lines(text)
-    local lines = {}
-    if not text then return lines end
-    text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
-
-    for line in text:gmatch("([^\n]*)\n?") do
-        table.insert(lines, line)
-    end
-    if #lines > 0 and lines[#lines] == "" then table.remove(lines) end
-    return lines
+local function clean_str(s)
+    if not s then return "" end
+    return (s:gsub("%s+", ""))
 end
 
--- Нормализация: trim + сжатие внутренних пробелов в один
-local function normalize(line)
-    local trimmed = line:match("^%s*(.-)%s*$") or ""
-    return trimmed:gsub("%s+", " ")
+local function to_lines(str)
+    local t = {}
+    local clean = str:gsub("\r\n", "\n"):gsub("\r", "\n")
+    
+    for line in clean:gmatch("([^\n]*)\n?") do
+        table.insert(t, line)
+    end
+    
+    if #t > 0 and t[#t] == "" then 
+        table.remove(t) 
+    end
+    return t
 end
 
-function M.apply_search_replace(original_content, llm_response)
-    if not original_content or not llm_response then
-        return false, "Invalid input"
+local function find_fuzzy_block(content_lines, search_lines)
+    if #search_lines == 0 then return nil end
+    if #content_lines < #search_lines then return nil end
+
+    local search_clean = {}
+    for _, l in ipairs(search_lines) do
+        table.insert(search_clean, clean_str(l))
     end
 
-    local file_lines = split_lines(original_content)
-    local changes_applied = 0
+    for i = 1, (#content_lines - #search_lines + 1) do
+        local match = true
+        for j = 1, #search_lines do
+            if clean_str(content_lines[i + j - 1]) ~= search_clean[j] then
+                match = false
+                break
+            end
+        end
+
+        if match then
+            return i, (i + #search_lines - 1)
+        end
+    end
+    return nil
+end
+
+function M.apply_patch(original_content, llm_response)
+    if not original_content then return false, "No content provided" end
+
+    local content = original_content:gsub("\r\n", "\n"):gsub("\r", "\n")
+    local response = llm_response:gsub("\r\n", "\n"):gsub("\r", "\n")
+
+    local changes_count = 0
     local errors = {}
 
-    for search_block, replace_block in llm_response:gmatch("<<<<<<< SEARCH%s*\n(.-)\n=======%s*\n(.-)\n>>>>>>> REPLACE") do
+    local file_lines = to_lines(content)
 
-        local should_process = true
-        search_block = search_block:gsub("\n$", "")
-        replace_block = replace_block:gsub("\n$", "")
+    for search_block, replace_block in response:gmatch("<<<<<<< SEARCH%s*\n(.-)\n=======[^\n]*\n(.-)\n>>>>>>>[^\n]*") do
+        
+        local start_idx = content:find(search_block, 1, true)
+        
+        local search_lines = to_lines(search_block)
+        local replace_lines = to_lines(replace_block)
 
-        local search_lines = split_lines(search_block)
-        local replace_lines = split_lines(replace_block)
-
-        if #search_lines == 0 then
-            table.insert(errors, "Empty SEARCH block.")
-            should_process = false
+        local has_content = false
+        for _, l in ipairs(search_lines) do 
+            if clean_str(l) ~= "" then has_content = true; break end 
         end
 
-        if should_process then
-            local candidates = {}
-            for i = 1, #file_lines - #search_lines + 1 do
-                local match = true
-                for j = 1, #search_lines do
-                    if normalize(file_lines[i + j - 1]) ~= normalize(search_lines[j]) then
-                        match = false
-                        break
-                    end
-                end
-                if match then table.insert(candidates, i) end
-            end
+        if has_content then
+            local s_line, e_line = find_fuzzy_block(file_lines, search_lines)
 
-            if #candidates == 0 then
-                table.insert(errors, string.format(
-                    "SEARCH block not found.\nLooking for:\n'%s'...",
-                    search_lines[1] or "?"
-                ))
-            elseif #candidates > 1 then
-                table.insert(errors, string.format(
-                    "Ambiguous SEARCH block! Found %d occurrences (lines %s).",
-                    #candidates, table.concat(candidates, ", ")
-                ))
-            else
-                local start_idx = candidates[1]
-                for _ = 1, #search_lines do table.remove(file_lines, start_idx) end
-                for k = #replace_lines, 1, -1 do
-                    table.insert(file_lines, start_idx, replace_lines[k])
+            if s_line and e_line then
+                local count_to_remove = e_line - s_line + 1
+                for _ = 1, count_to_remove do
+                    table.remove(file_lines, s_line)
                 end
-                changes_applied = changes_applied + 1
+
+                for i = #replace_lines, 1, -1 do
+                    table.insert(file_lines, s_line, replace_lines[i])
+                end
+
+                changes_count = changes_count + 1
+            else
+                local snippet = search_block:sub(1, 100):gsub("\n", " ")
+                table.insert(errors, string.format("Block not found (Fuzzy failed): '%s...'", snippet))
             end
         end
     end
 
-    if changes_applied > 0 then
-        return true, table.concat(file_lines, "\n"), changes_applied
+    if changes_count > 0 then
+        return true, table.concat(file_lines, "\n"), changes_count
     else
-        return false, "Patch Failed:\n" .. table.concat(errors, "\n")
+        if #errors > 0 then
+            return false, "Patch Failed:\n" .. table.concat(errors, "\n")
+        else
+            return false, "No valid SEARCH/REPLACE blocks found. Ensure format:\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE"
+        end
     end
 end
 

@@ -42,6 +42,15 @@ function M.run(ctx, llm_handler)
         if status and identity then
             ctx.identity = identity
             logger.info("Identity Established", identity)
+
+            local tree_info = "FILE TREE IS ALREADY LOADED IN CONTEXT.\n" .. 
+                          "Total files: " .. select(2, tree_safe:gsub("\n", "\n"))
+        
+            table.insert(ctx.chat_history, { 
+                role = "system", 
+                content = tree_info 
+            })
+
             print(string.format("\n\27[32m[IDENTITY]\27[0m Role: %s | Type: %s", identity.persona, identity.type))
             return true
         end

@@ -8,12 +8,11 @@ function M.new(config)
     return self
 end
 
--- Сброс состояния (Zeroing memory)
 function M.reset(self)
     self.knowledge_base = {}
     self.file_access_rank = {}
     self.global_access_counter = 0
-    self.file_states = {} 
+    self.file_states = {}
     self.search_history = {}
     self.chat_history = {}
     self.execution_plan = {}
@@ -42,7 +41,6 @@ function M.add_search_result(self, query, result)
     self.search_history[query] = result
 end
 
--- === SNAPSHOT SYSTEM (PERSISTENCE) ===
 function M.snapshot(self)
     local state = {
         knowledge_base = self.knowledge_base,
@@ -62,7 +60,6 @@ end
 function M.load_from_snapshot(self, json_str)
     local status, state = pcall(function() return json:decode(json_str) end)
     if not status or not state then return false, "Corrupted JSON" end
-
     self.knowledge_base = state.knowledge_base or {}
     self.file_access_rank = state.file_access_rank or {}
     self.global_access_counter = state.global_access_counter or 0
@@ -73,11 +70,9 @@ function M.load_from_snapshot(self, json_str)
     self.current_task_index = state.current_task_index or 1
     self.identity = state.identity
     self.file_tree = state.file_tree
-    
     return true
 end
 
--- === SMART MEMORY MANAGEMENT ===
 function M.estimate_tokens(self, text)
     if not text then return 0 end
     local divisor = (self.config.LIMITS and self.config.LIMITS.CHARS_PER_TOKEN) or 3.5
@@ -85,15 +80,13 @@ function M.estimate_tokens(self, text)
 end
 
 function M.get_memory_block(self, max_tokens)
-    max_tokens = max_tokens or 8000
+    max_tokens = max_tokens or 100000
     local current_tokens = 0
     local mem_buffer = {}
-    
-    -- 1. Определяем Target File
+
     local current_task = self.execution_plan[self.current_task_index]
     local active_target = current_task and current_task.file
 
-    -- 2. Сортируем файлы: Target, потом Rank
     local files_list = {}
     for path, content in pairs(self.knowledge_base) do
         table.insert(files_list, {
@@ -110,32 +103,33 @@ function M.get_memory_block(self, max_tokens)
         return a.rank > b.rank
     end)
 
-    table.insert(mem_buffer, "\n=== MEMORY (Smart Context) ===\n")
-    
-    -- 3. Жадное заполнение
-    for _, f in ipairs(files_list) do
-        local file_header = string.format("FILE: %s\n```\n", f.path)
-        local file_footer = "\n```\n"
-        local content = f.content
+    table.insert(mem_buffer, "\n=== MEMORY (FULL CONTEXT) ===\n")
+
+      for _, f in ipairs(files_list) do
+        local content_display = ""
+        local raw_lines = require("utils").read_lines_raw(f.content)
         
-        -- Сжатие неактивных больших файлов
-        if not f.is_target and #content > 5000 then
-             content = content:sub(1, 1000) .. "\n...[SNIPPED LARGE FILE]...\n" .. content:sub(-1000)
+        for i, line in ipairs(raw_lines) do
+             content_display = content_display .. line .. "\n"
         end
 
-        local total_str = file_header .. content .. file_footer
+        local marker = f.is_target and "[TARGET FILE - EDIT THIS]" or "[CONTEXT FILE - READ ONLY]"
+        local file_header = string.format("FILE: %s %s\n```\n", f.path, marker)
+        local file_footer = "```\n"
+
+        
+        local total_str = file_header .. content_display .. file_footer
         local cost = self:estimate_tokens(total_str)
 
         if (current_tokens + cost) < max_tokens then
             table.insert(mem_buffer, total_str)
             current_tokens = current_tokens + cost
         else
-            -- Target впихиваем любой ценой (если возможно)
             if f.is_target then
                  table.insert(mem_buffer, total_str)
                  current_tokens = current_tokens + cost
             else
-                table.insert(mem_buffer, string.format("FILE: %s [HIDDEN to save tokens]\n", f.path))
+                table.insert(mem_buffer, string.format("FILE: %s [OMITTED - OUT OF MEMORY]\n", f.path))
             end
         end
     end

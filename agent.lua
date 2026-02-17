@@ -11,37 +11,20 @@ local os = require("os")
 local config = config_module.get()
 local ctx = Context.new(config)
 
-local STATE_FILE = ".eva_state.json"
+local STATE_FILE = ".e-va_state.json"
 local STATES = { RESEARCH = "RESEARCH", PLANNING = "PLANNING", CODING = "CODING" }
 local CURRENT_STATE = STATES.RESEARCH
 
--- === BOOTLOADER SEQUENCE ===
-local restored = false
-local start_file = arg[1]
-local instruction = arg[2]
-
-if not instruction then
-    if start_file and not instruction then instruction = start_file; start_file = nil end
-end
-
-local f = io.open(STATE_FILE, "r")
-if f then
-    f:close()
-    io.write("\n\27[33m[SYSTEM] Found previous session state ("..STATE_FILE..").\27[0m\n")
-    io.write("Restore session? [Y/n]: ")
-    local answer = io.read()
-    if answer == "" or answer:lower() == "y" then
-        local content = utils.read_file_range(STATE_FILE)
-        if content and ctx:load_from_snapshot(content) then
-            restored = true
-            if #ctx.execution_plan > 0 then CURRENT_STATE = STATES.CODING
-            elseif #ctx.chat_history > 0 then CURRENT_STATE = STATES.RESEARCH end
-            print("\n\27[32m[SYSTEM] Session Restored.\27[0m")
-        else
-            print("\n\27[31m[ERROR] Corrupted save file. Starting fresh.\27[0m")
-        end
+local restored = false 
+if utils.read_file_range(STATE_FILE) then
+    local content = utils.read_file_range(STATE_FILE)
+    if ctx:load_from_snapshot(content) then
+        restored = true
     end
 end
+
+local start_file = arg[1]
+local instruction = arg[2]
 
 if not restored then
     if not instruction then print("Usage: eva [file] \"<instruction>\""); os.exit(1) end
@@ -63,14 +46,33 @@ local turn = 0
 
 while turn < MAX_TURNS do
     turn = turn + 1
-    
-    -- Journaling
     utils.write_file(STATE_FILE, ctx:snapshot())
 
-    -- === CONTEXT BUDGETING ===
+    if CURRENT_STATE == STATES.CODING then
+        if ctx.execution_plan then
+            for i, task in ipairs(ctx.execution_plan) do
+                if task.file then
+                    local fpath = task.file
+                    if not ctx.knowledge_base[fpath] then
+                        logger.info(string.format("Auto-loading plan file [%d/%d]", i, #ctx.execution_plan), fpath)
+                        local full_path = config.PROJECT_ROOT .. "/" .. fpath
+                        local content = utils.read_file_range(full_path)
+                        if content then
+                            ctx:add_file(fpath, content)
+                        else
+                            logger.error("Failed to load plan file", fpath)
+                        end
+                    else
+                        ctx:touch_file(fpath)
+                    end
+                end
+            end
+        end
+    end
+
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
-    if available_tokens < 1000 then available_tokens = 2000 end
+    if available_tokens < 2000 then available_tokens = 4000 end
 
     local memory_budget = math.floor(available_tokens * limits.MEMORY_RATIO)
     local chat_budget = available_tokens - memory_budget
@@ -93,7 +95,6 @@ while turn < MAX_TURNS do
     table.insert(messages, { role = "system", content = ctx:get_report() })
     table.insert(messages, { role = "system", content = memory_block })
 
-    -- Sliding Window Chat
     local chat_buffer = {}
     local current_chat_cost = 0
     local history_len = #ctx.chat_history
@@ -102,7 +103,8 @@ while turn < MAX_TURNS do
     if history_len > 0 then
         for i = history_len, 2, -1 do
             local msg = ctx.chat_history[i]
-            local cost = ctx:estimate_tokens(msg.content)
+            local content_str = msg.content or ""
+            local cost = ctx:estimate_tokens(content_str)
             if (current_chat_cost + cost) < chat_budget then
                 table.insert(chat_buffer, 1, msg)
                 current_chat_cost = current_chat_cost + cost
@@ -112,7 +114,6 @@ while turn < MAX_TURNS do
     end
     for _, msg in ipairs(chat_buffer) do table.insert(messages, msg) end
 
-    -- Logging & Request
     local debug_dump = "=== SYSTEM ===\n" .. full_system_prompt .. "\n\n=== MEMORY ===\n" .. memory_block
     logger.log_context(turn, CURRENT_STATE, debug_dump)
 
@@ -127,7 +128,6 @@ while turn < MAX_TURNS do
 
     if not response_data then
         logger.error("Network Error", err)
-        utils.write_file(STATE_FILE, ctx:snapshot())
         break
     end
 
@@ -141,6 +141,9 @@ while turn < MAX_TURNS do
     if CURRENT_STATE == STATES.CODING and content:match("<<<<<<< SEARCH") then
         local ok, out = tool_executor.try_apply_patch(content, ctx)
         tool_out = tool_out .. out
+        if not ok then
+            tool_out = tool_out .. "\n[SYSTEM ADVICE]: Patch failed. Ensure EXACT match with Memory block."
+        end
     end
 
     if CURRENT_STATE == STATES.PLANNING then
@@ -148,22 +151,34 @@ while turn < MAX_TURNS do
         if json_match then
              local status, plan = pcall(function() return json:decode(json_match) end)
              if status and plan and type(plan)=="table" and #plan > 0 then
+                 for _, item in ipairs(plan) do
+                     if item.file then
+                         item.file = utils.normalize_path(config.PROJECT_ROOT, item.file)
+                     end
+                 end
                  ctx.execution_plan = plan
                  CURRENT_STATE = STATES.CODING
                  ctx.current_task_index = 1
-                 ctx.chat_history = {}
+                 local keep_task = ctx.chat_history[1]
+                 ctx.chat_history = { keep_task }
+                 
                  local first_task = ctx.execution_plan[1]
-                 if first_task.file then ctx:touch_file(first_task.file) end
+                 if first_task.file then
+                    logger.info("Plan Approved. Starting Coding Phase.")
+                 end
+
                  table.insert(ctx.chat_history, { role = "user", content = string.format("PLAN APPROVED.\nSTARTING TASK 1/%d: %s\nInstruction: %s", #plan, first_task.file, first_task.instruction)})
-                 tool_out = "\n[SYSTEM]: Phase changed to CODING."
+                 tool_out = "\n[SYSTEM]: Phase changed to CODING. All relevant files are being loaded."
                  transition = true
              end
         end
     end
 
+    -- Обработка команд
     for cmd in content:gmatch("<cmd>(.-)</cmd>") do
         local res = tool_executor.execute(cmd, ctx)
         tool_out = tool_out .. (res.output or "")
+
         if res.signal == "TRANSITION_PLANNING" then
             CURRENT_STATE = STATES.PLANNING; transition = true
         elseif res.signal == "TASK_COMPLETE" then
@@ -174,8 +189,7 @@ while turn < MAX_TURNS do
                 os.exit(0)
             else
                 local next_task = ctx.execution_plan[ctx.current_task_index]
-                ctx.chat_history = {}
-                if next_task.file then ctx:touch_file(next_task.file) end
+                ctx.chat_history = {} -- Чистим историю между задачами, чтобы не путать контекст
                 table.insert(ctx.chat_history, { role = "user", content = string.format("TASK COMPLETE.\nSTARTING TASK %d/%d: %s\nInstruction: %s", ctx.current_task_index, #ctx.execution_plan, next_task.file, next_task.instruction) })
                 tool_out = "\n[SYSTEM]: Ready for next task."; transition = true
             end

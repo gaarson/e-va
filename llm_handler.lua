@@ -13,7 +13,7 @@ end
 function M.send_request(profile, messages, options)
     options = options or {}
     local override_params = options.override_params
-    local on_token_cb = options.on_token 
+    local on_token_cb = options.on_token
 
     if not profile or not profile.url then
         return nil, "Invalid Profile"
@@ -22,9 +22,9 @@ function M.send_request(profile, messages, options)
     local req = http.new_from_uri(profile.url)
     req.headers:upsert(":method", "POST")
     req.headers:upsert("content-type", "application/json")
-    req.headers:upsert("accept", "text/event-stream") 
+    req.headers:upsert("accept", "text/event-stream")
 
-    local headers, stream = req:go(60) 
+    local headers, stream = req:go(600)
     if not headers then return nil, "Connection timeout or failed" end
 
     local payload = merge_tables({
@@ -40,8 +40,8 @@ function M.send_request(profile, messages, options)
     local body = json:encode(payload)
     req:set_body(body)
 
-    local headers, stream = req:go()
-    if not headers then return nil, "Connection failed" end
+    local headers, stream = req:go(600)
+    if not headers then return nil, "Connection failed during body transmission" end
 
     local status = headers:get(":status")
     if status ~= "200" then
@@ -71,9 +71,9 @@ function M.send_request(profile, messages, options)
 
             local line = buffer:sub(1, line_end - 1)
             buffer = buffer:sub(line_end + 1)
-            
-            line = line:gsub("\r", ""):gsub("^%s+", "") 
-            
+
+            line = line:gsub("\r", ""):gsub("^%s+", "")
+
             if line:sub(1, 5) == "data:" then
                 local json_str = line:sub(6)
                 if json_str:match("%[DONE%]") then
@@ -107,11 +107,6 @@ end
 function M.extract_content(data)
     if not data or not data.choices or not data.choices[1] then return nil end
     return data.choices[1].message.content
-end
-
-function M.clean_code_blocks(text)
-    if not text then return "" end
-    return text:gsub("^```%w*\n", ""):gsub("\n```$", "")
 end
 
 return M
