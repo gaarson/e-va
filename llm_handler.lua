@@ -74,17 +74,19 @@ function M.send_request(profile, messages, options)
 
             line = line:gsub("\r", ""):gsub("^%s+", "")
 
-            if line:sub(1, 5) == "data:" then
-                local json_str = line:sub(6)
-                if json_str:match("%[DONE%]") then
-                else
-                    local ok, part = pcall(json.decode, json, json_str)
-                    if ok and part and part.choices and part.choices[1] then
-                        local delta = part.choices[1].delta
-                        if delta and delta.content then
-                            local token = delta.content
-                            full_content = full_content .. token
-                            if on_token_cb then on_token_cb(token) end
+            if line ~= "" then
+                if line:sub(1, 5) == "data:" then
+                    local json_str = line:sub(6)
+                    if json_str:match("%[DONE%]") then
+                    else
+                        local ok, part = pcall(json.decode, json, json_str)
+                        if ok and part and part.choices and part.choices[1] then
+                            local delta = part.choices[1].delta
+                            if delta and delta.content then
+                                local token = delta.content
+                                full_content = full_content .. token
+                                if on_token_cb then on_token_cb(token) end
+                            end
                         end
                     end
                 end

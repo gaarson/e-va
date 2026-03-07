@@ -155,11 +155,11 @@ function M.get_report(self)
 end
 
 function M.get_identity_prompt(self)
-    if not self.identity then return "" end
-    return string.format(
-        "\n=== IDENTITY ===\nROLE: %s\nSTACK: %s\nSUMMARY: %s\n",
-        self.identity.persona or "Dev",
+    if not self.identity then return "=== IDENTITY ===\n(Not established yet)\n" end
+    return string.format(self.config.PROMPT_IDENTITY_TEMPLATE,
+        self.identity.persona or "Developer",
         table.concat(self.identity.stack or {}, ", "),
+        self.identity.type or "Unknown",
         self.identity.summary or "N/A"
     )
 end

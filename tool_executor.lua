@@ -80,35 +80,53 @@ end
 
 function M.try_apply_patch(llm_response, ctx)
     local task = ctx.execution_plan[ctx.current_task_index]
+    
+    -- 1. Extract file explicitly declared by LLM
     local raw_file = llm_response:match("File:%s*([%w%./_%-:/]+)")
-    local target_file = raw_file and utils.normalize_path(ctx.config.PROJECT_ROOT, raw_file)
+    local declared_file = raw_file and utils.normalize_path(ctx.config.PROJECT_ROOT, raw_file)
 
-    if not target_file and task and task.file then
-        target_file = utils.normalize_path(ctx.config.PROJECT_ROOT, task.file)
+    -- 2. Determine Expected File from Plan
+    local expected_file = nil
+    if task and task.file then
+        expected_file = utils.normalize_path(ctx.config.PROJECT_ROOT, task.file)
     end
 
+    -- 3. VALIDATION: Prevent Hallucination of wrong files
+    if declared_file and expected_file then
+        -- Simple check: ends with same name (handle potential ./ prefix diffs)
+        if declared_file ~= expected_file then
+            return false, string.format("[SAFETY LOCK] You are trying to edit '%s', but the current Task Plan is for '%s'. Stick to the plan!", declared_file, expected_file)
+        end
+    end
+
+    -- Fallback for legacy behavior
+    local target_file = declared_file or expected_file
+
     if not target_file then
-        return false, "[ERROR] Unknown target file. Specify 'File: path/...'."
+        return false, "[ERROR] Unknown target file. Response must start with 'File: path/to/file'."
     end
 
     if not ctx.knowledge_base[target_file] then
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. target_file
         local content = utils.read_file_range(full_path)
         if content then ctx:add_file(target_file, content)
-        else return false, "[ERROR] File not found: " .. target_file end
+        else return false, "[ERROR] File not found on disk: " .. target_file end
     end
 
     local ok, new_content, changes, err_msg = patcher.apply_patch(ctx.knowledge_base[target_file], llm_response)
 
     if ok then
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. target_file
-        local safe_path = utils.shell_quote(full_path)
-        os.execute("cp " .. safe_path .. " " .. safe_path .. ".bak") 
+        
+        local bak_ok, bak_err = utils.copy_file(full_path, full_path .. ".bak")
+        if not bak_ok then
+            logger.warn("Backup creation failed", bak_err)
+        end
 
         local w_ok, w_err = utils.write_file(full_path, new_content)
         if w_ok then
-            ctx:add_file(target_file, new_content) 
-            return true, string.format("\n[SUCCESS] Applied %d changes to %s (Fuzzy Match Active).", changes, target_file)
+            ctx:add_file(target_file, new_content)
+            return true, string.format("\n[SUCCESS] Applied %d changes to %s.", changes, target_file)
         else
             return false, "[DISK ERROR] " .. tostring(w_err)
         end

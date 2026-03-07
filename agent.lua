@@ -15,7 +15,7 @@ local STATE_FILE = ".e-va_state.json"
 local STATES = { RESEARCH = "RESEARCH", PLANNING = "PLANNING", CODING = "CODING" }
 local CURRENT_STATE = STATES.RESEARCH
 
-local restored = false 
+local restored = false
 if utils.read_file_range(STATE_FILE) then
     local content = utils.read_file_range(STATE_FILE)
     if ctx:load_from_snapshot(content) then
@@ -28,7 +28,9 @@ local instruction = arg[2]
 
 if not restored then
     if not instruction then print("Usage: eva [file] \"<instruction>\""); os.exit(1) end
+    
     Analyzer.run(ctx, llm)
+    
     local initial_msg = "TASK: " .. instruction
     if start_file then
         local norm_start = utils.normalize_path(config.PROJECT_ROOT, start_file)
@@ -89,7 +91,9 @@ while turn < MAX_TURNS do
             task.file or "unknown", task.instruction or "unknown", task.file or "unknown")
     end
 
-    local full_system_prompt = ctx:get_identity_prompt() .. "\n" .. sys_prompt_text
+    local identity_block = ctx:get_identity_prompt()
+    local full_system_prompt = identity_block .. "\n" .. sys_prompt_text
+
     local messages = {}
     table.insert(messages, { role = "system", content = full_system_prompt })
     table.insert(messages, { role = "system", content = ctx:get_report() })
@@ -132,6 +136,20 @@ while turn < MAX_TURNS do
     end
 
     local content = llm.extract_content(response_data) or ""
+    
+    if CURRENT_STATE == STATES.CODING then
+        local file_decl_start = content:find("File:")
+        local search_start = content:find("<<<<<<< SEARCH")
+        local cmd_start = content:find("<cmd>") 
+        
+        if file_decl_start and search_start and file_decl_start < search_start then
+             content = content:sub(file_decl_start)
+        elseif search_start and not file_decl_start then
+             content = content:sub(search_start)
+        elseif cmd_start then
+        end
+    end
+
     table.insert(ctx.chat_history, { role = "assistant", content = content })
     logger.log_context(turn, CURRENT_STATE .. "_RESPONSE", content)
 
@@ -141,8 +159,10 @@ while turn < MAX_TURNS do
     if CURRENT_STATE == STATES.CODING and content:match("<<<<<<< SEARCH") then
         local ok, out = tool_executor.try_apply_patch(content, ctx)
         tool_out = tool_out .. out
-        if not ok then
-            tool_out = tool_out .. "\n[SYSTEM ADVICE]: Patch failed. Ensure EXACT match with Memory block."
+        if ok then
+            tool_out = tool_out .. "\n[SYSTEM ADVICE]: Patch applied successfully. PLEASE CHECK MEMORY ABOVE. If the file is correct now, output <cmd>task_complete</cmd>."
+        else
+            tool_out = tool_out .. "\n[SYSTEM ADVICE]: Patch failed. Ensure EXACT match with Memory block. Check if you are editing the CORRECT file."
         end
     end
 
@@ -159,22 +179,22 @@ while turn < MAX_TURNS do
                  ctx.execution_plan = plan
                  CURRENT_STATE = STATES.CODING
                  ctx.current_task_index = 1
+                 
                  local keep_task = ctx.chat_history[1]
                  ctx.chat_history = { keep_task }
-                 
+
                  local first_task = ctx.execution_plan[1]
                  if first_task.file then
                     logger.info("Plan Approved. Starting Coding Phase.")
                  end
 
                  table.insert(ctx.chat_history, { role = "user", content = string.format("PLAN APPROVED.\nSTARTING TASK 1/%d: %s\nInstruction: %s", #plan, first_task.file, first_task.instruction)})
-                 tool_out = "\n[SYSTEM]: Phase changed to CODING. All relevant files are being loaded."
+                 tool_out = "\n[SYSTEM]: Phase changed to CODING. Target file loaded."
                  transition = true
              end
         end
     end
 
-    -- Обработка команд
     for cmd in content:gmatch("<cmd>(.-)</cmd>") do
         local res = tool_executor.execute(cmd, ctx)
         tool_out = tool_out .. (res.output or "")
@@ -184,12 +204,12 @@ while turn < MAX_TURNS do
         elseif res.signal == "TASK_COMPLETE" then
             ctx.current_task_index = ctx.current_task_index + 1
             if ctx.current_task_index > #ctx.execution_plan then
-                print("\27[32m>>> MISSION ACCOMPLISHED.\27[0m")
+                print("\n\27[32m>>> MISSION ACCOMPLISHED.\27[0m")
                 os.remove(STATE_FILE)
                 os.exit(0)
             else
                 local next_task = ctx.execution_plan[ctx.current_task_index]
-                ctx.chat_history = {} -- Чистим историю между задачами, чтобы не путать контекст
+                ctx.chat_history = {} 
                 table.insert(ctx.chat_history, { role = "user", content = string.format("TASK COMPLETE.\nSTARTING TASK %d/%d: %s\nInstruction: %s", ctx.current_task_index, #ctx.execution_plan, next_task.file, next_task.instruction) })
                 tool_out = "\n[SYSTEM]: Ready for next task."; transition = true
             end

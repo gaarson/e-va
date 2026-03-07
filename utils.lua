@@ -1,7 +1,9 @@
 local M = {}
 local io = require("io")
 
-local MAX_FILE_SIZE = 1024 * 1024 
+-- Buffer size for file operations (64KB matches typical pipe buffer size)
+local CHUNK_SIZE = 65536 
+local MAX_FILE_SIZE = 1024 * 1024
 
 function M.trim(s)
     if not s then return "" end
@@ -11,7 +13,7 @@ end
 function M.normalize_path(root, raw_path)
     if not raw_path then return "" end
     local p = M.trim(raw_path)
-    
+
     p = p:gsub("^path%s*[:=]%s*", ""):gsub("^file%s*[:=]%s*", ""):gsub("['\"]", "")
     p = M.trim(p)
     p = p:gsub("^%./", "")
@@ -23,8 +25,30 @@ function M.normalize_path(root, raw_path)
     return p:gsub("^/", "")
 end
 
+-- NATIVE COPY IMPLEMENTATION (No fork/exec)
+function M.copy_file(src, dest)
+    local input, err = io.open(src, "rb")
+    if not input then return false, "Src open failed: " .. tostring(err) end
+    
+    local output, err_out = io.open(dest, "wb")
+    if not output then 
+        input:close()
+        return false, "Dest open failed: " .. tostring(err_out) 
+    end
+
+    while true do
+        local chunk = input:read(CHUNK_SIZE)
+        if not chunk then break end
+        output:write(chunk)
+    end
+
+    input:close()
+    output:close()
+    return true
+end
+
 function M.read_file_range(full_path)
-    local f, err = io.open(full_path, "rb") 
+    local f, err = io.open(full_path, "rb")
     if not f then return nil, "IO Error: " .. tostring(err) end
 
     local size = f:seek("end")
@@ -32,18 +56,18 @@ function M.read_file_range(full_path)
 
     local content
     if size > MAX_FILE_SIZE then
-        local head_size = 512 * 1024 
-        local tail_size = 10 * 1024  
-        
+        local head_size = 512 * 1024
+        local tail_size = 10 * 1024
+
         local head = f:read(head_size)
         f:seek("end", -tail_size)
         local tail = f:read(tail_size)
-        
+
         content = head .. "\n\n...[SNIPPED " .. (size - head_size - tail_size) .. " BYTES]...\n\n" .. tail
     else
         content = f:read("*a")
     end
-    
+
     f:close()
     return content
 end
@@ -59,7 +83,7 @@ end
 function M.list_files_recursive(root_path)
     local safe_root = M.shell_quote(root_path)
     local cmd = string.format("rg --files --hidden --glob '!.git/' --color never %s 2>/dev/null", safe_root)
-    
+
     local p = io.popen(cmd)
     if not p then return "Error listing files" end
     local out = p:read("*a")
@@ -96,7 +120,7 @@ function M.read_file_numbered(path, start_line, end_line)
         if idx > end_line then break end
     end
     f:close()
-    
+
     return table.concat(lines, "\n"), idx
 end
 
@@ -129,8 +153,8 @@ function M.read_file_lines(path, start_line, end_line)
     if #lines == 0 then
         return nil, "Range outside of file boundaries (File has " .. idx .. " lines)."
     end
-    
-    return table.concat(lines, "\n"), idx 
+
+    return table.concat(lines, "\n"), idx
 end
 
 return M

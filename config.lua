@@ -22,12 +22,12 @@ function M.get()
     local BASE_PARAMS = { stream = true }
 
     local PARAMS_BRAIN = {
-        max_tokens = 8192, temperature = 0.2, top_p = 0.9,
+        max_tokens = 8192, temperature = 0.1, top_p = 0.9,
         repeat_penalty = 1.2, token_healing = true
     }
 
     local PARAMS_PRECISE = {
-        max_tokens = 4096, temperature = 0.1, top_p = 0.1,
+        max_tokens = 4096, temperature = 0.2, top_p = 0.1,
         repeat_penalty = 1.2
     }
 
@@ -124,44 +124,31 @@ Format:
 ]]
 
     cfg.PROMPT_CODING_TEMPLATE = [[
-You are a Code Patcher Engine (Diff Generator).
+You are a Non-Conversational Code Patcher.
 CURRENT PHASE: CODING (Task %d of %d).
 
 TARGET FILE: %s
 INSTRUCTION: %s
 
-=== CONTEXT STATUS ===
-1. The TARGET FILE content is strictly loaded in the **MEMORY** block above.
-2. Your ONLY job is to generate a **SEARCH/REPLACE** block to fix it.
+=== EXIT STRATEGY (CHECK MEMORY FIRST) ===
+1. Look at the TARGET FILE in MEMORY below.
+2. **IF THE CODE IS ALREADY IMPLEMENTED/FIXED:**
+   Output ONLY: <cmd>task_complete</cmd>
+   (Do NOT generate a patch. Do NOT output "File: ...". Just exit.)
 
-=== EXIT STRATEGY (CRITICAL) ===
-1. If the last message in CHAT HISTORY is a "[SUCCESS]" confirmation:
-   YOU MUST IMMEDIATELY OUTPUT: <cmd>task_complete</cmd>
-   (Do not explain, do not summarize. Just exit.)
+=== STRICT RULES ===
+1. **NO TALKING**: Do not explain your logic.
+2. **OUTPUT ONLY**: Start with `File: ...` then the search block.
+3. **ONE FILE ONLY**: Edit ONLY the TARGET FILE.
 
-2. **[SKIP RULE]**: If the file ALREADY contains the requested features or NO changes are needed:
-   YOU MUST IMMEDIATELY OUTPUT: <cmd>task_complete</cmd>
-   (Do not generate a fake patch. Do not loop thinking about it. Just exit.)
-
-=== STRICT EXECUTION RULES ===
-1. **NO READING**: Do NOT output <cmd>read_file</cmd>. The file is already in Memory. USE IT.
-2. **EXACT MATCH**: The `<<<<<<< SEARCH` block must be an EXACT COPY of the existing code (including whitespace) from the Memory.
-3. **BRIVITY**: Keep the SEARCH block minimal (3-5 lines of context) if possible.
-
-=== REQUIRED OUTPUT FORMAT ===
-Thinking:
-I found the lines... I will replace them with... (OR: The file is already correct, exiting.)
-
+=== RESPONSE FORMAT ===
 File: %s
 <<<<<<< SEARCH
-    original code line 1
-    original code line 2
+    original line 1
 =======
-    modified code line 1
-    modified code line 2
+    modified line 1
 >>>>>>> REPLACE
 ]]
-
     return cfg
 end
 return M
