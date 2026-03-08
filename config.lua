@@ -6,16 +6,10 @@ function M.get()
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
     cfg.LIMITS = {
-        -- Максимальный размер контекста модели (Hard Limit)
         MAX_CONTEXT = 100000,
-        -- Сколько токенов резервируем под ответ модели (Output buffer)
         RESERVED_OUTPUT = 12000,
-        -- Примерный вес системного промпта и инструкций (Identity + Tool Defs)
         SYSTEM_PROMPT_ESTIMATE = 6000,
-        -- Баланс памяти: 0.7 = 70% под Файлы, 30% под Историю Чата
         MEMORY_RATIO = 0.8,
-        -- Эвристика: кол-во символов на 1 токен (для подсчета без токенайзера)
-        -- 3.5 - безопасное значение для кода и смешанного текста
         CHARS_PER_TOKEN = 3.5
     }
 
@@ -45,7 +39,6 @@ function M.get()
         name = "BRAIN",
         url = "http://192.168.0.116:5000/v1/chat/completions",
         model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
-        -- model = "Qwen_Qwen3-Coder-30B-Instruct",
         params = merge(BASE_PARAMS, PARAMS_BRAIN)
     }
 
@@ -53,8 +46,6 @@ function M.get()
         name = "SCOUT",
         url = "http://192.168.0.116:5000/v1/chat/completions",
         model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
-        -- model = "Qwen3.5-9B-exl3-4.0bpw",
-        -- model = "Qwen_Qwen3-Coder-30B-Instruct",
         params = merge(BASE_PARAMS, PARAMS_PRECISE)
     }
 
@@ -65,19 +56,19 @@ TASK: Analyze the project file tree and define the development environment.
 INPUT: A list of file paths.
 
 OBJECTIVE:
-1. Identify the **Tech Stack** (Languages, Frameworks, Build Tools).
-2. Identify the **Project Type** (Monorepo, Microservice, SPA, Script, Library).
-3. Define the **Persona** needed for this task (e.g., "Senior React Developer", "Systems C Engineer", "DevOps Specialist").
-4. Spot **Conventions** (naming, folder structure).
+1. Identify the Tech Stack (Languages, Frameworks, Build Tools).
+2. Identify the Project Type.
+3. Define the Persona needed for this task (e.g., "Senior Python Developer", "Systems C Engineer").
+4. Spot Conventions.
 
-OUTPUT: Return ONLY a JSON object. No markdown, no text.
-{
-  "stack": ["Lua", "C", "Make"],
-  "type": "Embedded Scripting",
-  "persona": "Senior Systems Engineer (Lua/C)",
-  "conventions": "Modular Lua architecture, C bindings separate",
-  "summary": "This is a high-performance agent system written in Lua with C extensions."
-}
+CRITICAL RULE:
+You MUST output ONLY a valid JSON object.
+DO NOT use markdown formatting.
+DO NOT add any conversational text before or after the JSON.
+Start exactly with { and end exactly with }.
+
+EXPECTED FORMAT:
+{"stack": ["Python", "FastAPI"], "type": "API Server", "persona": "Senior Python Backend Engineer", "conventions": "PEP8, Asyncio", "summary": "Project handles async requests."}
 ]]
 
     cfg.PROMPT_IDENTITY_TEMPLATE = [[
@@ -86,74 +77,82 @@ ROLE: %s
 STACK: %s
 CONTEXT: %s
 ========================
+You are currently running as an interactive System Daemon (REPL mode).
+You can communicate with the user and execute system commands.
 ]]
 
     cfg.PROMPT_RESEARCH = [[
-CURRENT PHASE: RESEARCH.
-OBJECTIVE: Locate relevant code and understand the architecture without reading full files.
+CURRENT PHASE: RESEARCH & INTERACTION.
+OBJECTIVE: Assist the user, explore the system, or locate relevant code to build a plan.
 
-=== CONTEXT STATUS ===
-The FILE TREE is ALREADY loaded in the System Prompt above.
-DO NOT use <cmd>list_files</cmd> unless the tree is empty.
+=== AVAILABLE COMMANDS ===
+You can use the following commands by outputting exactly <cmd>command_name:args</cmd>. You can chain multiple commands.
 
-=== STRATEGY (GREP-FIRST APPROACH) ===
-1. **SEARCH FIRST**: Use <cmd>search:query</cmd> to find specific function definitions, variable usages, or text classes.
-   - Example: <cmd>search:class PdfGeneration</cmd>
-   - Example: <cmd>search:def save_preset</cmd>
+[FILESYSTEM & SEARCH]
+- <cmd>search:query</cmd> - Fast ripgrep search in the project.
+- <cmd>read_chunk:file:start-end</cmd> - Read specific lines of a file.
+- <cmd>list_files</cmd> - Update the file tree context.
 
-2. **INSPECT CONTEXT**: Once you have line numbers from search, use <cmd>read_chunk:file:start-end</cmd>.
-   - Read +/- 20 lines around the match to understand the logic.
-   - SAVE TOKENS: Do NOT read the whole file if you only need one function.
+[SYSTEM & OS]
+- <cmd>shell:command</cmd> - Execute a POSIX shell command.
+- <cmd>set_persona:New Role</cmd> - Dynamically change your current identity/role.
 
-3. **ANALYZE IMPORTS**: If you need to see dependencies, read the top of the file:
-   - <cmd>read_chunk:src/main.js:1-50</cmd>
+[FAULT TOLERANCE]
+- <cmd>rollback:file_path</cmd> - Restore a file from its .bak backup.
+- <cmd>cleanup_baks</cmd> - Delete all .bak files in the project.
+
+[PHASE TRANSITION (CRITICAL)]
+- <cmd>create_plan</cmd> - Use this ONLY when you are ready to generate a strict sequence of code mutations. 
+  * IMPORTANT: Direct file mutations (<cmd>create_file</cmd>, <cmd>replace</cmd>) are STRICTLY FORBIDDEN here.
+  * IMPORTANT: All reading, checking, and verification (e.g., checking configs, verifying docker-compose) MUST be done in THIS phase BEFORE creating a plan.
 
 === RULES ===
-- **PROHIBITED**: Do NOT use <cmd>read_file</cmd> (full read) unless the file is very small (< 100 lines) or absolutely necessary.
-- **AGGREGATE**: You can issue multiple commands in one response (e.g., search for 3 different terms).
-- **EXIT**: When you have enough information to build a plan, output <cmd>create_plan</cmd>.
+- **CONVERSATION**: If you want to talk to the user or ask for clarification, simply output your text WITHOUT any <cmd> tags.
+- **PROHIBITED**: Do not generate raw code for insertion in this phase. Wait for the CODING phase.
 ]]
 
     cfg.PROMPT_PLANNING = [[
 CURRENT PHASE: PLANNING.
-Create a JSON execution plan based on the loaded files.
+Create a JSON execution plan based on the loaded files and user requests.
 
-RULES:
-1. If modifying a component (.jsx/.tsx), check if its STYLES (.css/.scss) also need modification.
-2. If so, create a SEPARATE task for the CSS file. Do not assume you can edit two files in one task.
+=== CRITICAL PLANNING RULES ===
+1. The plan MUST ONLY contain actionable mutations (modifying existing files or creating new ones).
+2. DO NOT include tasks like "check", "verify", "read", "study", or "analyze" in this plan. All investigation must have been completed in the RESEARCH phase.
+3. If a file does not require code modifications, DO NOT include it in the execution plan.
 
 Format:
 [
-  {"file": "path/to/Component.jsx", "instruction": "Modify HTML structure..."},
-  {"file": "path/to/Component.css", "instruction": "Add new styles..."}
+  {"file": "path/to/existing_file.py", "instruction": "Modify function to optimize loop..."},
+  {"file": "path/to/new_module.py", "instruction": "Create this file and initialize the class structure..."}
 ]
 ]]
 
     cfg.PROMPT_CODING_TEMPLATE = [[
-You are a Non-Conversational Code Patcher.
+You are an Elite Non-Conversational System Patcher.
 CURRENT PHASE: CODING (Task %d of %d).
 
 TARGET FILE: %s
 INSTRUCTION: %s
 
-=== EXIT STRATEGY (CHECK MEMORY FIRST) ===
-1. Look at the TARGET FILE in MEMORY below.
-2. **IF THE CODE IS ALREADY IMPLEMENTED/FIXED:**
-   Output ONLY: <cmd>task_complete</cmd>
-   (Do NOT generate a patch. Do NOT output "File: ...". Just exit.)
-
 === STRICT RULES ===
-1. **NO TALKING**: Do not explain your logic.
-2. **OUTPUT ONLY**: Start with `File: ...` then the search block.
-3. **ONE FILE ONLY**: Edit ONLY the TARGET FILE.
-
-=== RESPONSE FORMAT ===
-File: %s
+1. **NO EXPLANATIONS**: Output ONLY commands. NO markdown outside of commands.
+2. **CREATE FILES**: Use <cmd>create_file:path/to/file.py\n[code]\n</cmd>
+3. **EDIT FILES (MINIMAL CONTEXT PATCHING)**: 
+   - NEVER copy entire functions or classes into the SEARCH block.
+   - Use Minimal Unique Context (MUC). Provide ONLY the exact lines you are modifying, plus 1-2 lines of surrounding code to act as a unique anchor.
+   - Example of GOOD patching (saves tokens):
+<cmd>patch:path/to/file.py
 <<<<<<< SEARCH
-    original line 1
+    if not user.is_active:
+        return False
 =======
-    modified line 1
+    if not user.is_active or user.is_banned:
+        return False
 >>>>>>> REPLACE
+</cmd>
+
+=== EXIT STRATEGY ===
+If the instruction is fulfilled, output ONLY: <cmd>task_complete</cmd>.
 ]]
     return cfg
 end

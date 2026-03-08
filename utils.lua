@@ -2,7 +2,7 @@ local M = {}
 local io = require("io")
 
 -- Buffer size for file operations (64KB matches typical pipe buffer size)
-local CHUNK_SIZE = 65536 
+local CHUNK_SIZE = 65536
 local MAX_FILE_SIZE = 1024 * 1024
 
 function M.trim(s)
@@ -29,11 +29,11 @@ end
 function M.copy_file(src, dest)
     local input, err = io.open(src, "rb")
     if not input then return false, "Src open failed: " .. tostring(err) end
-    
+
     local output, err_out = io.open(dest, "wb")
-    if not output then 
+    if not output then
         input:close()
-        return false, "Dest open failed: " .. tostring(err_out) 
+        return false, "Dest open failed: " .. tostring(err_out)
     end
 
     while true do
@@ -80,6 +80,32 @@ function M.write_file(path, content)
     return ok, w_err
 end
 
+-- =====================================================================
+-- FAST LINE COUNTER (O(N) with C-native gsub, binary safe)
+-- =====================================================================
+local function count_lines_fast(filepath)
+    local f = io.open(filepath, "rb")
+    if not f then return "?" end
+    
+    local count = 0
+    local has_content = false
+    
+    while true do
+        local chunk = f:read(CHUNK_SIZE)
+        if not chunk then break end
+        has_content = true
+        -- В Lua gsub возвращает вторым аргументом количество замен.
+        -- Это работает на скорости C и не выделяет лишней памяти.
+        local _, newlines = chunk:gsub("\n", "")
+        count = count + newlines
+    end
+    f:close()
+    
+    -- Если файл не пустой, но без \n, считаем что там 1 строка
+    if count == 0 and has_content then return 1 end
+    return count
+end
+
 function M.list_files_recursive(root_path)
     local safe_root = M.shell_quote(root_path)
     local cmd = string.format("rg --files --hidden --glob '!.git/' --color never %s 2>/dev/null", safe_root)
@@ -92,9 +118,17 @@ function M.list_files_recursive(root_path)
     local files = {}
     for line in out:gmatch("[^\r\n]+") do
         local rel = M.normalize_path(root_path, line)
-        if rel ~= "" then table.insert(files, rel) end
+        if rel ~= "" then
+            local full_path = root_path .. "/" .. rel
+            local lines_count = count_lines_fast(full_path)
+            table.insert(files, string.format("%s (%s lines)", rel, tostring(lines_count)))
+        end
     end
+    
     if #files == 0 then return "(No files found)" end
+    
+    -- Сортируем список по алфавиту для более красивой структуры
+    table.sort(files)
     return table.concat(files, "\n")
 end
 
@@ -162,17 +196,52 @@ function M.restore_backup(full_path)
     local f = io.open(bak_path, "r")
     if not f then return false, "Backup not found" end
     f:close()
-    
-    -- Перезаписываем оригинал бэкапом
+
     return M.copy_file(bak_path, full_path)
 end
 
 function M.cleanup_backups(root_path)
     local safe_root = M.shell_quote(root_path)
-    -- Используем ripgrep или find для безопасного поиска и удаления
     local cmd = string.format("find %s -type f -name '*.bak' -delete 2>&1", safe_root)
     local ok = os.execute(cmd)
     return ok == 0
+end
+
+function M.replace_lines(full_path, start_line, end_line, new_code)
+    local content, err = M.read_file_range(full_path)
+    if not content then return false, err end
+
+    local lines = M.read_lines_raw(content)
+    start_line = tonumber(start_line)
+    end_line = tonumber(end_line)
+
+    if start_line < 1 or end_line < start_line or start_line > #lines then
+        return false, string.format("Invalid line range: %d-%d (File has %d lines)", start_line, end_line, #lines)
+    end
+
+    local new_lines = {}
+    if new_code and new_code ~= "" then
+        for line in new_code:gmatch("([^\n]*)\n?") do
+            if line ~= "" or new_code:sub(-1) == "\n" then
+                table.insert(new_lines, line)
+            end
+        end
+        if #new_lines > 0 and new_lines[#new_lines] == "" and new_code:sub(-1) ~= "\n" then
+            table.remove(new_lines)
+        end
+    end
+
+    local count_to_remove = math.min(end_line, #lines) - start_line + 1
+    for _ = 1, count_to_remove do
+        table.remove(lines, start_line)
+    end
+
+    for i = #new_lines, 1, -1 do
+        table.insert(lines, start_line, new_lines[i])
+    end
+
+    local final_content = table.concat(lines, "\n")
+    return M.write_file(full_path, final_content)
 end
 
 return M
