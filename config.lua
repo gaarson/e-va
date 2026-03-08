@@ -7,11 +7,11 @@ function M.get()
 
     cfg.LIMITS = {
         -- Максимальный размер контекста модели (Hard Limit)
-        MAX_CONTEXT = 120000,
+        MAX_CONTEXT = 100000,
         -- Сколько токенов резервируем под ответ модели (Output buffer)
-        RESERVED_OUTPUT = 6000,
+        RESERVED_OUTPUT = 12000,
         -- Примерный вес системного промпта и инструкций (Identity + Tool Defs)
-        SYSTEM_PROMPT_ESTIMATE = 3000,
+        SYSTEM_PROMPT_ESTIMATE = 6000,
         -- Баланс памяти: 0.7 = 70% под Файлы, 30% под Историю Чата
         MEMORY_RATIO = 0.8,
         -- Эвристика: кол-во символов на 1 токен (для подсчета без токенайзера)
@@ -19,16 +19,19 @@ function M.get()
         CHARS_PER_TOKEN = 3.5
     }
 
-    local BASE_PARAMS = { stream = true }
+    local BASE_PARAMS = {
+      stream = true,
+      stop = { "<|im_end|>", "<|im_start|>" }
+    }
 
     local PARAMS_BRAIN = {
-        max_tokens = 8192, temperature = 0.1, top_p = 0.9,
+        max_tokens = 16384, temperature = 0.1, top_p = 0.9,
         repeat_penalty = 1.2, token_healing = true
     }
 
     local PARAMS_PRECISE = {
-        max_tokens = 4096, temperature = 0.2, top_p = 0.1,
-        repeat_penalty = 1.2
+        max_tokens = 16384, temperature = 0.2, top_p = 0.9,
+        repeat_penalty = 1.1
     }
 
     local function merge(base, specific)
@@ -41,14 +44,17 @@ function M.get()
     cfg.LLM_MAIN = {
         name = "BRAIN",
         url = "http://192.168.0.116:5000/v1/chat/completions",
-        model = "Qwen_Qwen3-Coder-30B-Instruct",
+        model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
+        -- model = "Qwen_Qwen3-Coder-30B-Instruct",
         params = merge(BASE_PARAMS, PARAMS_BRAIN)
     }
 
     cfg.LLM_SCOUT = {
         name = "SCOUT",
         url = "http://192.168.0.116:5000/v1/chat/completions",
-        model = "Qwen_Qwen3-Coder-30B-Instruct",
+        model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
+        -- model = "Qwen3.5-9B-exl3-4.0bpw",
+        -- model = "Qwen_Qwen3-Coder-30B-Instruct",
         params = merge(BASE_PARAMS, PARAMS_PRECISE)
     }
 

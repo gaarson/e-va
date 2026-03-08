@@ -28,9 +28,9 @@ local instruction = arg[2]
 
 if not restored then
     if not instruction then print("Usage: eva [file] \"<instruction>\""); os.exit(1) end
-    
+
     Analyzer.run(ctx, llm)
-    
+
     local initial_msg = "TASK: " .. instruction
     if start_file then
         local norm_start = utils.normalize_path(config.PROJECT_ROOT, start_file)
@@ -95,9 +95,8 @@ while turn < MAX_TURNS do
     local full_system_prompt = identity_block .. "\n" .. sys_prompt_text
 
     local messages = {}
-    table.insert(messages, { role = "system", content = full_system_prompt })
-    table.insert(messages, { role = "system", content = ctx:get_report() })
-    table.insert(messages, { role = "system", content = memory_block })
+    local combined_system_prompt = full_system_prompt .. "\n\n" .. ctx:get_report() .. "\n\n" .. memory_block
+    table.insert(messages, { role = "system", content = combined_system_prompt })
 
     local chat_buffer = {}
     local current_chat_cost = 0
@@ -201,18 +200,25 @@ while turn < MAX_TURNS do
 
         if res.signal == "TRANSITION_PLANNING" then
             CURRENT_STATE = STATES.PLANNING; transition = true
-        elseif res.signal == "TASK_COMPLETE" then
+          elseif res.signal == "TASK_COMPLETE" then
             ctx.current_task_index = ctx.current_task_index + 1
             if ctx.current_task_index > #ctx.execution_plan then
-                print("\n\27[32m>>> MISSION ACCOMPLISHED.\27[0m")
-                os.remove(STATE_FILE)
-                os.exit(0)
-            else
-                local next_task = ctx.execution_plan[ctx.current_task_index]
-                ctx.chat_history = {} 
-                table.insert(ctx.chat_history, { role = "user", content = string.format("TASK COMPLETE.\nSTARTING TASK %d/%d: %s\nInstruction: %s", ctx.current_task_index, #ctx.execution_plan, next_task.file, next_task.instruction) })
-                tool_out = "\n[SYSTEM]: Ready for next task."; transition = true
-            end
+                print("\n\27[32m>>> TASK COMPLETED.\27[0m")
+                while true do
+                    io.write("\n\27[34m[e-va shell]>\27[0m ")
+                    local user_input = io.read("*l")
+                    if not user_input or user_input == "exit" or user_input == "quit" then
+                        print("Exiting e-va. Goodbye.")
+                        os.remove(STATE_FILE)
+                        os.exit(0)
+                    elseif user_input ~= "" then
+                        table.insert(ctx.chat_history, { role = "user", content = user_input })
+                        turn = 0 
+                        break 
+                    end
+                end
+                transition = true
+              end
         end
     end
 

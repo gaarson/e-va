@@ -157,4 +157,22 @@ function M.read_file_lines(path, start_line, end_line)
     return table.concat(lines, "\n"), idx
 end
 
+function M.restore_backup(full_path)
+    local bak_path = full_path .. ".bak"
+    local f = io.open(bak_path, "r")
+    if not f then return false, "Backup not found" end
+    f:close()
+    
+    -- Перезаписываем оригинал бэкапом
+    return M.copy_file(bak_path, full_path)
+end
+
+function M.cleanup_backups(root_path)
+    local safe_root = M.shell_quote(root_path)
+    -- Используем ripgrep или find для безопасного поиска и удаления
+    local cmd = string.format("find %s -type f -name '*.bak' -delete 2>&1", safe_root)
+    local ok = os.execute(cmd)
+    return ok == 0
+end
+
 return M

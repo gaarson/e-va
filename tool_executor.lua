@@ -66,6 +66,55 @@ function M.execute(action, ctx)
         else
             output = "[ERROR] Usage: read_chunk:filename:start-end"
         end
+    elseif action:match("^rollback:") then
+        local raw_arg = action:match("^rollback:(.+)")
+        local rel_path = utils.normalize_path(config.PROJECT_ROOT, raw_arg)
+        local full_path = config.PROJECT_ROOT .. "/" .. rel_path
+        
+        local ok, err = utils.restore_backup(full_path)
+        if ok then
+            -- Обновляем контекст памяти, чтобы агент увидел старый код
+            local content = utils.read_file_range(full_path)
+            ctx:add_file(rel_path, content)
+            output = "\n[SYSTEM]: Rollback successful for " .. rel_path
+        else
+            output = "\n[ERROR]: Rollback failed - " .. tostring(err)
+        end
+
+    elseif action == "cleanup_baks" then
+        local ok = utils.cleanup_backups(config.PROJECT_ROOT)
+        if ok then
+            output = "\n[SYSTEM]: All .bak files removed."
+        else
+            output = "\n[ERROR]: Failed to clean up .bak files."
+        end
+
+    -- tool_executor.lua (дополнения)
+
+    elseif action:match("^shell:") then
+        local cmd = action:match("^shell:(.+)")
+        -- ВНИМАНИЕ: Выполнение shell-команд от LLM требует осторожности.
+        -- В production здесь должен быть whitelist или запуск в sandbox.
+        local f = io.popen(cmd .. " 2>&1")
+        if f then
+            local res = f:read("*a")
+            f:close()
+            if #res == 0 then res = "(Command executed silently)" end
+            -- Ограничиваем вывод, чтобы не переполнить контекст LLM (например, выхлоп dmesg)
+            if #res > 4000 then res = res:sub(1, 4000) .. "\n...[TRUNCATED]" end
+            output = "\n[SHELL STDOUT/STDERR]:\n" .. res
+        else
+            output = "\n[ERROR]: Failed to spawn shell process."
+        end
+
+    elseif action:match("^set_persona:") then
+        local new_persona = action:match("^set_persona:(.+)")
+        if ctx.identity then
+            ctx.identity.persona = require("utils").trim(new_persona)
+            output = "\n[SYSTEM]: Interface/Persona dynamically changed to: " .. ctx.identity.persona
+        else
+            output = "\n[ERROR]: Identity context not initialized."
+        end
 
     elseif action == "create_plan" then
         output = "PLANNING_PHASE"
