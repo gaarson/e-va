@@ -46,6 +46,8 @@ function M.get()
         name = "SCOUT",
         url = "http://192.168.0.116:5000/v1/chat/completions",
         model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
+        -- url = "http://192.168.0.116:5001/v1/chat/completions",
+        -- model = "Qwen3.5-9B-exl3-6.0bpw",
         params = merge(BASE_PARAMS, PARAMS_PRECISE)
     }
 
@@ -62,15 +64,14 @@ OBJECTIVE:
 4. Spot Conventions.
 
 CRITICAL RULE:
-You MUST output ONLY a valid JSON object.
-DO NOT use markdown formatting.
-DO NOT add any conversational text before or after the JSON.
-Start exactly with { and end exactly with }.
+You MUST wrap your final JSON output inside strict <identity>...</identity> tags.
+You may think or reason outside these tags, but INSIDE them, place ONLY a valid, raw JSON object.
 
 EXPECTED FORMAT:
+<identity>
 {"stack": ["Python", "FastAPI"], "type": "API Server", "persona": "Senior Python Backend Engineer", "conventions": "PEP8, Asyncio", "summary": "Project handles async requests."}
+</identity>
 ]]
-
     cfg.PROMPT_IDENTITY_TEMPLATE = [[
 === PROJECT IDENTITY ===
 ROLE: %s
@@ -103,7 +104,7 @@ You can use the following commands by outputting exactly <cmd>command_name:args<
 
 [PHASE TRANSITION (CRITICAL)]
 - <cmd>create_plan</cmd> - Use this ONLY when you are ready to generate a strict sequence of code mutations. 
-  * IMPORTANT: Direct file mutations (<cmd>create_file</cmd>, <cmd>replace</cmd>) are STRICTLY FORBIDDEN here.
+  * IMPORTANT: Direct file mutations are STRICTLY FORBIDDEN here.
   * IMPORTANT: All reading, checking, and verification (e.g., checking configs, verifying docker-compose) MUST be done in THIS phase BEFORE creating a plan.
 
 === RULES ===
@@ -115,15 +116,10 @@ You can use the following commands by outputting exactly <cmd>command_name:args<
 CURRENT PHASE: PLANNING.
 Create a JSON execution plan based on the loaded files and user requests.
 
-=== CRITICAL PLANNING RULES ===
-1. The plan MUST ONLY contain actionable mutations (modifying existing files or creating new ones).
-2. DO NOT include tasks like "check", "verify", "read", "study", or "analyze" in this plan. All investigation must have been completed in the RESEARCH phase.
-3. If a file does not require code modifications, DO NOT include it in the execution plan.
-
 Format:
 [
-  {"file": "path/to/existing_file.py", "instruction": "Modify function to optimize loop..."},
-  {"file": "path/to/new_module.py", "instruction": "Create this file and initialize the class structure..."}
+  {"file": "path/to/file.c", "instruction": "Modify function..."},
+  {"file": "path/to/another.lua", "instruction": "Add new logic..."}
 ]
 ]]
 

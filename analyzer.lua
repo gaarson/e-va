@@ -32,38 +32,54 @@ function M.run(ctx, llm_handler)
     end
 
     local raw = llm_handler.extract_content(response) or ""
-    
-    -- Каскадный поиск JSON: пытаемся вытащить валидный блок сквозь галлюцинации LLM
-    local json_str = raw:match("```json%s*(.-)%s*```") 
-                  or raw:match("```%s*(.-)%s*```") 
-                  or raw:match("({.*})") 
+
+    local json_str = raw:match(".*<identity>%s*(.-)%s*</identity>")
+                  or raw:match("<identity>%s*(.-)%s*</identity>")
+                  or raw:match(".*```[jJ]son%s*(.-)%s*```")
+                  or raw:match(".*({.*})")
                   or raw
 
-    -- Эвристика безопасности: удаляем висячие запятые перед закрывающей скобкой
-    json_str = json_str:gsub(",%s*}", "}")
-
     if json_str then
+        -- Эвристика безопасности: агрессивная очистка синтаксиса
+        json_str = json_str:gsub(",%s*}", "}")
+        json_str = json_str:gsub(",%s*%]", "]")
+        
+        -- Жестко отсекаем мусор до первой { и после последней }
+        local clean_start = json_str:find("{")
+        local clean_end = json_str:reverse():find("}")
+        if clean_start and clean_end then
+            json_str = json_str:sub(clean_start, #json_str - clean_end + 1)
+        end
+
         local status, identity = pcall(function() return json:decode(json_str) end)
-        if status and identity then
+        
+        if status and type(identity) == "table" then
             ctx.identity = identity
             logger.info("Identity Established", identity)
 
+            local tree_safe = ctx.file_tree or "(Empty File Tree)"
             local tree_info = "FILE TREE IS ALREADY LOADED IN CONTEXT.\n" ..
-                          "Total files: " .. select(2, tree_safe:gsub("\n", "\n"))
+                              "Total files: " .. select(2, tree_safe:gsub("\n", "\n"))
 
             table.insert(ctx.chat_history, {
                 role = "user",
                 content = "[SYSTEM REPORT]\n" .. tree_info
             })
 
-            print(string.format("\n\27[32m[IDENTITY]\27[0m Role: %s | Type: %s", identity.persona, identity.type))
+            print(string.format("\n\27[32m[IDENTITY]\27[0m Role: %s | Type: %s", identity.persona or "N/A", identity.type or "N/A"))
             return true
+        else
+            logger.error("JSON PARSE FATAL", {
+                parser_error = identity,
+                attempted_json = json_str,
+                raw_llm_output = raw
+            })
         end
     end
 
     logger.warn("Analysis failed to parse JSON. Proceeding with default persona.")
     ctx.identity = { persona = "System Engineer", stack = {"Unknown"}, summary = "Manual override" }
     return false
-end
+  end
 
 return M

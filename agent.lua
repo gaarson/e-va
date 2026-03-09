@@ -119,7 +119,12 @@ while turn < MAX_TURNS do
             else break end
         end
     end
-    for _, msg in ipairs(chat_buffer) do table.insert(messages, msg) end
+
+    for _, msg in ipairs(chat_buffer) do
+        local safe_role = msg.role
+        if safe_role == "system" then safe_role = "user" end
+        table.insert(messages, { role = safe_role, content = msg.content })
+    end
 
     local debug_dump = "=== SYSTEM ===\n" .. full_system_prompt .. "\n\n=== MEMORY ===\n" .. memory_block
     logger.log_context(turn, CURRENT_STATE, debug_dump)
@@ -185,8 +190,7 @@ while turn < MAX_TURNS do
             if ctx.current_task_index > #ctx.execution_plan then
                 print("\n\27[32m>>> TASK COMPLETED. Returning to RESEARCH phase.\27[0m")
                 CURRENT_STATE = STATES.RESEARCH
-                -- Возвращаем системный контекст в историю
-                table.insert(ctx.chat_history, { role = "system", content = "[SYSTEM]: Execution Plan fully completed. Awaiting new instructions." })
+                table.insert(ctx.chat_history, { role = "user", content = "[SYSTEM]: Execution Plan fully completed. Awaiting new instructions." })
                 enter_repl(ctx)
                 turn = 0
                 transition = true
