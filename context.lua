@@ -138,7 +138,7 @@ function M.get_memory_block(self, max_tokens)
     return table.concat(mem_buffer, "")
 end
 
-function M.get_report(self)
+function M.get_report(self, current_phase)
     local search_summary = ""
     local count = 0
     for q, _ in pairs(self.search_history) do count = count + 1 end
@@ -146,10 +146,24 @@ function M.get_report(self)
         search_summary = string.format("\n## SEARCH HISTORY\n(Cached %d queries)\n", count)
     end
 
+    -- КОНТЕКСТНАЯ ИЗОЛЯЦИЯ: Дерево файлов инжектируется ТОЛЬКО в фазе RESEARCH
+    local tree_block = ""
+    if current_phase == "RESEARCH" then
+        local tree_content = self.file_tree or "(empty)"
+        
+        -- SAFETY LIMIT: Если дерево огромное (например, > 15000 байт), жестко обрезаем его.
+        -- Это спасет контекст, если ripgrep случайно захватит скомпилированные бинарники или node_modules.
+        if #tree_content > 100000 then
+            tree_content = tree_content:sub(1, 100000) .. "\n... [TREE TRUNCATED - USE <cmd>list_files</cmd> OR <cmd>search:query</cmd> TO EXPLORE FURTHER]"
+        end
+        
+        tree_block = string.format("## FILE TREE\n```text\n%s\n```\n", tree_content)
+    end
+
     return string.format(
-        "# PROJECT CONTEXT\nRoot: %s\n---\n## FILE TREE\n```text\n%s\n```\n%s",
+        "# PROJECT CONTEXT\nRoot: %s\n---\n%s%s",
         self.config.PROJECT_ROOT,
-        self.file_tree or "(empty)",
+        tree_block,
         search_summary
     )
 end
@@ -166,6 +180,41 @@ end
 
 function M.update_file_tree(self, tree_str)
     self.file_tree = tree_str
+end
+
+function M.get_search_digest(self, max_tokens)
+    if not next(self.search_history) then return "" end
+
+    local digest_buffer = {"\n=== SEARCH DIGEST (Reference Snippets) ==="}
+    local seen_hashes = {}
+    local current_tokens = 0
+    local divisor = (self.config.LIMITS and self.config.LIMITS.CHARS_PER_TOKEN) or 3.5
+
+    for query, res in pairs(self.search_history) do
+        table.insert(digest_buffer, "--- Query: " .. query .. " ---")
+        
+        for line in res:gmatch("[^\r\n]+") do
+            local pure_code = line:match("[:-]%d+[:-]%s*(.+)$") or line
+            
+            local compressed_line = pure_code:gsub("^%s+", ""):gsub("%s+", " ")
+            
+            local hash = compressed_line:gsub("%s", "")
+            
+            if hash ~= "" and not seen_hashes[hash] then
+                seen_hashes[hash] = true
+                table.insert(digest_buffer, compressed_line)
+                
+                current_tokens = current_tokens + math.ceil(#compressed_line / divisor)
+                
+                if current_tokens >= max_tokens then
+                    table.insert(digest_buffer, "... [TRUNCATED DUE TO TOKEN LIMIT] ...")
+                    return table.concat(digest_buffer, "\n")
+                end
+            end
+        end
+    end
+    
+    return table.concat(digest_buffer, "\n")
 end
 
 return M

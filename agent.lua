@@ -28,12 +28,45 @@ if not restored then
     if not instruction then print("Usage: eva [file] \"<instruction>\""); os.exit(1) end
     Analyzer.run(ctx, llm)
     local initial_msg = "TASK: " .. instruction
+    local docs_loaded = {}
+
+    -- 2. [CONTEXT PRIMING] Жестко ищем README.md
+    local readme_path = "README.md"
+    local readme_content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. readme_path)
+    if readme_content then
+        ctx:add_file(readme_path, readme_content)
+        table.insert(docs_loaded, readme_path)
+    end
+
+    -- 3. Сканируем file_tree на наличие других UPPERCASE.md файлов в корне
+    if ctx.file_tree then
+        for line in ctx.file_tree:gmatch("[^\r\n]+") do
+            -- Извлекаем путь (до первого пробела, т.к. формат "путь (X lines)")
+            local filepath = line:match("^(%S+)")
+            if filepath and filepath:lower() ~= "readme.md" then
+                -- Условие: файл в корне (нет слешей) И имя состоит из заглавных букв/цифр/подчеркиваний
+                if not filepath:find("/") and filepath:match("^[A-Z0-9_-]+%.[mM][dD]$") then
+                    local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. filepath)
+                    if content then
+                        ctx:add_file(filepath, content)
+                        table.insert(docs_loaded, filepath)
+                    end
+                end
+            end
+        end
+    end
+
+    if #docs_loaded > 0 then
+        initial_msg = initial_msg .. "\n(Note: Auto-loaded core documentation: " .. table.concat(docs_loaded, ", ") .. ")"
+    end
+
+    -- 4. В последнюю очередь грузим целевой файл (Target File)
     if start_file then
         local norm_start = utils.normalize_path(config.PROJECT_ROOT, start_file)
         local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. norm_start)
         if content then
             ctx:add_file(norm_start, content)
-            initial_msg = initial_msg .. "\n(Note: I loaded '"..norm_start.."' for you)"
+            initial_msg = initial_msg .. "\n(Note: I loaded target file '"..norm_start.."' for you)"
         end
     end
     table.insert(ctx.chat_history, { role = "user", content = initial_msg })
@@ -83,7 +116,8 @@ while turn < MAX_TURNS do
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
     if available_tokens < 2000 then available_tokens = 4000 end
 
-    local memory_budget = math.floor(available_tokens * limits.MEMORY_RATIO)
+    local current_ratio = (CURRENT_STATE == STATES.CODING) and limits.MEMORY_RATIO or 0.5
+    local memory_budget = math.floor(available_tokens * current_ratio)
     local chat_budget = available_tokens - memory_budget
     local memory_block = ctx:get_memory_block(memory_budget)
 
@@ -100,8 +134,15 @@ while turn < MAX_TURNS do
     local identity_block = ctx:get_identity_prompt()
     local full_system_prompt = identity_block .. "\n" .. sys_prompt_text
 
+    local digest_budget = math.floor(chat_budget * 0.2)
+    local search_digest = ""
+
+    if CURRENT_STATE == STATES.CODING then
+        search_digest = ctx:get_search_digest(digest_budget)
+    end
+
     local messages = {}
-    local combined_system_prompt = full_system_prompt .. "\n\n" .. ctx:get_report() .. "\n\n" .. memory_block
+    local combined_system_prompt = full_system_prompt .. "\n\n" .. ctx:get_report(CURRENT_STATE) .. "\n\n" .. search_digest .. "\n\n" .. memory_block
     table.insert(messages, { role = "system", content = combined_system_prompt })
 
     local chat_buffer = {}
@@ -126,7 +167,10 @@ while turn < MAX_TURNS do
         table.insert(messages, { role = safe_role, content = msg.content })
     end
 
-    local debug_dump = "=== SYSTEM ===\n" .. full_system_prompt .. "\n\n=== MEMORY ===\n" .. memory_block
+    local debug_dump = "=== SYSTEM ===\n" .. full_system_prompt .. "\n\n=== MEMORY ===\n" .. memory_block .. "\n\n=== CHAT HISTORY ===\n"
+    for _, msg in ipairs(chat_buffer) do
+        debug_dump = debug_dump .. string.format("[%s]: %s\n\n", string.upper(msg.role), msg.content or "")
+    end
     logger.log_context(turn, CURRENT_STATE, debug_dump)
 
     local profile = (CURRENT_STATE == STATES.CODING) and config.LLM_MAIN or config.LLM_SCOUT
@@ -162,14 +206,12 @@ while turn < MAX_TURNS do
                  CURRENT_STATE = STATES.CODING
                  ctx.current_task_index = 1
 
-                 -- КРИТИЧЕСКИЙ ФИКС: Сброс истории, чтобы избежать "отравления контекста"
-                 ctx.chat_history = {}
-                 local first_task = ctx.execution_plan[1]
-                 
+                local first_task = ctx.execution_plan[1]
+
                  logger.info("Plan Approved. Engaging STRICT CODING Phase.")
-                 table.insert(ctx.chat_history, { 
-                     role = "user", 
-                     content = string.format("EXECUTION PLAN APPROVED.\nSTRICT CODING MODE ENGAGED. PREVIOUS CHAT HISTORY WIPED.\n\nSTARTING TASK 1/%d: %s\nInstruction: %s", #plan, first_task.file, first_task.instruction)
+                 table.insert(ctx.chat_history, {
+                     role = "user",
+                     content = string.format("EXECUTION PLAN APPROVED.\nSTRICT CODING MODE ENGAGED.\n[!] CRITICAL: Use the chat history above ONLY as reference. Do not converse. Output ONLY strict patch commands.\n\nSTARTING TASK 1/%d: %s\nInstruction: %s", #plan, first_task.file, first_task.instruction)
                  })
                  tool_out = "\n[SYSTEM]: Phase changed to CODING. Target file loaded."
                  transition = true
@@ -178,13 +220,40 @@ while turn < MAX_TURNS do
     end
 
     local cmds_executed = 0
+    -- Инициализируем трекер состояния в контексте, если его еще нет
+    ctx.last_cmd = ctx.last_cmd or ""
+    ctx.cmd_loop_count = ctx.cmd_loop_count or 0
+
     for cmd in content:gmatch("<cmd>(.-)</cmd>") do
         cmds_executed = cmds_executed + 1
-        local res = tool_executor.execute(cmd, ctx, CURRENT_STATE)
+        
+        -- [CIRCUIT BREAKER]: Детектор авторегрессивной петли
+        if cmd == ctx.last_cmd then
+            ctx.cmd_loop_count = ctx.cmd_loop_count + 1
+        else
+            ctx.last_cmd = cmd
+            ctx.cmd_loop_count = 0
+        end
+
+        local res
+        if ctx.cmd_loop_count >= 3 then
+            -- Если команда повторяется 3-й раз подряд, рубим рубильник
+            logger.warn("Agent Loop Detected. Injecting Pattern Breaker.", { command = cmd })
+            res = { 
+                output = "\n[SYSTEM FATAL ERROR]: AUTOREGRESSIVE LOOP DETECTED. You have issued the exact same command multiple times.\nSTOP READING. \nIf you know what to do, you MUST output EXACTLY <cmd>create_plan</cmd> immediately to proceed to the CODING phase. Do not repeat the previous action.", 
+                signal = nil 
+            }
+            -- Сбрасываем счетчик, чтобы дать агенту шанс исправиться на следующем ходу
+            ctx.cmd_loop_count = 0
+        else
+            -- Нормальное выполнение
+            res = tool_executor.execute(cmd, ctx, CURRENT_STATE)
+        end
+
         tool_out = tool_out .. (res.output or "")
 
         if res.signal == "TRANSITION_PLANNING" then
-            CURRENT_STATE = STATES.PLANNING; transition = true
+          CURRENT_STATE = STATES.PLANNING; transition = true
         elseif res.signal == "TASK_COMPLETE" then
             ctx.current_task_index = ctx.current_task_index + 1
             if ctx.current_task_index > #ctx.execution_plan then

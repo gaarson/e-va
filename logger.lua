@@ -2,7 +2,18 @@ local M = {}
 local io = require("io")
 local os = require("os")
 
-os.execute("mkdir -p logs")
+-- 1. Считываем контекст окружения, проброшенный из bash-скрипта
+local agent_home = os.getenv("AGENT_HOME") or "."
+local project_root = os.getenv("PROJECT_ROOT") or "."
+
+-- 2. Извлекаем имя целевой директории (basename)
+local project_name = project_root:match("([^/]+)$") or "default_project"
+
+-- 3. Формируем абсолютный путь к централизованному хранилищу логов
+local log_dir = string.format("%s/logs/%s", agent_home, project_name)
+
+-- 4. Безопасно создаем структуру директорий (Zero-Trust к окружению)
+os.execute(string.format("mkdir -p '%s'", log_dir))
 
 local function inspect_impl(root, options)
     options = options or {}
@@ -48,13 +59,14 @@ function M.error(msg, data)
 end
 
 function M.log_context(turn, phase, content)
-    local filename = string.format("logs/turn_%03d_%s.log", turn, phase)
+    -- 5. Записываем дамп в изолированную директорию
+    local filename = string.format("%s/turn_%03d_%s.log", log_dir, turn, phase)
     local f = io.open(filename, "w")
     if f then
         f:write(content)
         f:close()
     else
-        io.stderr:write("[LOGGER] Failed to write log: " .. filename .. "\n")
+        io.stderr:write(string.format("[LOGGER FATAL] Failed to write log to: %s\n", filename))
     end
 end
 

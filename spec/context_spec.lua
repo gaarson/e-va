@@ -79,4 +79,44 @@ describe("Context class", function()
             assert.truthy(mem_block:match("%[OMITTED %- OUT OF MEMORY%]"))
         end)
     end)
+
+    describe("Search Digest & Context Compression", function()
+        it("should deduplicate identical snippets across different files", function()
+            -- Симулируем результаты ripgrep из разных файлов, но с одинаковым кодом
+            ctx:add_search_result("init", "module.lua:10:   local init = false\nmodule.lua:11:   return init")
+            ctx:add_search_result("setup", "core.lua:50: local init = false\ncore.lua:51: return init")
+
+            local digest = ctx:get_search_digest(5000)
+
+            -- Дедупликатор должен оставить только одно вхождение "local init = false"
+            local _, match_count = digest:gsub("local init = false", "")
+            assert.are.equal(1, match_count, "Duplicate code was not removed!")
+            
+            -- Аналогично для "return init"
+            local _, return_count = digest:gsub("return init", "")
+            assert.are.equal(1, return_count, "Duplicate return statement was not removed!")
+        end)
+
+        it("should aggressively compress whitespaces to save tokens", function()
+            -- Имитируем код с глубокой вложенностью и множественными пробелами
+            local messy_code = "app.c:100:         if ( x == 1 )   {   return true;   }"
+            ctx:add_search_result("check_x", messy_code)
+
+            local digest = ctx:get_search_digest(5000)
+
+            -- Ожидаем, что L-trim и схлопывание пробелов отработают корректно
+            assert.truthy(digest:match("if %( x == 1 %) { return true; %}"))
+            -- Убеждаемся, что оригинальная каша из пробелов исчезла
+            assert.falsy(digest:match("        if")) 
+        end)
+
+        it("should truncate digest when token budget is exceeded", function()
+            -- Ставим жесткий лимит в 10 токенов (примерно 35 символов при CHARS_PER_TOKEN = 3.5)
+            ctx:add_search_result("huge_query", "file.txt:1: " .. string.rep("A", 100))
+            
+            local digest = ctx:get_search_digest(10)
+            
+            assert.truthy(digest:match("%[TRUNCATED DUE TO TOKEN LIMIT%]"))
+        end)
+    end)
 end)

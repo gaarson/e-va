@@ -20,7 +20,7 @@ function M.get()
 
     local PARAMS_BRAIN = {
         max_tokens = 16384, temperature = 0.1, top_p = 0.9,
-        repeat_penalty = 1.2, token_healing = true
+        repeat_penalty = 1.1, token_healing = true
     }
 
     local PARAMS_PRECISE = {
