@@ -85,12 +85,7 @@ function M.execute(action, ctx, current_state)
         local ok = utils.cleanup_backups(config.PROJECT_ROOT)
         if ok then output = "\n[SYSTEM]: All .bak files removed." else output = "\n[ERROR]: Failed to clean up .bak files." end
 
-    -- НОВЫЙ МЕХАНИЗМ: ПАТЧИНГ БЛОКАМИ (Fuzzy Match)
     elseif action:match("^patch:") then
-        if current_state == "RESEARCH" then
-            return { output = "\n[SYSTEM STRICT ERROR]: Direct file mutation is forbidden in RESEARCH phase. You MUST output <cmd>create_plan</cmd> first.", signal = nil }
-        end
-
         local path, patch_body = action:match("^patch:([^%s\n]+)%s*\n(.*)")
 
         if not path or not patch_body then
@@ -105,7 +100,6 @@ function M.execute(action, ctx, current_state)
                 else return { output = "\n[ERROR] File not found on disk: " .. rel_path, signal = nil } end
             end
 
-            -- Используем наш C-Core для fuzzy-замены
             local ok, new_content, changes, err_msg = patcher.apply_patch(ctx.knowledge_base[rel_path], patch_body)
 
             if ok then
@@ -113,7 +107,8 @@ function M.execute(action, ctx, current_state)
                 local w_ok, w_err = utils.write_file(full_path, new_content)
                 if w_ok then
                     ctx:add_file(rel_path, new_content)
-                    output = string.format("\n[SUCCESS]: Applied %d patch block(s) to %s. PLEASE CHECK MEMORY ABOVE. If correct, output <cmd>task_complete</cmd>.", changes, rel_path)
+                    output = string.format("\n[SUCCESS]: Applied %d patch block(s) to %s. PLEASE CHECK MEMORY ABOVE.", changes, rel_path)
+                    signal = "MUTATION_SUCCESS"
                 else
                     output = "\n[DISK ERROR]: " .. tostring(w_err)
                 end
@@ -123,14 +118,10 @@ function M.execute(action, ctx, current_state)
         end
 
     elseif action:match("^create_file:") then
-        if current_state == "RESEARCH" then
-            return { output = "\n[SYSTEM STRICT ERROR]: Direct file creation is forbidden in RESEARCH phase. You MUST output <cmd>create_plan</cmd> first.", signal = nil }
-        end
-
         local path, new_code = action:match("^create_file:([^%s]+)%s*\n(.*)")
 
         if not path then
-            output = "\n[ERROR]: Invalid create_file syntax. Use <cmd>create_file:path/to/file\\n[code]</cmd>"
+            output = "\n[ERROR]: Invalid create_file syntax. Use <cmd>create_file:path/to/file\n[code]</cmd>"
         else
             local rel_path = utils.normalize_path(config.PROJECT_ROOT, path)
             local full_path = config.PROJECT_ROOT .. "/" .. rel_path
@@ -148,7 +139,8 @@ function M.execute(action, ctx, current_state)
 
             if ok then
                 ctx:add_file(rel_path, new_code or "")
-                output = string.format("\n[SUCCESS]: Created/Overwritten file %s. Please output <cmd>task_complete</cmd>.", rel_path)
+                output = string.format("\n[SUCCESS]: Created/Overwritten file %s.", rel_path)
+                signal = "MUTATION_SUCCESS"
             else
                 output = "\n[ERROR]: " .. tostring(err)
             end
@@ -159,7 +151,6 @@ function M.execute(action, ctx, current_state)
         cmd = utils.trim(cmd)
 
         local safe_prefixes = { "ls", "cat", "grep", "rg", "echo", "pwd", "ps", "find", "head", "tail", "whoami" }
-
         local is_safe = false
         for _, prefix in ipairs(safe_prefixes) do
             if cmd:match("^" .. prefix .. "%s") or cmd == prefix then is_safe = true; break end
@@ -175,6 +166,7 @@ function M.execute(action, ctx, current_state)
             end
         end
 
+        -- Выполняем команду
         local f = io.popen(cmd .. " 2>&1")
         if f then
             local res = f:read("*a")
@@ -182,6 +174,20 @@ function M.execute(action, ctx, current_state)
             if #res == 0 then res = "(Command executed silently)" end
             if #res > 4000 then res = res:sub(1, 4000) .. "\n...[TRUNCATED]" end
             output = "\n[SHELL STDOUT/STDERR]:\n" .. res
+
+            -- [CIRCUIT BREAKER]: Отслеживание падающих тестов
+            ctx.test_failures = ctx.test_failures or 0
+            if cmd:match("test") or cmd:match("make") or cmd:match("check") or cmd:match("build") then
+                if res:match("[Ee]rror") or res:match("[Ff]ail") or res:match("command not found") then
+                    ctx.test_failures = ctx.test_failures + 1
+                    if ctx.test_failures >= 3 then
+                        output = output .. "\n\n[CIRCUIT BREAKER TRIGGERED]: You have failed this shell validation 3 times in a row. STOP BLIND PATCHING. Read the actual error and use <cmd>read_chunk</cmd> to verify the source code before trying again."
+                        ctx.test_failures = 0
+                    end
+                else
+                    ctx.test_failures = 0
+                end
+            end
         else
             output = "\n[ERROR]: Failed to spawn shell process."
         end
@@ -205,8 +211,5 @@ function M.execute(action, ctx, current_state)
 
     return { output = output, signal = signal }
 end
-
--- Обрати внимание: функция try_apply_patch полностью удалена, 
--- так как логика парсинга интегрирована прямо в блок "patch:" внутри execute().
 
 return M

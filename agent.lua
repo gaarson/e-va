@@ -12,8 +12,8 @@ local config = config_module.get()
 local ctx = Context.new(config)
 
 local STATE_FILE = ".e-va_state.json"
-local STATES = { RESEARCH = "RESEARCH", PLANNING = "PLANNING", CODING = "CODING" }
-local CURRENT_STATE = STATES.RESEARCH
+local STATES = { AUTONOMOUS = "AUTONOMOUS", PLANNING = "PLANNING", CODING = "CODING" }
+local CURRENT_STATE = STATES.AUTONOMOUS
 
 local restored = false
 if utils.read_file_range(STATE_FILE) then
@@ -21,8 +21,14 @@ if utils.read_file_range(STATE_FILE) then
     if ctx:load_from_snapshot(content) then restored = true end
 end
 
-local start_file = arg[1]
-local instruction = arg[2]
+local arg1, arg2 = ...
+local cli_args = arg or _G.arg or {}
+
+local raw_start_file = arg1 or cli_args
+local raw_instruction = arg2 or cli_args
+
+local start_file = type(raw_start_file) == "string" and raw_start_file or nil
+local instruction = type(raw_instruction) == "string" and raw_instruction or nil
 
 if not restored then
     if not instruction then print("Usage: eva [file] \"<instruction>\""); os.exit(1) end
@@ -41,10 +47,8 @@ if not restored then
     -- 3. Сканируем file_tree на наличие других UPPERCASE.md файлов в корне
     if ctx.file_tree then
         for line in ctx.file_tree:gmatch("[^\r\n]+") do
-            -- Извлекаем путь (до первого пробела, т.к. формат "путь (X lines)")
             local filepath = line:match("^(%S+)")
             if filepath and filepath:lower() ~= "readme.md" then
-                -- Условие: файл в корне (нет слешей) И имя состоит из заглавных букв/цифр/подчеркиваний
                 if not filepath:find("/") and filepath:match("^[A-Z0-9_-]+%.[mM][dD]$") then
                     local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. filepath)
                     if content then
@@ -72,7 +76,7 @@ if not restored then
     table.insert(ctx.chat_history, { role = "user", content = initial_msg })
 end
 
-local MAX_TURNS = 50
+local MAX_TURNS = 150
 local turn = 0
 
 local function enter_repl(ctx)
@@ -122,7 +126,7 @@ while turn < MAX_TURNS do
     local memory_block = ctx:get_memory_block(memory_budget)
 
     local sys_prompt_text = ""
-    if CURRENT_STATE == STATES.RESEARCH then sys_prompt_text = config.PROMPT_RESEARCH
+    if CURRENT_STATE == STATES.AUTONOMOUS then sys_prompt_text = config.PROMPT_AUTONOMOUS
     elseif CURRENT_STATE == STATES.PLANNING then sys_prompt_text = config.PROMPT_PLANNING
     elseif CURRENT_STATE == STATES.CODING then
         local task = ctx.execution_plan[ctx.current_task_index]
@@ -137,7 +141,7 @@ while turn < MAX_TURNS do
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ""
 
-    if CURRENT_STATE == STATES.CODING then
+    if CURRENT_STATE == STATES.CODING or CURRENT_STATE == STATES.AUTONOMOUS then
         search_digest = ctx:get_search_digest(digest_budget)
     end
 
@@ -206,7 +210,7 @@ while turn < MAX_TURNS do
                  CURRENT_STATE = STATES.CODING
                  ctx.current_task_index = 1
 
-                local first_task = ctx.execution_plan[1]
+                local first_task = ctx.execution_plan
 
                  logger.info("Plan Approved. Engaging STRICT CODING Phase.")
                  table.insert(ctx.chat_history, {
@@ -220,14 +224,12 @@ while turn < MAX_TURNS do
     end
 
     local cmds_executed = 0
-    -- Инициализируем трекер состояния в контексте, если его еще нет
     ctx.last_cmd = ctx.last_cmd or ""
     ctx.cmd_loop_count = ctx.cmd_loop_count or 0
 
     for cmd in content:gmatch("<cmd>(.-)</cmd>") do
         cmds_executed = cmds_executed + 1
-        
-        -- [CIRCUIT BREAKER]: Детектор авторегрессивной петли
+
         if cmd == ctx.last_cmd then
             ctx.cmd_loop_count = ctx.cmd_loop_count + 1
         else
@@ -237,44 +239,48 @@ while turn < MAX_TURNS do
 
         local res
         if ctx.cmd_loop_count >= 3 then
-            -- Если команда повторяется 3-й раз подряд, рубим рубильник
             logger.warn("Agent Loop Detected. Injecting Pattern Breaker.", { command = cmd })
-            res = { 
-                output = "\n[SYSTEM FATAL ERROR]: AUTOREGRESSIVE LOOP DETECTED. You have issued the exact same command multiple times.\nSTOP READING. \nIf you know what to do, you MUST output EXACTLY <cmd>create_plan</cmd> immediately to proceed to the CODING phase. Do not repeat the previous action.", 
-                signal = nil 
+            res = {
+                output = "\n[SYSTEM FATAL ERROR]: AUTOREGRESSIVE LOOP DETECTED. You have issued the exact same command multiple times. STOP READING. Re-evaluate your strategy.",
+                signal = nil
             }
-            -- Сбрасываем счетчик, чтобы дать агенту шанс исправиться на следующем ходу
             ctx.cmd_loop_count = 0
         else
-            -- Нормальное выполнение
             res = tool_executor.execute(cmd, ctx, CURRENT_STATE)
+        end
+
+        -- Вывод инструмента прямо в консоль (чтобы ты видел, что видит модель)
+        if res.output and res.output ~= "" then
+            print("\27[36m" .. res.output .. "\27[0m")
         end
 
         tool_out = tool_out .. (res.output or "")
 
-        if res.signal == "TRANSITION_PLANNING" then
+        if res.signal == "MUTATION_SUCCESS" then
+            ctx:squash_last_mutation()
+        elseif res.signal == "TRANSITION_PLANNING" then
           CURRENT_STATE = STATES.PLANNING; transition = true
         elseif res.signal == "TASK_COMPLETE" then
             ctx.current_task_index = ctx.current_task_index + 1
             if ctx.current_task_index > #ctx.execution_plan then
-                print("\n\27[32m>>> TASK COMPLETED. Returning to RESEARCH phase.\27[0m")
-                CURRENT_STATE = STATES.RESEARCH
-                table.insert(ctx.chat_history, { role = "user", content = "[SYSTEM]: Execution Plan fully completed. Awaiting new instructions." })
+                print("\n\27[32m>>> TASK COMPLETED. Returning to AUTONOMOUS phase.\27[0m")
+                CURRENT_STATE = STATES.AUTONOMOUS
+                table.insert(ctx.chat_history, { role = "user", content = "[SYSTEM]: Execution Plan/Task fully completed. Awaiting new instructions." })
                 enter_repl(ctx)
                 turn = 0
                 transition = true
             else
                 local next_task = ctx.execution_plan[ctx.current_task_index]
-                table.insert(ctx.chat_history, { 
-                    role = "user", 
-                    content = string.format("TASK %d COMPLETED.\nSTARTING TASK %d/%d: %s\nInstruction: %s", 
-                        ctx.current_task_index - 1, ctx.current_task_index, #ctx.execution_plan, next_task.file, next_task.instruction) 
+                table.insert(ctx.chat_history, {
+                    role = "user",
+                    content = string.format("TASK %d COMPLETED.\nSTARTING TASK %d/%d: %s\nInstruction: %s",
+                        ctx.current_task_index - 1, ctx.current_task_index, #ctx.execution_plan, next_task.file, next_task.instruction)
                 })
             end
         end
     end
 
-    if cmds_executed == 0 and CURRENT_STATE == STATES.RESEARCH then
+    if cmds_executed == 0 and CURRENT_STATE == STATES.AUTONOMOUS then
         enter_repl(ctx)
         turn = 0
         transition = true

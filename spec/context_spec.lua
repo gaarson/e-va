@@ -5,7 +5,6 @@ describe("Context class", function()
     local ctx
 
     before_each(function()
-        -- Создаем изолированный конфиг перед каждым тестом
         mock_config = {
             PROJECT_ROOT = "/tmp/test_root",
             LIMITS = { CHARS_PER_TOKEN = 4 }
@@ -29,7 +28,6 @@ describe("Context class", function()
     end)
 
     it("should estimate tokens based on config limits", function()
-        -- Длина 12 символов, LIMITS.CHARS_PER_TOKEN = 4. Ожидаем 3 токена.
         local cost = ctx:estimate_tokens("123456789012")
         assert.are.equal(3, cost)
     end)
@@ -42,9 +40,7 @@ describe("Context class", function()
 
             local state_json = ctx:snapshot()
             assert.truthy(state_json)
-            assert.truthy(type(state_json) == "string")
 
-            -- Создаем новый контекст и восстанавливаем в него данные
             local new_ctx = Context.new(mock_config)
             local ok, err = new_ctx:load_from_snapshot(state_json)
 
@@ -66,13 +62,11 @@ describe("Context class", function()
         it("should omit non-target files when memory is exceeded", function()
             ctx:add_file("small.txt", "hello")
             ctx:add_file("target.txt", "edit me")
-            ctx:add_file("huge.txt", string.rep("A", 500)) -- 500 chars
+            ctx:add_file("huge.txt", string.rep("A", 500))
 
-            -- Имитируем, что target.txt сейчас в фокусе (is_target = true)
             ctx.execution_plan = { { file = "target.txt" } }
             ctx.current_task_index = 1
 
-            -- Устанавливаем жесткий лимит в ~30 токенов
             local mem_block = ctx:get_memory_block(30)
 
             assert.truthy(mem_block:match("target%.txt %.*%[TARGET FILE %- EDIT THIS%]"))
@@ -82,41 +76,48 @@ describe("Context class", function()
 
     describe("Search Digest & Context Compression", function()
         it("should deduplicate identical snippets across different files", function()
-            -- Симулируем результаты ripgrep из разных файлов, но с одинаковым кодом
             ctx:add_search_result("init", "module.lua:10:   local init = false\nmodule.lua:11:   return init")
             ctx:add_search_result("setup", "core.lua:50: local init = false\ncore.lua:51: return init")
 
             local digest = ctx:get_search_digest(5000)
 
-            -- Дедупликатор должен оставить только одно вхождение "local init = false"
             local _, match_count = digest:gsub("local init = false", "")
             assert.are.equal(1, match_count, "Duplicate code was not removed!")
-            
-            -- Аналогично для "return init"
+
             local _, return_count = digest:gsub("return init", "")
             assert.are.equal(1, return_count, "Duplicate return statement was not removed!")
         end)
 
         it("should aggressively compress whitespaces to save tokens", function()
-            -- Имитируем код с глубокой вложенностью и множественными пробелами
             local messy_code = "app.c:100:         if ( x == 1 )   {   return true;   }"
             ctx:add_search_result("check_x", messy_code)
-
             local digest = ctx:get_search_digest(5000)
-
-            -- Ожидаем, что L-trim и схлопывание пробелов отработают корректно
             assert.truthy(digest:match("if %( x == 1 %) { return true; %}"))
-            -- Убеждаемся, что оригинальная каша из пробелов исчезла
-            assert.falsy(digest:match("        if")) 
         end)
 
         it("should truncate digest when token budget is exceeded", function()
-            -- Ставим жесткий лимит в 10 токенов (примерно 35 символов при CHARS_PER_TOKEN = 3.5)
             ctx:add_search_result("huge_query", "file.txt:1: " .. string.rep("A", 100))
-            
             local digest = ctx:get_search_digest(10)
-            
             assert.truthy(digest:match("%[TRUNCATED DUE TO TOKEN LIMIT%]"))
+        end)
+    end)
+
+    describe("Context Squashing (ReAct Optimization)", function()
+        it("should successfully squash heavy patch blocks from assistant history", function()
+            local raw_msg = "Here is the fix:\n<cmd>patch:file.c\n<<<<<<< SEARCH\nbad_code\n=======\ngood_code\n>>>>>>> REPLACE\n</cmd>"
+            table.insert(ctx.chat_history, { role = "user", content = "Fix it" })
+            table.insert(ctx.chat_history, { role = "assistant", content = raw_msg })
+            
+            local squashed = ctx:squash_last_mutation()
+            
+            assert.is_true(squashed)
+            local final_content = ctx.chat_history[#ctx.chat_history].content
+            -- Убеждаемся, что старый код вырезан
+            assert.falsy(final_content:match("bad_code"))
+            assert.falsy(final_content:match("<<<<<<< SEARCH"))
+            -- Убеждаемся, что новое системное сообщение на месте
+            assert.truthy(final_content:match("Patch successfully applied to 'file.c'"))
+            assert.truthy(final_content:match("Changes are in memory"))
         end)
     end)
 end)

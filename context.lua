@@ -108,7 +108,7 @@ function M.get_memory_block(self, max_tokens)
       for _, f in ipairs(files_list) do
         local content_display = ""
         local raw_lines = require("utils").read_lines_raw(f.content)
-        
+
         for i, line in ipairs(raw_lines) do
              content_display = content_display .. line .. "\n"
         end
@@ -117,7 +117,6 @@ function M.get_memory_block(self, max_tokens)
         local file_header = string.format("FILE: %s %s\n```\n", f.path, marker)
         local file_footer = "```\n"
 
-        
         local total_str = file_header .. content_display .. file_footer
         local cost = self:estimate_tokens(total_str)
 
@@ -146,17 +145,12 @@ function M.get_report(self, current_phase)
         search_summary = string.format("\n## SEARCH HISTORY\n(Cached %d queries)\n", count)
     end
 
-    -- КОНТЕКСТНАЯ ИЗОЛЯЦИЯ: Дерево файлов инжектируется ТОЛЬКО в фазе RESEARCH
     local tree_block = ""
-    if current_phase == "RESEARCH" then
+    if current_phase == "AUTONOMOUS" then
         local tree_content = self.file_tree or "(empty)"
-        
-        -- SAFETY LIMIT: Если дерево огромное (например, > 15000 байт), жестко обрезаем его.
-        -- Это спасет контекст, если ripgrep случайно захватит скомпилированные бинарники или node_modules.
         if #tree_content > 100000 then
             tree_content = tree_content:sub(1, 100000) .. "\n... [TREE TRUNCATED - USE <cmd>list_files</cmd> OR <cmd>search:query</cmd> TO EXPLORE FURTHER]"
         end
-        
         tree_block = string.format("## FILE TREE\n```text\n%s\n```\n", tree_content)
     end
 
@@ -192,20 +186,16 @@ function M.get_search_digest(self, max_tokens)
 
     for query, res in pairs(self.search_history) do
         table.insert(digest_buffer, "--- Query: " .. query .. " ---")
-        
         for line in res:gmatch("[^\r\n]+") do
             local pure_code = line:match("[:-]%d+[:-]%s*(.+)$") or line
-            
             local compressed_line = pure_code:gsub("^%s+", ""):gsub("%s+", " ")
-            
             local hash = compressed_line:gsub("%s", "")
-            
+
             if hash ~= "" and not seen_hashes[hash] then
                 seen_hashes[hash] = true
                 table.insert(digest_buffer, compressed_line)
-                
                 current_tokens = current_tokens + math.ceil(#compressed_line / divisor)
-                
+
                 if current_tokens >= max_tokens then
                     table.insert(digest_buffer, "... [TRUNCATED DUE TO TOKEN LIMIT] ...")
                     return table.concat(digest_buffer, "\n")
@@ -213,8 +203,35 @@ function M.get_search_digest(self, max_tokens)
             end
         end
     end
-    
     return table.concat(digest_buffer, "\n")
+end
+
+-- [SMART SQUASHING]: Вырезаем отработанный код, оставляем след
+function M.squash_last_mutation(self)
+    for i = #self.chat_history, 1, -1 do
+        local msg = self.chat_history[i]
+        if msg.role == "assistant" then
+            local original = msg.content or ""
+            local squashed = original
+            
+            squashed = squashed:gsub(
+                "<cmd>patch:([^%s\n]+)\n<<<<<<< SEARCH.->>>>>>> REPLACE\n</cmd>", 
+                "\n[SYSTEM NOTE: Patch successfully applied to '%1'. Changes are in memory. Execute <cmd>task_complete</cmd> if done.]\n"
+            )
+            
+            squashed = squashed:gsub(
+                "<cmd>create_file:([^%s\n]+)\n.-</cmd>", 
+                "\n[SYSTEM NOTE: File '%1' successfully created. Execute <cmd>task_complete</cmd> if done.]\n"
+            )
+
+            if original ~= squashed then
+                self.chat_history[i].content = squashed
+                return true
+            end
+            break
+        end
+    end
+    return false
 end
 
 return M

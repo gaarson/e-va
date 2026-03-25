@@ -19,17 +19,6 @@ describe("Tool Executor Subsystem (State & Mutators)", function()
         os.remove(test_file .. ".bak")
     end)
 
-    it("should BLOCK create_file in RESEARCH phase to enforce State Machine", function()
-        local action = "create_file:" .. test_file .. "\nreturn true"
-        local res = tool_executor.execute(action, ctx, "RESEARCH")
-
-        assert.truthy(res.output:match("SYSTEM STRICT ERROR"))
-        assert.truthy(res.output:match("forbidden"))
-
-        -- Гарантируем, что файловая система не была затронута (Mutation Lock)
-        local content = utils.read_file_range(test_file)
-        assert.is_nil(content)
-    end)
 
     it("should ALLOW create_file in CODING phase and create nested directories if needed", function()
         local action = "create_file:" .. test_file .. "\nlocal x = 42\nreturn x"
@@ -41,17 +30,17 @@ describe("Tool Executor Subsystem (State & Mutators)", function()
         assert.are.equal("local x = 42\nreturn x", content)
     end)
 
-    it("should BLOCK patch in RESEARCH phase", function()
-        -- Создаем мок-файл для тестирования механизма patch
+    it("should ALLOW patch and create_file in AUTONOMOUS phase and emit MUTATION_SUCCESS", function()
         utils.write_file(test_file, "line1\nline2")
-
-        -- Используем новый синтаксис Fuzzy Matcher'а вместо устаревшего replace
+        
         local action = "patch:" .. test_file .. "\n<<<<<<< SEARCH\nline1\n=======\nline3\n>>>>>>> REPLACE"
-        local res = tool_executor.execute(action, ctx, "RESEARCH")
+        local res = tool_executor.execute(action, ctx, "AUTONOMOUS")
 
-        -- Проверяем срабатывание когнитивного фаервола
-        assert.truthy(res.output:match("SYSTEM STRICT ERROR"))
-        assert.truthy(res.output:match("forbidden in RESEARCH"))
+        assert.truthy(res.output:match("SUCCESS"))
+        assert.are.equal("MUTATION_SUCCESS", res.signal)
+        
+        local content = utils.read_file_range(test_file)
+        assert.truthy(content:match("line3"))
     end)
 
     it("should cache search queries and prevent duplicate shell executions", function()
