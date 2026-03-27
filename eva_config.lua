@@ -67,5 +67,4 @@ function M.get()
 
     return cfg
 end
-
 return M

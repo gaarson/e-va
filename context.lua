@@ -14,7 +14,7 @@ function M.reset(self)
     self.global_access_counter = 0
     self.file_states = {}
     self.search_history = {}
-    self.chat_history = {}
+    self.agent_histories = {} -- Замена единого chat_history
     self.thoughts = {}
     self.execution_plan = {}
     self.current_task_index = 1
@@ -22,12 +22,20 @@ function M.reset(self)
     self.file_tree = nil
 end
 
+function M.get_history(self, agent_name)
+    self.agent_histories[agent_name] = self.agent_histories[agent_name] or {}
+    return self.agent_histories[agent_name]
+end
+
+function M.add_message(self, agent_name, role, content)
+    local history = self:get_history(agent_name)
+    table.insert(history, { role = role, content = content })
+end
+
 function M.add_thought(self, turn, thought_text)
     self.thoughts = self.thoughts or {}
     table.insert(self.thoughts, { turn = turn, content = thought_text })
-    if #self.thoughts > 10 then
-        table.remove(self.thoughts, 1)
-    end
+    if #self.thoughts > 10 then table.remove(self.thoughts, 1) end
 end
 
 function M.get_thoughts_digest(self)
@@ -66,7 +74,7 @@ function M.snapshot(self)
         global_access_counter = self.global_access_counter,
         file_states = self.file_states,
         search_history = self.search_history,
-        chat_history = self.chat_history,
+        agent_histories = self.agent_histories,
         thoughts = self.thoughts,
         execution_plan = self.execution_plan,
         current_task_index = self.current_task_index,
@@ -84,7 +92,7 @@ function M.load_from_snapshot(self, json_str)
     self.global_access_counter = state.global_access_counter or 0
     self.file_states = state.file_states or {}
     self.search_history = state.search_history or {}
-    self.chat_history = state.chat_history or {}
+    self.agent_histories = state.agent_histories or {}
     self.thoughts = state.thoughts or {}
     self.execution_plan = state.execution_plan or {}
     self.current_task_index = state.current_task_index or 1
@@ -157,45 +165,6 @@ function M.get_memory_block(self, max_tokens)
     return table.concat(mem_buffer, "")
 end
 
-function M.get_report(self, current_phase)
-    local search_summary = ""
-    local count = 0
-    for q, _ in pairs(self.search_history) do count = count + 1 end
-    if count > 0 then
-        search_summary = string.format("\n## SEARCH HISTORY\n(Cached %d queries)\n", count)
-    end
-
-    local tree_block = ""
-    if current_phase == "AUTONOMOUS" then
-        local tree_content = self.file_tree or "(empty)"
-        if #tree_content > 100000 then
-            tree_content = tree_content:sub(1, 100000) .. "\n... [TREE TRUNCATED - USE <cmd>list_files</cmd> OR <cmd>search:query</cmd> TO EXPLORE FURTHER]"
-        end
-        tree_block = string.format("## FILE TREE\n```text\n%s\n```\n", tree_content)
-    end
-
-    return string.format(
-        "# PROJECT CONTEXT\nRoot: %s\n---\n%s%s",
-        self.config.PROJECT_ROOT,
-        tree_block,
-        search_summary
-    )
-end
-
-function M.get_identity_prompt(self)
-    if not self.identity then return "=== IDENTITY ===\n(Not established yet)\n" end
-    return string.format(self.config.PROMPT_IDENTITY_TEMPLATE,
-        self.identity.persona or "Developer",
-        table.concat(self.identity.stack or {}, ", "),
-        self.identity.type or "Unknown",
-        self.identity.summary or "N/A"
-    )
-end
-
-function M.update_file_tree(self, tree_str)
-    self.file_tree = tree_str
-end
-
 function M.get_search_digest(self, max_tokens)
     if not next(self.search_history) then return "" end
 
@@ -226,32 +195,57 @@ function M.get_search_digest(self, max_tokens)
     return table.concat(digest_buffer, "\n")
 end
 
--- [SMART SQUASHING]: Вырезаем отработанный код, оставляем след
-function M.squash_last_mutation(self)
-    for i = #self.chat_history, 1, -1 do
-        local msg = self.chat_history[i]
+function M.squash_last_mutation(self, agent_name)
+    local history = self:get_history(agent_name)
+    for i = #history, 1, -1 do
+        local msg = history[i]
         if msg.role == "assistant" then
             local original = msg.content or ""
             local squashed = original
-            
+
             squashed = squashed:gsub(
-                "<cmd>patch:([^%s\n]+)\n<<<<<<< SEARCH.->>>>>>> REPLACE\n</cmd>", 
-                "\n[SYSTEM NOTE: Patch successfully applied to '%1'. Changes are in memory. Execute <cmd>task_complete</cmd> if done.]\n"
+                "<cmd>patch:([^%s\n]+)\n<<<<<<< SEARCH.->>>>>>> REPLACE\n</cmd>",
+                "\n[SYSTEM NOTE: Patch successfully applied to '%1'. Changes are in memory.]\n"
             )
-            
+
             squashed = squashed:gsub(
-                "<cmd>create_file:([^%s\n]+)\n.-</cmd>", 
-                "\n[SYSTEM NOTE: File '%1' successfully created. Execute <cmd>task_complete</cmd> if done.]\n"
+                "<cmd>create_file:([^%s\n]+)\n.-</cmd>",
+                "\n[SYSTEM NOTE: File '%1' successfully created.]\n"
             )
 
             if original ~= squashed then
-                self.chat_history[i].content = squashed
+                history[i].content = squashed
                 return true
             end
             break
         end
     end
     return false
+end
+
+function M.get_report(self, agent_name)
+    local search_summary = ""
+    local count = 0
+    for _, _ in pairs(self.search_history) do count = count + 1 end
+    if count > 0 then
+        search_summary = string.format("\n## SEARCH HISTORY\n(Cached %d queries)\n", count)
+    end
+
+    local tree_block = ""
+    if agent_name == "ARCHITECT" then
+        local tree_content = self.file_tree or "(empty)"
+        if #tree_content > 100000 then
+            tree_content = tree_content:sub(1, 100000) .. "\n... [TREE TRUNCATED - USE <cmd>list_files</cmd> OR <cmd>search:query</cmd> TO EXPLORE FURTHER]"
+        end
+        tree_block = string.format("## FILE TREE\n```text\n%s\n```\n", tree_content)
+    end
+
+    return string.format(
+        "# PROJECT CONTEXT\nRoot: %s\n---\n%s%s",
+        self.config.PROJECT_ROOT,
+        tree_block,
+        search_summary
+    )
 end
 
 return M

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SOURCE="${BASH_SOURCE[0]}"
+SOURCE="${BASH_SOURCE}"
 while [ -h "$SOURCE" ]; do
   DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
   SOURCE="$(readlink "$SOURCE")"
@@ -21,7 +21,8 @@ fi
 
 LUA_VERSION=$(lua -v 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
-export LUA_PATH="$AGENT_HOME/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?/init.lua;;"
+# ИСПРАВЛЕНИЕ: Добавляем .e-va-conf в начало LUA_PATH для приоритета локальных конфигов
+export LUA_PATH="$PROJECT_ROOT/.e-va-conf/?.lua;$AGENT_HOME/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?/init.lua;;"
 export LUA_CPATH="$AGENT_HOME/?.so;$AGENT_HOME/lua_modules/lib/lua/${LUA_VERSION}/?.so;;"
 
 exec lua "$AGENT_HOME/agent.lua" "$@"

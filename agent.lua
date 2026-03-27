@@ -1,163 +1,121 @@
-local config_module = require("config")
+-- [ЯДЕРНЫЙ ФИКС]: Прямая загрузка файла в обход системного LUA_PATH
+local agent_home = os.getenv("AGENT_HOME") or "."
+local project_root = os.getenv("PROJECT_ROOT") or "."
+
+local config_func, err = loadfile(project_root .. "/.e-va-conf/config.lua")
+if not config_func then
+    config_func, err = assert(loadfile(agent_home .. "/config.lua"), "CRITICAL: Could not find config.lua in " .. agent_home)
+end
+
+local config_module = config_func()
+local config = config_module.get()
+
+-- [HOT-PATCH]: Принудительная инъекция пайплайна, если конфиг сбоит
+if not config.PIPELINE or not config.PIPELINE or type(config.PIPELINE.agents) ~= "table" then
+    print("\n\27[33m[SYSTEM WARNING]: Bypassing config file. Injecting memory-safe PIPELINE.\27[0m")
+    config.PIPELINE = {
+        { stage = "ANALYSIS_AND_PLANNING", agents = { "ARCHITECT" }, mode = "sequential" },
+        { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
+    }
+end
+
+-- Загрузка остальных модулей
 local llm = require("llm_handler")
 local logger = require("logger")
-local json = require("JSON")
 local Context = require("context")
-local Analyzer = require("analyzer")
-local tool_executor = require("tool_executor")
+local registry = require("tool_registry")
+local core_tools = require("core_tools")
 local utils = require("utils")
+
 local os = require("os")
 
-local config = config_module.get()
+if not config.PIPELINE then
+    print("\n\27[33m==============================")
+    print("CRITICAL DEBUG INFO: WRONG CONFIG LOADED!")
+    print("==============================\27[0m")
+    print("AGENT_HOME is exactly: " .. tostring(os.getenv("AGENT_HOME")))
+    print("PROJECT_ROOT is exactly: " .. tostring(os.getenv("PROJECT_ROOT")))
+    print("LUA_PATH is: " .. tostring(os.getenv("LUA_PATH")))
+    print("\nKeys actually found in the loaded config:")
+    for k, v in pairs(config) do 
+        print(" - " .. k .. " (" .. type(v) .. ")") 
+    end
+    print("\n\27[31mACTION REQUIRED: Check where AGENT_HOME points to. You are editing a file in a different directory!\27[0m")
+    os.exit(1)
+end
+
 local ctx = Context.new(config)
 
 local STATE_FILE = ".e-va_state.json"
-local STATES = { AUTONOMOUS = "AUTONOMOUS", PLANNING = "PLANNING", CODING = "CODING" }
-local CURRENT_STATE = STATES.AUTONOMOUS
-
 local restored = false
+
 if utils.read_file_range(STATE_FILE) then
     local content = utils.read_file_range(STATE_FILE)
     if ctx:load_from_snapshot(content) then restored = true end
 end
 
+core_tools.init()
+
 local arg1, arg2 = ...
 local cli_args = arg or _G.arg or {}
-
 local raw_start_file = arg1 or cli_args
 local raw_instruction = arg2 or cli_args
 
 local start_file = type(raw_start_file) == "string" and raw_start_file or nil
 local instruction = type(raw_instruction) == "string" and raw_instruction or nil
 
-if not restored then
-    if not instruction then print("Usage: eva [file] \"<instruction>\""); os.exit(1) end
-    Analyzer.run(ctx, llm)
-    local initial_msg = "TASK: " .. instruction
-    local docs_loaded = {}
-
-    -- 2. [CONTEXT PRIMING] Жестко ищем README.md
-    local readme_path = "README.md"
-    local readme_content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. readme_path)
-    if readme_content then
-        ctx:add_file(readme_path, readme_content)
-        table.insert(docs_loaded, readme_path)
-    end
-
-    -- 3. Сканируем file_tree на наличие других UPPERCASE.md файлов в корне
-    if ctx.file_tree then
-        for line in ctx.file_tree:gmatch("[^\r\n]+") do
-            local filepath = line:match("^(%S+)")
-            if filepath and filepath:lower() ~= "readme.md" then
-                if not filepath:find("/") and filepath:match("^[A-Z0-9_-]+%.[mM][dD]$") then
-                    local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. filepath)
-                    if content then
-                        ctx:add_file(filepath, content)
-                        table.insert(docs_loaded, filepath)
-                    end
-                end
-            end
-        end
-    end
-
-    if #docs_loaded > 0 then
-        initial_msg = initial_msg .. "\n(Note: Auto-loaded core documentation: " .. table.concat(docs_loaded, ", ") .. ")"
-    end
-
-    -- 4. В последнюю очередь грузим целевой файл (Target File)
-    if start_file then
-        local norm_start = utils.normalize_path(config.PROJECT_ROOT, start_file)
-        local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. norm_start)
-        if content then
-            ctx:add_file(norm_start, content)
-            initial_msg = initial_msg .. "\n(Note: I loaded target file '"..norm_start.."' for you)"
-        end
-    end
-    table.insert(ctx.chat_history, { role = "user", content = initial_msg })
+if not restored and not instruction then 
+    print("Usage: eva [file] \"<instruction>\""); os.exit(1) 
 end
 
-local MAX_TURNS = 150
-local turn = 0
-
-local function enter_repl(ctx)
-    while true do
-        io.write("\n\27[34m[e-va shell]>\27[0m ")
-        local user_input = io.read("*l")
-        if not user_input or user_input == "exit" or user_input == "quit" then
-            print("Exiting e-va. Goodbye.")
-            os.remove(STATE_FILE)
-            os.exit(0)
-        elseif user_input ~= "" then
-            table.insert(ctx.chat_history, { role = "user", content = user_input })
-            return true
-        end
+-- ИСПРАВЛЕНИЕ: Умная загрузка промптов (Local Override -> Global Fallback)
+local function load_prompt(file_path)
+    local agent_home = os.getenv("AGENT_HOME") or "."
+    
+    -- 1. Сначала ищем кастомный промпт в локальной конфигурации проекта
+    local local_path = config.PROJECT_ROOT .. "/.e-va-conf/" .. file_path
+    local content = utils.read_file_range(local_path)
+    
+    -- 2. Если локального нет, берем дефолтный из ядра E-va
+    if not content then
+        local global_path = agent_home .. "/" .. file_path
+        content = utils.read_file_range(global_path)
     end
+    
+    if not content then 
+        logger.warn("Failed to load prompt from both local and global paths: " .. file_path)
+        return "You are an AI assistant. Follow the user's instructions." 
+    end
+    return content
 end
 
-while turn < MAX_TURNS do
-    turn = turn + 1
-    utils.write_file(STATE_FILE, ctx:snapshot())
-
-    if CURRENT_STATE == STATES.CODING then
-        if ctx.execution_plan then
-            for i, task in ipairs(ctx.execution_plan) do
-                if task.file then
-                    local fpath = task.file
-                    if not ctx.knowledge_base[fpath] then
-                        logger.info(string.format("Auto-loading plan file [%d/%d]", i, #ctx.execution_plan), fpath)
-                        local full_path = config.PROJECT_ROOT .. "/" .. fpath
-                        local content = utils.read_file_range(full_path)
-                        if content then ctx:add_file(fpath, content) end
-                    else
-                        ctx:touch_file(fpath)
-                    end
-                end
-            end
-        end
-    end
-
+-- Основная функция хода агента
+local function run_agent_turn(agent_name, agent_cfg, turn)
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
-    if available_tokens < 2000 then available_tokens = 4000 end
-
-    local current_ratio = (CURRENT_STATE == STATES.CODING) and limits.MEMORY_RATIO or 0.5
-    local memory_budget = math.floor(available_tokens * current_ratio)
+    local memory_budget = math.floor(available_tokens * limits.MEMORY_RATIO)
     local chat_budget = available_tokens - memory_budget
+
     local memory_block = ctx:get_memory_block(memory_budget)
-
-    local sys_prompt_text = ""
-    if CURRENT_STATE == STATES.AUTONOMOUS then sys_prompt_text = config.PROMPT_AUTONOMOUS
-    elseif CURRENT_STATE == STATES.PLANNING then sys_prompt_text = config.PROMPT_PLANNING
-    elseif CURRENT_STATE == STATES.CODING then
-        local task = ctx.execution_plan[ctx.current_task_index]
-        sys_prompt_text = string.format(config.PROMPT_CODING_TEMPLATE,
-            ctx.current_task_index, #ctx.execution_plan,
-            task.file or "unknown", task.instruction or "unknown")
-    end
-
-    local identity_block = ctx:get_identity_prompt()
-    local full_system_prompt = identity_block .. "\n" .. sys_prompt_text
-
+    local sys_prompt_text = load_prompt(agent_cfg.prompt_file)
+    
     local digest_budget = math.floor(chat_budget * 0.2)
-    local search_digest = ""
+    local search_digest = ctx:get_search_digest(digest_budget)
 
-    if CURRENT_STATE == STATES.CODING or CURRENT_STATE == STATES.AUTONOMOUS then
-        search_digest = ctx:get_search_digest(digest_budget)
-    end
+    local combined_system_prompt = sys_prompt_text .. "\n\n" .. ctx:get_report(agent_name) .. ctx:get_thoughts_digest() .. "\n\n" .. search_digest .. "\n\n" .. memory_block
 
-    local messages = {}
-    local combined_system_prompt = full_system_prompt .. "\n\n" .. ctx:get_report(CURRENT_STATE) .. ctx:get_thoughts_digest() .. "\n\n" .. search_digest .. "\n\n" .. memory_block
-    table.insert(messages, { role = "system", content = combined_system_prompt })
-
+    local messages = { { role = "system", content = combined_system_prompt } }
+    
     local chat_buffer = {}
     local current_chat_cost = 0
-    local history_len = #ctx.chat_history
+    local history = ctx:get_history(agent_name)
+
+    local history_len = #history
 
     if history_len > 0 then
         for i = history_len, 1, -1 do
-            local msg = ctx.chat_history[i]
-            local content_str = msg.content or ""
-            local cost = ctx:estimate_tokens(content_str)
+            local msg = history[i]
+            local cost = ctx:estimate_tokens(msg.content or "")
             if (current_chat_cost + cost) < chat_budget then
                 table.insert(chat_buffer, 1, msg)
                 current_chat_cost = current_chat_cost + cost
@@ -167,6 +125,12 @@ while turn < MAX_TURNS do
 
     local total_ctx_tokens = ctx:estimate_tokens(combined_system_prompt)
 
+    if history_len == 0 and ctx.handoff_memo and ctx.handoff_memo ~= "" then
+        local handoff_msg = "[SYSTEM: HANDOFF MEMO FROM PREVIOUS STAGE]\n" .. ctx.handoff_memo
+        table.insert(chat_buffer, { role = "user", content = handoff_msg })
+        total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(handoff_msg)
+    end
+
     for _, msg in ipairs(chat_buffer) do
         local safe_role = msg.role
         if safe_role == "system" then safe_role = "user" end
@@ -174,25 +138,16 @@ while turn < MAX_TURNS do
         total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(msg.content)
     end
 
-    logger.info(string.format("[TURN %d] Phase: %s | Active Context Tokens: ~%d / %d", turn, CURRENT_STATE, total_ctx_tokens, limits.MAX_CONTEXT))
+    logger.info(string.format("[TURN %d] Agent: %s | Active Context Tokens: ~%d / %d", turn, agent_name, total_ctx_tokens, limits.MAX_CONTEXT))
 
-    local debug_dump = "=== SYSTEM ===\n" .. full_system_prompt .. "\n\n=== MEMORY ===\n" .. memory_block .. "\n\n=== CHAT HISTORY ===\n"
+    io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", agent_name))
 
-    for _, msg in ipairs(chat_buffer) do
-        debug_dump = debug_dump .. string.format("[%s]: %s\n\n", string.upper(msg.role), msg.content or "")
-    end
-    logger.log_context(turn, CURRENT_STATE, debug_dump)
-
-    local profile = (CURRENT_STATE == STATES.CODING) and config.LLM_MAIN or config.LLM_SCOUT
-    io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", CURRENT_STATE))
-
-    -- Stream Filter: подавляем вывод мыслей в консоль
     local print_buf = ""
     local in_thought = false
     local tag_open = "<think>"
     local tag_close = "</think>"
 
-    local response_data, err = llm.send_request(profile, messages, {
+    local response_data, err = llm.send_request(agent_cfg, messages, {
         on_token = function(t)
             print_buf = print_buf .. t
             if not in_thought then
@@ -215,20 +170,19 @@ while turn < MAX_TURNS do
             end
         end
     })
-    
+
     if print_buf ~= "" and not in_thought then io.write(print_buf) end
     io.write("\n")
 
     if not response_data then
-        logger.error("Network Error", err)
-        break
+        logger.error("Network Error for " .. agent_name, err)
+        return "ERROR"
     end
 
     local raw_content = llm.extract_content(response_data) or ""
     local thought = ""
     local content = raw_content
 
-    -- Post-processor: вырезаем мысли даже если открывающий тег потерян
     local end_idx = content:find("</think>")
     if end_idx then
         local start_idx = content:find("<think>")
@@ -251,102 +205,156 @@ while turn < MAX_TURNS do
     content = require("utils").trim(content)
 
     if thought ~= "" then ctx:add_thought(turn, thought) end
-    table.insert(ctx.chat_history, { role = "assistant", content = content })
+    ctx:add_message(agent_name, "assistant", content)
 
-    logger.log_context(turn, CURRENT_STATE .. "_RESPONSE", content)
+    local signal = nil
+    local cmds_executed = 0
+    local MAX_CMDS_PER_TURN = 5 -- Жесткий лимит команд за один ход
 
-    local tool_out = ""
-    local transition = false
-
-    if CURRENT_STATE == STATES.PLANNING then
-        local json_match = content:match("%[.*%]")
-        if json_match then
-             local status, plan = pcall(function() return json:decode(json_match) end)
-             if status and plan and type(plan)=="table" and #plan > 0 then
-                 for _, item in ipairs(plan) do
-                     if item.file then item.file = utils.normalize_path(config.PROJECT_ROOT, item.file) end
-                 end
-                 ctx.execution_plan = plan
-                 CURRENT_STATE = STATES.CODING
-                 ctx.current_task_index = 1
-
-                local first_task = ctx.execution_plan
-
-                 logger.info("Plan Approved. Engaging STRICT CODING Phase.")
-                 table.insert(ctx.chat_history, {
-                     role = "user",
-                     content = string.format("EXECUTION PLAN APPROVED.\nSTRICT CODING MODE ENGAGED.\n[!] CRITICAL: Use the chat history above ONLY as reference. Do not converse. Output ONLY strict patch commands.\n\nSTARTING TASK 1/%d: %s\nInstruction: %s", #plan, first_task.file, first_task.instruction)
-                 })
-                 tool_out = "\n[SYSTEM]: Phase changed to CODING. Target file loaded."
-                 transition = true
-             end
+    for cmd_block in content:gmatch("<cmd>(.-)</cmd>") do
+        cmds_executed = cmds_executed + 1
+        
+        -- [CIRCUIT BREAKER]: Защита от спама командами (Галлюцинаций)
+        if cmds_executed > MAX_CMDS_PER_TURN then
+            local warn_msg = string.format("\n[SYSTEM FATAL]: You tried to execute more than %d commands in a single turn. This is a hallucination. STOP SPAMMING COMMANDS. Analyze the data you just received and THINK before acting.", MAX_CMDS_PER_TURN)
+            print("\27[31m" .. warn_msg .. "\27[0m")
+            ctx:add_message(agent_name, "user", warn_msg)
+            break
         end
+
+        local res = registry.execute(cmd_block, ctx, agent_name)
+        if res.output and res.output ~= "" then
+            -- Ограничиваем вывод инструмента в консоль, чтобы не засорять экран
+            local display_out = res.output
+            if #display_out > 500 then display_out = display_out:sub(1, 500) .. "\n...[TRUNCATED IN UI]" end
+            print("\27[36m" .. display_out .. "\27[0m")
+            
+            ctx:add_message(agent_name, "user", res.output)
+        end
+        if res.signal then signal = res.signal end
+        
+        -- Если команда была task_complete или delegate_plan, сразу прерываем цикл команд
+        if signal == "PIPELINE_NEXT_STAGE" then break end
     end
 
-    local cmds_executed = 0
-    ctx.last_cmd = ctx.last_cmd or ""
-    ctx.cmd_loop_count = ctx.cmd_loop_count or 0
+    -- Если модель вообще не выдала команд, пинаем ее
+    if cmds_executed == 0 and not content:match("delegate_plan") then
+         local warn_msg = "\n[SYSTEM]: You did not execute any valid <cmd>. Remember your directive. You MUST use tools to gather context or formulate a plan using <cmd>delegate_plan</cmd>."
+         ctx:add_message(agent_name, "user", warn_msg)
+    end
 
-    for cmd in content:gmatch("<cmd>(.-)</cmd>") do
-        cmds_executed = cmds_executed + 1
+    utils.write_file(STATE_FILE, ctx:snapshot())
+    return signal
+end
 
-        if cmd == ctx.last_cmd then
-            ctx.cmd_loop_count = ctx.cmd_loop_count + 1
-        else
-            ctx.last_cmd = cmd
-            ctx.cmd_loop_count = 0
-        end
+local function execute_pipeline()
+    local turn = 1
+    local MAX_TURNS = 150
 
-        local res
-        if ctx.cmd_loop_count >= 3 then
-            logger.warn("Agent Loop Detected. Injecting Pattern Breaker.", { command = cmd })
-            res = {
-                output = "\n[SYSTEM FATAL ERROR]: AUTOREGRESSIVE LOOP DETECTED. You have issued the exact same command multiple times. STOP READING. Re-evaluate your strategy.",
-                signal = nil
-            }
-            ctx.cmd_loop_count = 0
-        else
-            res = tool_executor.execute(cmd, ctx, CURRENT_STATE)
-        end
-
-        -- Вывод инструмента прямо в консоль (чтобы ты видел, что видит модель)
-        if res.output and res.output ~= "" then
-            print("\27[36m" .. res.output .. "\27[0m")
-        end
-
-        tool_out = tool_out .. (res.output or "")
-
-        if res.signal == "MUTATION_SUCCESS" then
-            ctx:squash_last_mutation()
-        elseif res.signal == "TRANSITION_PLANNING" then
-          CURRENT_STATE = STATES.PLANNING; transition = true
-        elseif res.signal == "TASK_COMPLETE" then
-            ctx.current_task_index = ctx.current_task_index + 1
-            if ctx.current_task_index > #ctx.execution_plan then
-                print("\n\27[32m>>> TASK COMPLETED. Returning to AUTONOMOUS phase.\27[0m")
-                CURRENT_STATE = STATES.AUTONOMOUS
-                table.insert(ctx.chat_history, { role = "user", content = "[SYSTEM]: Execution Plan/Task fully completed. Awaiting new instructions." })
-                enter_repl(ctx)
-                turn = 0
-                transition = true
+    for stage_idx, stage in ipairs(config.PIPELINE) do
+        logger.info(string.format("\n=== PIPELINE STAGE [%d/%d]: %s ===", stage_idx, #config.PIPELINE, stage.stage))
+        
+        local stage_complete = false
+        
+        while not stage_complete and turn < MAX_TURNS do
+            turn = turn + 1
+            
+            if stage.mode == "parallel" then
+                local threads = {}
+                for _, agent_name in ipairs(stage.agents) do
+                    local co = coroutine.create(function()
+                        return run_agent_turn(agent_name, config.AGENTS[agent_name], turn)
+                    end)
+                    table.insert(threads, { name = agent_name, co = co })
+                end
+                
+                local active_threads = #threads
+                while active_threads > 0 do
+                    for _, th in ipairs(threads) do
+                        if coroutine.status(th.co) ~= "dead" then
+                            local ok, sig = coroutine.resume(th.co)
+                            if sig == "PIPELINE_NEXT_STAGE" then 
+                                stage_complete = true; active_threads = 0; break 
+                            end
+                        else
+                            active_threads = active_threads - 1
+                        end
+                    end
+                end
             else
-                local next_task = ctx.execution_plan[ctx.current_task_index]
-                table.insert(ctx.chat_history, {
-                    role = "user",
-                    content = string.format("TASK %d COMPLETED.\nSTARTING TASK %d/%d: %s\nInstruction: %s",
-                        ctx.current_task_index - 1, ctx.current_task_index, #ctx.execution_plan, next_task.file, next_task.instruction)
-                })
+                for _, agent_name in ipairs(stage.agents) do
+                    local sig = run_agent_turn(agent_name, config.AGENTS[agent_name], turn)
+                    if sig == "PIPELINE_NEXT_STAGE" then 
+                        stage_complete = true
+                        break 
+                    end
+                end
+            end
+        end
+        if turn >= MAX_TURNS then
+            print("\n\27[31m[SYSTEM FATAL] Max turns reached. Aborting.\27[0m")
+            os.exit(1)
+        end
+    end
+    print("\n\27[32m[SYSTEM] Pipeline execution finished entirely.\27[0m")
+    os.remove(STATE_FILE)
+end
+
+if not restored then
+    -- [CONTEXT PRIMING]: Насыщение базовыми знаниями о проекте
+    local initial_msg = "TASK: " .. instruction
+    local docs_loaded = {}
+
+    -- 1. Сразу сканируем структуру проекта, чтобы Архитектор видел картину целиком
+    ctx.file_tree = utils.list_files_recursive(config.PROJECT_ROOT)
+
+    -- 2. Жестко ищем README.md
+    local readme_path = "README.md"
+    local readme_content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. readme_path)
+    if readme_content then
+        ctx:add_file(readme_path, readme_content)
+        table.insert(docs_loaded, readme_path)
+    end
+
+    -- 3. Сканируем file_tree на наличие других UPPERCASE.md файлов в корне
+    if ctx.file_tree then
+        for line in ctx.file_tree:gmatch("[^\r\n]+") do
+            local filepath = line:match("^(%S+)")
+            if filepath and filepath:lower() ~= "readme.md" then
+                -- Ищем файлы типа ARCHITECTURE.md, RULES.md в корне проекта
+                if not filepath:find("/") and filepath:match("^[A-Z0-9_-]+%.[mM][dD]$") then
+                    local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. filepath)
+                    if content then
+                        ctx:add_file(filepath, content)
+                        table.insert(docs_loaded, filepath)
+                    end
+                end
             end
         end
     end
 
-    if cmds_executed == 0 and CURRENT_STATE == STATES.AUTONOMOUS then
-        enter_repl(ctx)
-        turn = 0
-        transition = true
+    if #docs_loaded > 0 then
+        initial_msg = initial_msg .. "\n\n(Note: Auto-loaded core documentation: " .. table.concat(docs_loaded, ", ") .. ")"
     end
 
-    if tool_out ~= "" and not transition then
-        table.insert(ctx.chat_history, { role = "user", content = tool_out })
+    -- 4. В последнюю очередь грузим целевой файл (Target File)
+    if start_file then
+        local norm_start = utils.normalize_path(config.PROJECT_ROOT, start_file)
+        local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. norm_start)
+        if content then
+            ctx:add_file(norm_start, content)
+            initial_msg = initial_msg .. "\n(Note: I loaded target file '"..norm_start.."' for you)"
+        end
     end
+
+    -- 5. Защищенное извлечение первого агента (Архитектора)
+    local first_agent = "ARCHITECT"
+    if config.PIPELINE and config.PIPELINE and config.PIPELINE.agents and type(config.PIPELINE.agents) == "string" then
+        first_agent = config.PIPELINE.agents
+    end
+
+    -- 6. Отправляем обогащенный промпт
+    ctx:add_message(first_agent, "user", initial_msg)
 end
+
+execute_pipeline()
