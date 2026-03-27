@@ -15,10 +15,28 @@ function M.reset(self)
     self.file_states = {}
     self.search_history = {}
     self.chat_history = {}
+    self.thoughts = {}
     self.execution_plan = {}
     self.current_task_index = 1
     self.identity = nil
     self.file_tree = nil
+end
+
+function M.add_thought(self, turn, thought_text)
+    self.thoughts = self.thoughts or {}
+    table.insert(self.thoughts, { turn = turn, content = thought_text })
+    if #self.thoughts > 10 then
+        table.remove(self.thoughts, 1)
+    end
+end
+
+function M.get_thoughts_digest(self)
+    if not self.thoughts or #self.thoughts == 0 then return "" end
+    local out = {"\n=== AGENT RECENT THOUGHTS (Continuity) ==="}
+    for _, th in ipairs(self.thoughts) do
+        table.insert(out, string.format("--- Turn %d Thought ---\n%s", th.turn, th.content))
+    end
+    return table.concat(out, "\n")
 end
 
 function M.touch_file(self, path)
@@ -49,6 +67,7 @@ function M.snapshot(self)
         file_states = self.file_states,
         search_history = self.search_history,
         chat_history = self.chat_history,
+        thoughts = self.thoughts,
         execution_plan = self.execution_plan,
         current_task_index = self.current_task_index,
         identity = self.identity,
@@ -66,6 +85,7 @@ function M.load_from_snapshot(self, json_str)
     self.file_states = state.file_states or {}
     self.search_history = state.search_history or {}
     self.chat_history = state.chat_history or {}
+    self.thoughts = state.thoughts or {}
     self.execution_plan = state.execution_plan or {}
     self.current_task_index = state.current_task_index or 1
     self.identity = state.identity

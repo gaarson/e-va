@@ -51,6 +51,25 @@ describe("Context class", function()
             assert.are.equal(2, new_ctx.current_task_index)
         end)
 
+        it("should securely isolate and serialize agent thoughts", function()
+            ctx:add_thought(1, "I need to parse this in English")
+            ctx:add_thought(2, "Now applying patch")
+            
+            local state_json = ctx:snapshot()
+            local new_ctx = Context.new(mock_config)
+            new_ctx:load_from_snapshot(state_json)
+
+            local found_english = false
+            for _, th in pairs(new_ctx.thoughts or {}) do
+                if th.content and th.content:match("English") then found_english = true end
+            end
+            assert.is_true(found_english, "Failed to restore thoughts properly from JSON")
+            
+            local digest = new_ctx:get_thoughts_digest()
+            assert.truthy(digest:match("Turn 1 Thought"))
+            assert.truthy(digest:match("Now applying patch"))
+        end)
+
         it("should handle corrupted JSON during snapshot load gracefully", function()
             local ok, err = ctx:load_from_snapshot("{ bad_json: ")
             assert.is_false(ok)

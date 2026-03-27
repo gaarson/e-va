@@ -146,7 +146,7 @@ while turn < MAX_TURNS do
     end
 
     local messages = {}
-    local combined_system_prompt = full_system_prompt .. "\n\n" .. ctx:get_report(CURRENT_STATE) .. "\n\n" .. search_digest .. "\n\n" .. memory_block
+    local combined_system_prompt = full_system_prompt .. "\n\n" .. ctx:get_report(CURRENT_STATE) .. ctx:get_thoughts_digest() .. "\n\n" .. search_digest .. "\n\n" .. memory_block
     table.insert(messages, { role = "system", content = combined_system_prompt })
 
     local chat_buffer = {}
@@ -165,25 +165,58 @@ while turn < MAX_TURNS do
         end
     end
 
+    local total_ctx_tokens = ctx:estimate_tokens(combined_system_prompt)
+
     for _, msg in ipairs(chat_buffer) do
         local safe_role = msg.role
         if safe_role == "system" then safe_role = "user" end
         table.insert(messages, { role = safe_role, content = msg.content })
+        total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(msg.content)
     end
 
+    logger.info(string.format("[TURN %d] Phase: %s | Active Context Tokens: ~%d / %d", turn, CURRENT_STATE, total_ctx_tokens, limits.MAX_CONTEXT))
+
     local debug_dump = "=== SYSTEM ===\n" .. full_system_prompt .. "\n\n=== MEMORY ===\n" .. memory_block .. "\n\n=== CHAT HISTORY ===\n"
+
     for _, msg in ipairs(chat_buffer) do
         debug_dump = debug_dump .. string.format("[%s]: %s\n\n", string.upper(msg.role), msg.content or "")
     end
     logger.log_context(turn, CURRENT_STATE, debug_dump)
 
     local profile = (CURRENT_STATE == STATES.CODING) and config.LLM_MAIN or config.LLM_SCOUT
-    logger.info(string.format("[TURN %d] Phase: %s", turn, CURRENT_STATE))
     io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", CURRENT_STATE))
 
+    -- Stream Filter: подавляем вывод мыслей в консоль
+    local print_buf = ""
+    local in_thought = false
+    local tag_open = "<think>"
+    local tag_close = "</think>"
+
     local response_data, err = llm.send_request(profile, messages, {
-        on_token = function(t) io.write(t); io.flush() end
+        on_token = function(t)
+            print_buf = print_buf .. t
+            if not in_thought then
+                local s, e = print_buf:find(tag_open)
+                if s then
+                    io.write(print_buf:sub(1, s - 1)); io.flush()
+                    print_buf = print_buf:sub(e + 1)
+                    in_thought = true
+                elseif #print_buf > #tag_open then
+                    local safe_len = #print_buf - #tag_open
+                    io.write(print_buf:sub(1, safe_len)); io.flush()
+                    print_buf = print_buf:sub(safe_len + 1)
+                end
+            else
+                local s, e = print_buf:find(tag_close)
+                if s then
+                    print_buf = print_buf:sub(e + 1)
+                    in_thought = false
+                end
+            end
+        end
     })
+    
+    if print_buf ~= "" and not in_thought then io.write(print_buf) end
     io.write("\n")
 
     if not response_data then
@@ -191,8 +224,35 @@ while turn < MAX_TURNS do
         break
     end
 
-    local content = llm.extract_content(response_data) or ""
+    local raw_content = llm.extract_content(response_data) or ""
+    local thought = ""
+    local content = raw_content
+
+    -- Post-processor: вырезаем мысли даже если открывающий тег потерян
+    local end_idx = content:find("</think>")
+    if end_idx then
+        local start_idx = content:find("<think>")
+        if start_idx and start_idx < end_idx then
+            thought = content:sub(start_idx + 7, end_idx - 1)
+            content = content:sub(1, start_idx - 1) .. content:sub(end_idx + 8)
+        else
+            thought = content:sub(1, end_idx - 1)
+            content = content:sub(end_idx + 8)
+        end
+    else
+        local start_idx = content:find("<think>")
+        if start_idx then
+            thought = content:sub(start_idx + 7)
+            content = content:sub(1, start_idx - 1)
+        end
+    end
+
+    thought = require("utils").trim(thought)
+    content = require("utils").trim(content)
+
+    if thought ~= "" then ctx:add_thought(turn, thought) end
     table.insert(ctx.chat_history, { role = "assistant", content = content })
+
     logger.log_context(turn, CURRENT_STATE .. "_RESPONSE", content)
 
     local tool_out = ""
