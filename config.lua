@@ -19,12 +19,12 @@ function M.get()
     }
 
     local PARAMS_ARCHITECT = {
-        max_tokens = 16384, temperature = 0.1, top_p = 0.9,
+        max_tokens = 16384, temperature = 0.1, top_p = 0.5,
         repeat_penalty = 1.1, token_healing = true
     }
 
     local PARAMS_CODER = {
-        max_tokens = 16384, temperature = 0.2, top_p = 0.9,
+        max_tokens = 16384, temperature = 0.2, top_p = 0.4,
         repeat_penalty = 1.1
     }
 
@@ -43,8 +43,8 @@ function M.get()
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             params = merge(BASE_PARAMS, PARAMS_ARCHITECT),
             prompt_file = "prompts/architect.md",
-            -- Архитектор только читает и планирует
-            allowed_tools = { "read_file", "read_chunk", "search", "list_files", "delegate_plan" }
+            -- Добавлен ask_user для запроса уточнений
+            allowed_tools = { "read_file", "read_chunk", "search", "list_files",  "shell", "delegate_plan", "ask_user", "task_complete" }
         },
         CODER = {
             name = "CODER",
@@ -52,7 +52,6 @@ function M.get()
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             params = merge(BASE_PARAMS, PARAMS_CODER),
             prompt_file = "prompts/coder.md",
-            -- Кодер мутирует код и запускает тесты
             allowed_tools = { "patch", "create_file", "shell", "read_file", "search", "rollback", "cleanup_baks", "task_complete" }
         }
     }
@@ -60,9 +59,9 @@ function M.get()
     -- [ОРКЕСТРАЦИЯ ПАЙПЛАЙНА]
     cfg.PIPELINE = {
         { stage = "ANALYSIS_AND_PLANNING", agents = { "ARCHITECT" }, mode = "sequential" },
+        -- Новый интерактивный слот: Агент будет ждать ввода пользователя
+        { stage = "REVIEW_AND_CHAT", agents = { "ARCHITECT" }, mode = "interactive" },
         { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
-        -- Если потребуется параллелизм в будущем (например, два ревьюера):
-        -- { stage = "REVIEW", agents = { "SECURITY_AUDITOR", "PERFORMANCE_AUDITOR" }, mode = "parallel" }
     }
 
     return cfg

@@ -32,6 +32,26 @@ function M.add_message(self, agent_name, role, content)
     table.insert(history, { role = role, content = content })
 end
 
+function M.drop_last_message(self, agent_name)
+    local history = self:get_history(agent_name)
+    if #history > 0 then
+        table.remove(history)
+        return true
+    end
+    return false
+end
+
+function M.replace_last_assistant_message(self, agent_name, new_content)
+    local history = self:get_history(agent_name)
+    for i = #history, 1, -1 do
+        if history[i].role == "assistant" then
+            history[i].content = new_content
+            return true
+        end
+    end
+    return false
+end
+
 function M.add_thought(self, turn, thought_text)
     self.thoughts = self.thoughts or {}
     table.insert(self.thoughts, { turn = turn, content = thought_text })

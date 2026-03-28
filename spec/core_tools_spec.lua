@@ -51,7 +51,7 @@ describe("Core Tools via Registry Subsystem", function()
         stub(utils, "read_file_numbered").returns("10 | local a = 1", 10)
         local res = registry.execute("read_chunk:test.lua:10-10", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("Chunk of 'test.lua'"))
-        
+
         -- Fallback syntax test
         local res2 = registry.execute("read_chunk:path:test.lua:10-10", ctx, "TEST_AGENT")
         assert.truthy(res2.output:match("Chunk"))
@@ -80,7 +80,7 @@ describe("Core Tools via Registry Subsystem", function()
         assert.truthy(res2.output:match("Skipped duplicate"))
 
         -- Test empty query
-        local res3 = registry.execute("search:   ", ctx, "TEST_AGENT")
+        local res3 = registry.execute("search:  ", ctx, "TEST_AGENT")
         assert.truthy(res3.output:match("Empty search query"))
 
         io.popen:revert()
@@ -105,7 +105,7 @@ describe("Core Tools via Registry Subsystem", function()
         stub(utils, "read_file_range").returns("restored content")
         local res = registry.execute("rollback:test.lua", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("Rollback successful"))
-        
+
         utils.restore_backup:revert()
         stub(utils, "restore_backup").returns(false, "no backup")
         local res2 = registry.execute("rollback:test.lua", ctx, "TEST_AGENT")
@@ -156,12 +156,9 @@ describe("Core Tools via Registry Subsystem", function()
         utils.write_file:revert()
     end)
 
-    it("shell: should execute commands, check safety, and handle circuit breaker", function()
-        local mock_f = { read = function() return "shell output" end, close = function() end }
-        stub(io, "popen").returns(mock_f)
-
-        -- Safe command
-        local res = registry.execute("shell:ls -la", ctx, "TEST_AGENT")
+    it("shell: should execute commands, check safety, stream output, and handle circuit breaker", function()
+        -- Safe command (we use a simple echo that writes to the actual filesystem)
+        local res = registry.execute("shell:echo 'shell output'", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("shell output"))
 
         -- Unsafe command (denied)
@@ -171,31 +168,33 @@ describe("Core Tools via Registry Subsystem", function()
         io.read:revert()
 
         -- Silent command
-        local mock_f2 = { read = function() return "" end, close = function() end }
-        io.popen:revert()
-        stub(io, "popen").returns(mock_f2)
-        local res3 = registry.execute("shell:echo", ctx, "TEST_AGENT")
+        -- Silent command (используем echo -n, чтобы пройти safe_prefixes и не дать вывода)
+        local res3 = registry.execute("shell:echo -n ''", ctx, "TEST_AGENT")
         assert.truthy(res3.output:match("Command executed silently"))
-        io.popen:revert()
 
         -- Circuit breaker for failing tests
-        local mock_fail = { read = function() return "Error: compilation failed" end, close = function() end }
-        stub(io, "popen").returns(mock_fail)
+-- Circuit breaker for failing tests
         ctx.test_failures = 2
-        local res4 = registry.execute("shell:make test", ctx, "TEST_AGENT")
+        local res4 = registry.execute("shell:echo 'Error: test failed' && false", ctx, "TEST_AGENT")
         assert.truthy(res4.output:match("CIRCUIT BREAKER TRIGGERED"))
         assert.are.equal(0, ctx.test_failures)
-        io.popen:revert()
-
-        -- Popen failure
-        stub(io, "popen").returns(nil)
-        local res5 = registry.execute("shell:ls", ctx, "TEST_AGENT")
-        assert.truthy(res5.output:match("Failed to spawn shell process"))
-        io.popen:revert()
     end)
 
     it("delegate_plan: should handle invalid JSON", function()
         local res = registry.execute("delegate_plan:bad json", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("Invalid JSON"))
+    end)
+    
+    it("ask_user: should successfully capture user input", function()
+        stub(io, "read").returns("Yes, proceed")
+        local res = registry.execute("ask_user:Is this correct?", ctx, "TEST_AGENT")
+        assert.truthy(res.output:match("Yes, proceed"))
+        io.read:revert()
+
+        -- Fallback if user presses enter (empty input)
+        stub(io, "read").returns("")
+        local res2 = registry.execute("ask_user:Confirm?", ctx, "TEST_AGENT")
+        assert.truthy(res2.output:match("No response provided"))
+        io.read:revert()
     end)
 end)

@@ -38,6 +38,9 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should successfully bootstrap, execute pipeline, and exit cleanly", function()
+        -- Эмулируем чтение ввода (для интерактивной стадии)
+        stub(io, "read").returns("/continue")
+
         llm_handler.send_request = function(profile, messages)
             -- Симулируем корректные ответы агентов для завершения стадий
             if profile.name == "ARCHITECT" then
@@ -62,9 +65,12 @@ describe("Agent Control Plane (Integration)", function()
 
         local f = io.open(test_state_file, "r")
         assert.is_nil(f, "State file should be removed on graceful exit")
+
+        io.read:revert()
     end)
 
     it("should truncate chat history correctly to respect the chat_budget", function()
+        stub(io, "read").returns("/continue")
         local llm_calls = 0
         llm_handler.send_request = function(profile, messages)
             llm_calls = llm_calls + 1
@@ -75,7 +81,7 @@ describe("Agent Control Plane (Integration)", function()
         for i=1, 50 do
             table.insert(heavy_history, { role = "user", content = string.rep("WORD ", 1000) })
         end
-        
+
         local Context = require("context")
         local fake_ctx = Context.new({ PIPELINE = { {stage="TEST", agents={"ARCHITECT"}, mode="sequential"} }, AGENTS={ARCHITECT={}}, LIMITS = { MAX_CONTEXT = 100000 }})
         -- Загружаем историю в правильный контейнер
@@ -88,9 +94,11 @@ describe("Agent Control Plane (Integration)", function()
         pcall(function() chunk("dummy_file.txt", "Task with heavy history") end)
 
         assert.is_true(llm_calls > 0, "LLM should have been called")
+        io.read:revert()
     end)
 
-    it("should extract thoughts and strip them from chat history even if <think> tag is missing", function()
+    it("should preserve thoughts in chat history to maintain Chain-of-Thought continuity", function()
+        stub(io, "read").returns("/continue")
         local raw_content_missing_start = "This is a leaked thought in English.\nLet's write code.\n</think>\nПривет, я всё сделал.\n<cmd>delegate_plan:[{\"file\": \"dummy.txt\", \"instruction\": \"init\"}]</cmd>"
 
         llm_handler.send_request = function(profile)
@@ -125,10 +133,47 @@ describe("Agent Control Plane (Integration)", function()
             end
         end
 
-        assert.falsy(assistant_msg:match("leaked thought"), "Thought was not stripped from history!")
+        -- КРИТИЧЕСКИЙ ФИКС: Убеждаемся, что мысль ОСТАЛАСЬ в истории
+        assert.truthy(assistant_msg:match("leaked thought"), "Thought MUST be preserved in history for CoT continuity!")
         assert.truthy(assistant_msg:match("Привет, я всё сделал"), "Russian communication was lost!")
         assert.truthy(captured_ctx.thoughts, "Thoughts table missing")
         assert.is_true(#captured_ctx.thoughts > 0, "Thought was not saved to isolation context!")
         assert.truthy(captured_ctx.thoughts[#captured_ctx.thoughts].content:match("Let's write code"), "Thought content is incorrect!")
+        io.read:revert()
+    end)
+
+    it("should handle interactive pipeline stage text injection", function()
+        -- Моделируем ситуацию: на интерактивной стадии юзер вводит текст, затем /continue
+        local read_count = 0
+        stub(io, "read").invokes(function()
+            read_count = read_count + 1
+            if read_count == 1 then return "Change the plan slightly" end
+            return "/continue"
+        end)
+        
+        local llm_called_after_input = false
+        llm_handler.send_request = function(profile, messages)
+            -- Проверяем, что сообщение дошло до LLM
+            if messages[#messages].content == "Change the plan slightly" then
+                llm_called_after_input = true
+            end
+            return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
+        end
+        
+        -- Устанавливаем пайплайн только с одной интерактивной стадией для скорости
+        local Context = require("context")
+        local original_new = Context.new
+        Context.new = function(cfg)
+            cfg.PIPELINE = { { stage = "REVIEW", agents = {"ARCHITECT"}, mode = "interactive" } }
+            return original_new(cfg)
+        end
+        
+        local chunk = loadfile("agent.lua")
+        pcall(function() chunk("dummy.txt", "test") end)
+        
+        assert.is_true(llm_called_after_input, "LLM was not triggered after manual user input in interactive mode")
+        
+        Context.new = original_new
+        io.read:revert()
     end)
 end)

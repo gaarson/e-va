@@ -17,7 +17,7 @@ describe("LLM Handler (Network & Parsing)", function()
         orig_new_from_uri = http_request.new_from_uri
         orig_decode = json.decode
         orig_encode = json.encode
-        
+
         -- Бронебойная заглушка: возвращаем таблицу, достаточную для прохождения
         -- всех внутренних проверок (if ok and part.choices...) внутри llm_handler
         json.encode = function() return "{}" end
@@ -36,7 +36,7 @@ describe("LLM Handler (Network & Parsing)", function()
         local mock_req = { headers = { upsert = function() end }, set_body = function() end, go = function() return nil, "timeout" end }
         http_request.new_from_uri = function() return mock_req end
         assert.is_nil(llm_handler.send_request(mock_profile, {}))
-        
+
         mock_req.go = function(self)
             if not self.c then self.c = true return {}, {} end
             return nil, "fail"
@@ -53,7 +53,7 @@ describe("LLM Handler (Network & Parsing)", function()
             go = function() return { get = function() return "200" end }, { get_body_as_string = function() return "{}" end } end
         }
         http_request.new_from_uri = function() return mock_req end
-        
+
         local res = llm_handler.send_request(mock_profile, {})
         assert.is_table(res)
     end)
@@ -69,7 +69,7 @@ describe("LLM Handler (Network & Parsing)", function()
             end
         }
         http_request.new_from_uri = function() return mock_req end
-        
+
         -- Вызываем с on_token, чтобы покрыть 100% веток внутри цикла
         local res = llm_handler.send_request(mock_profile, {}, { on_token = function() end })
         assert.is_table(res)
