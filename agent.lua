@@ -91,8 +91,14 @@ end
 
 -- Основная функция хода агента
 local function run_agent_turn(agent_name, agent_cfg, turn)
+    local synced_files = ctx:sync_files()
+    if #synced_files > 0 then
+        logger.info(string.format("[FS WATCHER] Auto-synced %d changed file(s): %s", #synced_files, table.concat(synced_files, ", ")))
+    end
+
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
+
     local memory_budget = math.floor(available_tokens * limits.MEMORY_RATIO)
     local chat_budget = available_tokens - memory_budget
 

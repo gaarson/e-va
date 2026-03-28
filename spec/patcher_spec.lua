@@ -117,6 +117,21 @@ Some LLM commentary here...
         assert.truthy(err_msg:match("No valid SEARCH/REPLACE blocks found"))
     end)
 
+    it("7. [ZERO-OP] Should trigger circuit breaker on identical search/replace blocks", function()
+        local patch = [[
+<<<<<<< SEARCH
+    local result = a + b
+    return result
+=======
+    local result = a + b
+    return result
+>>>>>>> REPLACE
+]]
+        local ok, err_msg = patcher.apply_patch(source_code, patch)
+        assert.is_false(ok)
+        assert.truthy(err_msg:match("EXACTLY identical"))
+    end)
+
     it("6. [EDGE CASE] Should handle CRLF (\\r\\n) vs LF (\\n) line endings seamlessly", function()
         local crlf_source = source_code:gsub("\n", "\r\n")
         local patch = [[

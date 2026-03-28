@@ -32,6 +32,31 @@ describe("Context class", function()
         assert.are.equal(3, cost)
     end)
 
+    it("should handle has_searched and search_summary reporting", function()
+        assert.is_false(ctx:has_searched("test"))
+        ctx:add_search_result("test", "result")
+        assert.is_true(ctx:has_searched("test"))
+        
+        local report = ctx:get_report("CODER")
+        assert.truthy(report:match("SEARCH HISTORY"))
+    end)
+
+    it("should safely truncate huge file trees in report", function()
+        ctx.file_tree = string.rep("A", 100005)
+        local report = ctx:get_report("ARCHITECT")
+        assert.truthy(report:match("TREE TRUNCATED"))
+    end)
+    
+    it("get_memory_block target OOM branch", function()
+        ctx.execution_plan = { { file = "huge.txt" } }
+        ctx.current_task_index = 1
+        ctx:add_file("huge.txt", string.rep("A", 50000))
+        -- Force small budget
+        local block = ctx:get_memory_block(10) 
+        -- It should still include it partially or fail gracefully without crashing
+        assert.truthy(block) 
+    end)
+
     describe("Serialization and State Management", function()
         it("should correctly snapshot and restore full context state", function()
             ctx:add_file("core.c", "int main() {}")
@@ -124,13 +149,16 @@ describe("Context class", function()
     describe("Context Squashing (ReAct Optimization)", function()
         it("should successfully squash heavy patch blocks from assistant history", function()
             local raw_msg = "Here is the fix:\n<cmd>patch:file.c\n<<<<<<< SEARCH\nbad_code\n=======\ngood_code\n>>>>>>> REPLACE\n</cmd>"
-            table.insert(ctx.chat_history, { role = "user", content = "Fix it" })
-            table.insert(ctx.chat_history, { role = "assistant", content = raw_msg })
             
-            local squashed = ctx:squash_last_mutation()
-            
+            ctx:add_message("CODER", "user", "Fix it")
+            ctx:add_message("CODER", "assistant", raw_msg)
+
+            local squashed = ctx:squash_last_mutation("CODER")
+
             assert.is_true(squashed)
-            local final_content = ctx.chat_history[#ctx.chat_history].content
+            local history = ctx:get_history("CODER")
+            local final_content = history[#history].content
+            
             -- Убеждаемся, что старый код вырезан
             assert.falsy(final_content:match("bad_code"))
             assert.falsy(final_content:match("<<<<<<< SEARCH"))
@@ -139,4 +167,27 @@ describe("Context class", function()
             assert.truthy(final_content:match("Changes are in memory"))
         end)
     end)
-end)
+
+    describe("File Synchronization (FS Watcher)", function()
+        it("should detect external changes on disk and update knowledge_base", function()
+            local utils = require("utils")
+            local test_file = "sync_test.txt"
+            
+            utils.write_file(test_file, "old code")
+            ctx.config.PROJECT_ROOT = "."
+            ctx:add_file(test_file, "old code")
+            
+            utils.write_file(test_file, "new fast code")
+            
+            local synced = ctx:sync_files()
+            
+            assert.are.equal(1, #synced)
+            
+            assert.same({test_file}, synced)
+
+            assert.are.equal("new fast code", ctx.knowledge_base[test_file])            
+            os.remove(test_file)
+        end)
+    end)
+    
+ end)

@@ -187,21 +187,46 @@ local function init_core_tools()
         end
     end)
 
-    -- [НОВЫЕ ИНСТРУМЕНТЫ ДЛЯ МУЛЬТИ-АГЕНТНОСТИ]
     registry.register("delegate_plan", "Pass execution plan to next stage", function(args, ctx, agent_name)
-        -- Парсим JSON и возможный тег <memo>
         local json_match = args:match("(%[.-%])") or args
         local memo_match = args:match("<memo>(.-)</memo>") or ""
-        
+
         local status, plan = pcall(function() return json:decode(json_match) end)
         if status and type(plan) == "table" and #plan > 0 then
             ctx.execution_plan = plan
             if memo_match ~= "" then ctx.handoff_memo = require("utils").trim(memo_match) end
-            
-            return { output = "\n[SYSTEM]: Plan delegated successfully. Handing over to implementation.", signal = "PIPELINE_NEXT_STAGE" }
+
+            -- [NEW PRE-FETCHING]: Агрессивная загрузка целевых файлов для следующего агента
+            local loaded_files = {}
+            for _, task in ipairs(plan) do
+                if task.file then
+                    local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, task.file)
+                    -- Загружаем, только если файла еще нет в памяти
+                    if not ctx.knowledge_base[rel_path] then
+                        local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
+                        local content = utils.read_file_range(full_path)
+                        if content then
+                            ctx:add_file(rel_path, content)
+                            table.insert(loaded_files, rel_path)
+                        end
+                    end
+                end
+            end
+
+            local auto_msg = ""
+            if #loaded_files > 0 then
+                auto_msg = " Auto-loaded targets into context: " .. table.concat(loaded_files, ", ")
+            end
+
+            return { output = "\n[SYSTEM]: Plan delegated successfully." .. auto_msg, signal = "PIPELINE_NEXT_STAGE" }
         end
-        return { output = "\n[ERROR]: Invalid JSON plan format. Please provide a valid JSON array." }
+        return { output = "\n[ERROR]: Invalid JSON plan format. Please provide a valid JSON array.", signal = nil }
     end)
+
+    registry.register("task_complete", "Signal pipeline completion", function(args, ctx, agent_name)
+        return { output = "\n[SYSTEM]: Task marked as complete.", signal = "PIPELINE_NEXT_STAGE" }
+    end)
+
 end
 
 return { init = init_core_tools }

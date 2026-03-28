@@ -1,0 +1,16 @@
+return {
+   exclude = {
+      "lua_modules",
+      "spec",
+   },
+   include = {
+      "agent",
+      "context",
+      "core_tools",
+      "llm_handler",
+      "logger",
+      "patcher",
+      "tool_registry",
+      "utils",
+   }
+}

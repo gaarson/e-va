@@ -48,4 +48,17 @@ describe("Logger Subsystem", function()
         -- КРИТИЧЕСКИЙ ФИКС: Используем .* для обхода невидимого ANSI-кода \27[0m
         assert.truthy(stderr_capture:match("%[ERROR%].*Critical failure"))
     end)
+
+    it("should print warnings and handle file contexts", function()
+        logger.warn("Warning test", { alert = true })
+        assert.truthy(print_capture:match("%[WARN%].*Warning test"))
+        
+        -- Mock io.open to test log_context failure branch
+        local original_open = io.open
+        io.open = function() return nil end
+        logger.log_context(1, "test", "data")
+        assert.truthy(stderr_capture:match("LOGGER FATAL"))
+        io.open = original_open
+    end)
+
 end)

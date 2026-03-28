@@ -248,4 +248,22 @@ function M.get_report(self, agent_name)
     )
 end
 
+function M.sync_files(self)
+    local utils = require("utils")
+    local updated_files = {}
+    
+    for path, old_content in pairs(self.knowledge_base) do
+        local full_path = self.config.PROJECT_ROOT .. "/" .. path
+        local new_content = utils.read_file_range(full_path)
+        
+        -- Если файл существует и его содержимое отличается от кэша
+        if new_content and new_content ~= old_content then
+            self.knowledge_base[path] = new_content
+            table.insert(updated_files, path)
+        end
+    end
+    
+    return updated_files
+end
+
 return M
