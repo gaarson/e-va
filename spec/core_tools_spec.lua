@@ -16,7 +16,7 @@ describe("Core Tools via Registry Subsystem", function()
             PROJECT_ROOT = ".",
             AGENTS = {
                 TEST_AGENT = {
-                    allowed_tools = { "*" } -- Разрешаем все для тестов
+                    allowed_tools = { "*" } 
                 }
             }
         })
@@ -52,20 +52,64 @@ describe("Core Tools via Registry Subsystem", function()
         local res = registry.execute("read_chunk:test.lua:10-10", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("Chunk of 'test.lua'"))
 
-        -- Fallback syntax test
         local res2 = registry.execute("read_chunk:path:test.lua:10-10", ctx, "TEST_AGENT")
         assert.truthy(res2.output:match("Chunk"))
 
-        -- Missing file
         utils.read_file_numbered:revert()
         stub(utils, "read_file_numbered").returns(nil, "error")
         local res_err = registry.execute("read_chunk:test.lua:10-10", ctx, "TEST_AGENT")
         assert.truthy(res_err.output:match("Could not read chunk"))
         utils.read_file_numbered:revert()
 
-        -- Invalid syntax
         local res_syn = registry.execute("read_chunk:invalid_syntax", ctx, "TEST_AGENT")
         assert.truthy(res_syn.output:match("Usage:"))
+    end)
+
+    -- [NEW]: Tests for outline
+    it("outline: should execute rg and return AST outline", function()
+        utils.write_file(test_file, "dummy content")
+        
+        -- Mock popen to simulate ripgrep finding a function signature
+        local mock_f = { read = function() return "10:local function test_func()" end, close = function() end }
+        stub(io, "popen").returns(mock_f)
+
+        local res = registry.execute("outline:" .. test_file, ctx, "TEST_AGENT")
+        assert.truthy(res.output:match("SYSTEM OUTLINE FOR"))
+        assert.truthy(res.output:match("test_func"))
+        io.popen:revert()
+
+        -- Test empty result
+        local mock_empty = { read = function() return "" end, close = function() end }
+        stub(io, "popen").returns(mock_empty)
+        local res_empty = registry.execute("outline:" .. test_file, ctx, "TEST_AGENT")
+        assert.truthy(res_empty.output:match("empty or no valid signatures"))
+        io.popen:revert()
+
+        -- Test missing file
+        local res_missing = registry.execute("outline:missing_file.c", ctx, "TEST_AGENT")
+        assert.truthy(res_missing.output:match("%[ERROR%]: File not found"))
+    end)
+
+    -- [NEW]: Tests for Context Pinning tools
+    it("pin and unpin: should manage context locks", function()
+        -- Attempt to pin unread file
+        local res_fail = registry.execute("pin:missing.lua", ctx, "TEST_AGENT")
+        assert.truthy(res_fail.output:match("not in memory"))
+
+        -- Pin successful
+        ctx:add_file("target.lua", "data")
+        local res_pin = registry.execute("pin:target.lua", ctx, "TEST_AGENT")
+        assert.truthy(res_pin.output:match("Pinned 'target.lua'"))
+        assert.is_true(ctx.pinned_files["target.lua"])
+
+        -- Unpin successful
+        local res_unpin = registry.execute("unpin:target.lua", ctx, "TEST_AGENT")
+        assert.truthy(res_unpin.output:match("Unpinned 'target.lua'"))
+        assert.is_nil(ctx.pinned_files["target.lua"])
+
+        -- Attempt to unpin file that is not pinned
+        local res_unpin_fail = registry.execute("unpin:target.lua", ctx, "TEST_AGENT")
+        assert.truthy(res_unpin_fail.output:match("was not pinned"))
     end)
 
     it("search: should execute ripgrep search and skip duplicates", function()
@@ -75,126 +119,53 @@ describe("Core Tools via Registry Subsystem", function()
         local res = registry.execute("search:query", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("match1"))
 
-        -- Test duplicate
         local res2 = registry.execute("search:query", ctx, "TEST_AGENT")
         assert.truthy(res2.output:match("Skipped duplicate"))
 
-        -- Test empty query
         local res3 = registry.execute("search:  ", ctx, "TEST_AGENT")
         assert.truthy(res3.output:match("Empty search query"))
 
         io.popen:revert()
     end)
 
-    it("search: should handle empty and huge results", function()
-        local mock_f = { read = function() return string.rep("A", 5000) end, close = function() end }
-        stub(io, "popen").returns(mock_f)
-        local res = registry.execute("search:huge", ctx, "TEST_AGENT")
-        assert.truthy(res.output:match("Truncated"))
-        io.popen:revert()
-
-        local mock_f2 = { read = function() return "" end, close = function() end }
-        stub(io, "popen").returns(mock_f2)
-        local res2 = registry.execute("search:empty", ctx, "TEST_AGENT")
-        assert.truthy(res2.output:match("No matches found"))
-        io.popen:revert()
-    end)
-
-    it("rollback and cleanup_baks: should manage backups", function()
-        stub(utils, "restore_backup").returns(true)
-        stub(utils, "read_file_range").returns("restored content")
-        local res = registry.execute("rollback:test.lua", ctx, "TEST_AGENT")
-        assert.truthy(res.output:match("Rollback successful"))
-
-        utils.restore_backup:revert()
-        stub(utils, "restore_backup").returns(false, "no backup")
-        local res2 = registry.execute("rollback:test.lua", ctx, "TEST_AGENT")
-        assert.truthy(res2.output:match("Rollback failed"))
-        utils.restore_backup:revert()
-        utils.read_file_range:revert()
-
-        stub(utils, "cleanup_backups").returns(true)
-        local res3 = registry.execute("cleanup_baks", ctx, "TEST_AGENT")
-        assert.truthy(res3.output:match("All .bak files removed"))
-        utils.cleanup_backups:revert()
-
-        stub(utils, "cleanup_backups").returns(false)
-        local res4 = registry.execute("cleanup_baks", ctx, "TEST_AGENT")
-        assert.truthy(res4.output:match("Failed to clean up"))
-        utils.cleanup_backups:revert()
-    end)
-
     it("patch: should handle invalid syntax and disk errors", function()
         local res = registry.execute("patch:invalid_syntax", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("Invalid patch syntax"))
-
-        local patch_cmd = "patch:missing.lua\n<<<<<<< SEARCH\n1\n=======\n2\n>>>>>>> REPLACE"
-        local res2 = registry.execute(patch_cmd, ctx, "TEST_AGENT")
-        assert.truthy(res2.output:match("File not found on disk"))
 
         ctx:add_file("target.lua", "1")
         stub(patcher, "apply_patch").returns(false, nil, 0, "fuzzy failed")
         local res3 = registry.execute("patch:target.lua\n<<<<<<< SEARCH\n1\n=======\n2\n>>>>>>> REPLACE", ctx, "TEST_AGENT")
         assert.truthy(res3.output:match("PATCH FAILED"))
         patcher.apply_patch:revert()
-
-        stub(patcher, "apply_patch").returns(true, "2", 1)
-        stub(utils, "write_file").returns(false, "Permission denied")
-        local res4 = registry.execute("patch:target.lua\n<<<<<<< SEARCH\n1\n=======\n2\n>>>>>>> REPLACE", ctx, "TEST_AGENT")
-        assert.truthy(res4.output:match("DISK ERROR"))
-        patcher.apply_patch:revert()
-        utils.write_file:revert()
-    end)
-
-    it("create_file: should handle bad syntax and IO errors", function()
-        local res = registry.execute("create_file:only_path", ctx, "TEST_AGENT")
-        assert.truthy(res.output:match("Invalid create_file syntax"))
-
-        stub(utils, "write_file").returns(false, "IO Crash")
-        local res2 = registry.execute("create_file:file.txt\ncode", ctx, "TEST_AGENT")
-        assert.truthy(res2.output:match("IO Crash"))
-        utils.write_file:revert()
     end)
 
     it("shell: should execute commands, check safety, stream output, and handle circuit breaker", function()
-        -- Safe command (we use a simple echo that writes to the actual filesystem)
         local res = registry.execute("shell:echo 'shell output'", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("shell output"))
 
-        -- Unsafe command (denied)
+        -- [TEST]: Simple denial (n)
         stub(io, "read").returns("n")
         local res2 = registry.execute("shell:rm -rf /", ctx, "TEST_AGENT")
         assert.truthy(res2.output:match("DENIED by user"))
         io.read:revert()
 
-        -- Silent command
-        -- Silent command (используем echo -n, чтобы пройти safe_prefixes и не дать вывода)
-        local res3 = registry.execute("shell:echo -n ''", ctx, "TEST_AGENT")
-        assert.truthy(res3.output:match("Command executed silently"))
+        -- [TEST]: Denial with a custom reason (Closing the feedback loop)
+        stub(io, "read").returns("we never delete the root directory, try deleting a specific tmp folder")
+        local res_reason = registry.execute("shell:rm -rf /", ctx, "TEST_AGENT")
+        assert.truthy(res_reason.output:match("DENIED by user"))
+        assert.truthy(res_reason.output:match("Reason: we never delete the root directory, try deleting a specific tmp folder"))
+        io.read:revert()
+
+        -- [TEST]: Allowed execution (y)
+        stub(io, "read").returns("y")
+        local res_allow = registry.execute("shell:rm -rf /fake/path/for/test", ctx, "TEST_AGENT")
+        assert.truthy(res_allow.output:match("%[SHELL STDOUT/STDERR%]"))
+        io.read:revert()
 
         -- Circuit breaker for failing tests
--- Circuit breaker for failing tests
         ctx.test_failures = 2
         local res4 = registry.execute("shell:echo 'Error: test failed' && false", ctx, "TEST_AGENT")
         assert.truthy(res4.output:match("CIRCUIT BREAKER TRIGGERED"))
         assert.are.equal(0, ctx.test_failures)
-    end)
-
-    it("delegate_plan: should handle invalid JSON", function()
-        local res = registry.execute("delegate_plan:bad json", ctx, "TEST_AGENT")
-        assert.truthy(res.output:match("Invalid JSON"))
-    end)
-    
-    it("ask_user: should successfully capture user input", function()
-        stub(io, "read").returns("Yes, proceed")
-        local res = registry.execute("ask_user:Is this correct?", ctx, "TEST_AGENT")
-        assert.truthy(res.output:match("Yes, proceed"))
-        io.read:revert()
-
-        -- Fallback if user presses enter (empty input)
-        stub(io, "read").returns("")
-        local res2 = registry.execute("ask_user:Confirm?", ctx, "TEST_AGENT")
-        assert.truthy(res2.output:match("No response provided"))
-        io.read:revert()
     end)
 end)

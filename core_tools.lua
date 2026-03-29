@@ -146,17 +146,24 @@ local function init_core_tools()
         local cmd = utils.trim(args)
         local safe_prefixes = { "ls", "cat", "grep", "rg", "echo", "pwd", "ps", "find", "head", "tail", "whoami", "make", "test" }
         local is_safe = false
-        
+
         for _, prefix in ipairs(safe_prefixes) do
             if cmd:match("^" .. prefix .. "%s") or cmd == prefix then is_safe = true; break end
         end
 
         if not is_safe then
             io.write(string.format("\n\27[31m[SECURITY WARNING]\27[0m Agent '%s' wants to execute: \27[33m%s\27[0m\n", agent_name, cmd))
-            io.write("Allow execution? [y/N]: ")
-            local ans = io.read("*l")
-            if not ans or ans:lower() ~= "y" then
+            io.write("Allow execution? (y = yes, n = no, or type a reason to deny): ")
+            local raw_ans = io.read("*l")
+            local ans = utils.trim(raw_ans or "n")
+
+            if ans:lower() == "y" or ans:lower() == "yes" then
+                -- Execution allowed, proceed
+            elseif ans == "" or ans:lower() == "n" or ans:lower() == "no" then
                 return { output = "\n[SYSTEM]: Command execution DENIED by user. Do not try this command again." }
+            else
+                -- User provided a specific string reason for denial
+                return { output = string.format("\n[SYSTEM]: Command execution DENIED by user. Reason: %s", ans) }
             end
         end
 
@@ -287,6 +294,56 @@ local function init_core_tools()
             return { output = "\n[USER REPLY]: (No response provided by user. Proceed with your best judgment.)" }
         end
         return { output = "\n[USER REPLY]: " .. ans }
+    end)
+
+    registry.register("outline", "Generates an AST-like outline of a file (functions, classes, structs)", function(args, ctx, agent_name)
+        local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
+        local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
+        
+        -- Убеждаемся, что файл существует
+        local f = io.open(full_path, "r")
+        if not f then return { output = "\n[ERROR]: File not found: " .. rel_path } end
+        f:close()
+
+        -- Регулярное выражение для rg, захватывающее сигнатуры C, Lua, JS/TS, Python
+        local safe_path = utils.shell_quote(full_path)
+        local rg_regex = "'^\\s*(local\\s+)?(function|class|struct|interface|type)\\s+|^\\s*[a-zA-Z_]\\w*\\s+\\*?[a-zA-Z_]\\w*\\s*\\([^;]*\\)\\s*\\{?'"
+        local cmd = string.format("rg -n -e %s --color never %s | head -n 100", rg_regex, safe_path)
+        
+        local p = io.popen(cmd)
+        local res = p:read("*a") or ""
+        p:close()
+
+        if #res == 0 then
+            return { output = "\n[SYSTEM]: Outline for " .. rel_path .. " is empty or no valid signatures found." }
+        end
+
+        return { output = string.format("\n[SYSTEM OUTLINE FOR %s]:\n```\n%s\n```", rel_path, utils.trim(res)) }
+    end)
+
+    -- [NEW]: Context Pinning
+    registry.register("pin", "Pins a loaded file in memory so it is never evicted", function(args, ctx, agent_name)
+        local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
+        
+        -- Пин возможен только если файл уже в knowledge_base
+        if not ctx.knowledge_base[rel_path] then
+            return { output = "\n[ERROR]: File '" .. rel_path .. "' is not in memory. Use <cmd>read_file:" .. rel_path .. "</cmd> first." }
+        end
+
+        if ctx:pin_file(rel_path) then
+            return { output = "\n[SYSTEM]: Pinned '" .. rel_path .. "' to permanent memory block." }
+        else
+            return { output = "\n[ERROR]: Failed to pin '" .. rel_path .. "'." }
+        end
+    end)
+
+    registry.register("unpin", "Unpins a file from permanent memory", function(args, ctx, agent_name)
+        local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
+        if ctx:unpin_file(rel_path) then
+            return { output = "\n[SYSTEM]: Unpinned '" .. rel_path .. "'." }
+        else
+            return { output = "\n[ERROR]: '" .. rel_path .. "' was not pinned." }
+        end
     end)
 
 end

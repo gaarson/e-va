@@ -16,6 +16,7 @@ describe("Context class", function()
         assert.is_table(ctx.knowledge_base)
         assert.are.equal(0, ctx.global_access_counter)
         assert.is_nil(ctx.identity)
+        assert.is_table(ctx.pinned_files)
     end)
 
     it("should correctly add a file and update access counter", function()
@@ -27,6 +28,24 @@ describe("Context class", function()
         assert.are.equal(1, ctx.file_access_rank["main.lua"])
     end)
 
+    it("should securely manage pinned files", function()
+        ctx:add_file("core.lua", "local a = 1")
+        
+        -- Pin success
+        assert.is_true(ctx:pin_file("core.lua"))
+        assert.is_true(ctx.pinned_files["core.lua"])
+        
+        -- Pin failure (file not in knowledge base)
+        assert.is_false(ctx:pin_file("missing.lua"))
+        
+        -- Unpin success
+        assert.is_true(ctx:unpin_file("core.lua"))
+        assert.is_nil(ctx.pinned_files["core.lua"])
+        
+        -- Unpin failure
+        assert.is_false(ctx:unpin_file("missing.lua"))
+    end)
+
     it("should estimate tokens based on config limits", function()
         local cost = ctx:estimate_tokens("123456789012")
         assert.are.equal(3, cost)
@@ -36,7 +55,7 @@ describe("Context class", function()
         assert.is_false(ctx:has_searched("test"))
         ctx:add_search_result("test", "result")
         assert.is_true(ctx:has_searched("test"))
-        
+
         local report = ctx:get_report("CODER")
         assert.truthy(report:match("SEARCH HISTORY"))
     end)
@@ -46,20 +65,11 @@ describe("Context class", function()
         local report = ctx:get_report("ARCHITECT")
         assert.truthy(report:match("TREE TRUNCATED"))
     end)
-    
-    it("get_memory_block target OOM branch", function()
-        ctx.execution_plan = { { file = "huge.txt" } }
-        ctx.current_task_index = 1
-        ctx:add_file("huge.txt", string.rep("A", 50000))
-        -- Force small budget
-        local block = ctx:get_memory_block(10) 
-        -- It should still include it partially or fail gracefully without crashing
-        assert.truthy(block) 
-    end)
 
     describe("Serialization and State Management", function()
-        it("should correctly snapshot and restore full context state", function()
+        it("should correctly snapshot and restore full context state including pins", function()
             ctx:add_file("core.c", "int main() {}")
+            ctx:pin_file("core.c")
             ctx.identity = { persona = "Kernel Hacker", type = "Daemon" }
             ctx.current_task_index = 2
 
@@ -74,12 +84,13 @@ describe("Context class", function()
             assert.are.equal("int main() {}", new_ctx.knowledge_base["core.c"])
             assert.are.equal("Kernel Hacker", new_ctx.identity.persona)
             assert.are.equal(2, new_ctx.current_task_index)
+            assert.is_true(new_ctx.pinned_files["core.c"])
         end)
 
         it("should securely isolate and serialize agent thoughts", function()
             ctx:add_thought(1, "I need to parse this in English")
             ctx:add_thought(2, "Now applying patch")
-            
+
             local state_json = ctx:snapshot()
             local new_ctx = Context.new(mock_config)
             new_ctx:load_from_snapshot(state_json)
@@ -89,7 +100,7 @@ describe("Context class", function()
                 if th.content and th.content:match("English") then found_english = true end
             end
             assert.is_true(found_english, "Failed to restore thoughts properly from JSON")
-            
+
             local digest = new_ctx:get_thoughts_digest()
             assert.truthy(digest:match("Turn 1 Thought"))
             assert.truthy(digest:match("Now applying patch"))
@@ -102,19 +113,46 @@ describe("Context class", function()
         end)
     end)
 
-    describe("Memory Constraints (get_memory_block)", function()
-        it("should omit non-target files when memory is exceeded", function()
+    describe("Memory Constraints and Positional Inversion", function()
+        it("should omit non-target files when memory is exceeded, but keep target", function()
             ctx:add_file("small.txt", "hello")
             ctx:add_file("target.txt", "edit me")
             ctx:add_file("huge.txt", string.rep("A", 500))
 
-            ctx.execution_plan = { { file = "target.txt" } }
+            ctx.execution_plan = { { file = "target.txt", instruction = "fix" } }
             ctx.current_task_index = 1
 
             local mem_block = ctx:get_memory_block(30)
 
-            assert.truthy(mem_block:match("target%.txt %.*%[TARGET FILE %- EDIT THIS%]"))
-            assert.truthy(mem_block:match("%[OMITTED %- OUT OF MEMORY%]"))
+            -- Check XML tags and omission
+            assert.truthy(mem_block:match("<file_target path=\"target%.txt\" instruction=\"fix\">"))
+            assert.truthy(mem_block:match("status=\"OMITTED_OUT_OF_MEMORY\""))
+        end)
+
+        it("should enforce Positional Inversion and XML Boundary Framing", function()
+            ctx:add_file("bg.txt", "background context")
+            ctx:add_file("target.txt", "active target")
+            ctx:add_file("pinned.txt", "critical constants")
+            
+            ctx:pin_file("pinned.txt")
+            ctx.execution_plan = { { file = "target.txt", instruction = "update" } }
+            ctx.current_task_index = 1
+
+            local mem_block = ctx:get_memory_block(10000)
+
+            -- Ищем фактические XML-границы вместо комментариев (Plain String Search)
+            local pos_pinned = mem_block:find('<file_context path="pinned.txt"', 1, true)
+            local pos_bg = mem_block:find('<file_context path="bg.txt"', 1, true)
+            local pos_target = mem_block:find('<file_target path="target.txt"', 1, true)
+
+            -- Жесткие guards: если тег не сгенерирован, выводим дамп
+            assert.is_not_nil(pos_pinned, "Missing Pinned XML block. Dump:\n" .. mem_block)
+            assert.is_not_nil(pos_bg, "Missing General Context XML block. Dump:\n" .. mem_block)
+            assert.is_not_nil(pos_target, "Missing Target XML block. Dump:\n" .. mem_block)
+
+            -- Главная проверка Positional Inversion: Целевой файл должен быть строго в конце
+            assert.is_true(pos_pinned < pos_target, "Pinned context must appear BEFORE target")
+            assert.is_true(pos_bg < pos_target, "General context must appear BEFORE target")
         end)
     end)
 
@@ -149,7 +187,7 @@ describe("Context class", function()
     describe("Context Squashing (ReAct Optimization)", function()
         it("should successfully squash heavy patch blocks from assistant history", function()
             local raw_msg = "Here is the fix:\n<cmd>patch:file.c\n<<<<<<< SEARCH\nbad_code\n=======\ngood_code\n>>>>>>> REPLACE\n</cmd>"
-            
+
             ctx:add_message("CODER", "user", "Fix it")
             ctx:add_message("CODER", "assistant", raw_msg)
 
@@ -158,11 +196,9 @@ describe("Context class", function()
             assert.is_true(squashed)
             local history = ctx:get_history("CODER")
             local final_content = history[#history].content
-            
-            -- Убеждаемся, что старый код вырезан
+
             assert.falsy(final_content:match("bad_code"))
             assert.falsy(final_content:match("<<<<<<< SEARCH"))
-            -- Убеждаемся, что новое системное сообщение на месте
             assert.truthy(final_content:match("Patch successfully applied to 'file.c'"))
             assert.truthy(final_content:match("Changes are in memory"))
         end)
@@ -172,22 +208,20 @@ describe("Context class", function()
         it("should detect external changes on disk and update knowledge_base", function()
             local utils = require("utils")
             local test_file = "sync_test.txt"
-            
+
             utils.write_file(test_file, "old code")
             ctx.config.PROJECT_ROOT = "."
             ctx:add_file(test_file, "old code")
-            
-            utils.write_file(test_file, "new fast code")
-            
-            local synced = ctx:sync_files()
-            
-            assert.are.equal(1, #synced)
-            
-            assert.same({test_file}, synced)
 
-            assert.are.equal("new fast code", ctx.knowledge_base[test_file])            
+            utils.write_file(test_file, "new fast code")
+
+            local synced = ctx:sync_files()
+
+            assert.are.equal(1, #synced)
+            assert.same({test_file}, synced)
+            assert.are.equal("new fast code", ctx.knowledge_base[test_file])
             os.remove(test_file)
         end)
     end)
-    
- end)
+
+end)

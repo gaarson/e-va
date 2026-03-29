@@ -14,12 +14,14 @@ function M.reset(self)
     self.global_access_counter = 0
     self.file_states = {}
     self.search_history = {}
-    self.agent_histories = {} -- Замена единого chat_history
+    self.agent_histories = {}
     self.thoughts = {}
     self.execution_plan = {}
     self.current_task_index = 1
     self.identity = nil
     self.file_tree = nil
+    -- [NEW]: Изолированное хранилище закрепленных файлов
+    self.pinned_files = {} 
 end
 
 function M.get_history(self, agent_name)
@@ -183,6 +185,156 @@ function M.get_memory_block(self, max_tokens)
 
     if #files_list == 0 then return "\n=== MEMORY ===\n(Empty)\n" end
     return table.concat(mem_buffer, "")
+end
+
+function M.pin_file(self, path)
+    if self.knowledge_base[path] then
+        self.pinned_files[path] = true
+        return true
+    end
+    return false
+end
+
+function M.unpin_file(self, path)
+    if self.pinned_files[path] then
+        self.pinned_files[path] = nil
+        return true
+    end
+    return false
+end
+
+function M.snapshot(self)
+    local state = {
+        knowledge_base = self.knowledge_base,
+        file_access_rank = self.file_access_rank,
+        global_access_counter = self.global_access_counter,
+        file_states = self.file_states,
+        search_history = self.search_history,
+        agent_histories = self.agent_histories,
+        thoughts = self.thoughts,
+        execution_plan = self.execution_plan,
+        current_task_index = self.current_task_index,
+        identity = self.identity,
+        file_tree = self.file_tree,
+        pinned_files = self.pinned_files -- Сохраняем стейт пинов
+    }
+    return json:encode(state)
+end
+
+function M.load_from_snapshot(self, json_str)
+    local status, state = pcall(function() return json:decode(json_str) end)
+    if not status or not state then return false, "Corrupted JSON" end
+    self.knowledge_base = state.knowledge_base or {}
+    self.file_access_rank = state.file_access_rank or {}
+    self.global_access_counter = state.global_access_counter or 0
+    self.file_states = state.file_states or {}
+    self.search_history = state.search_history or {}
+    self.agent_histories = state.agent_histories or {}
+    self.thoughts = state.thoughts or {}
+    self.execution_plan = state.execution_plan or {}
+    self.current_task_index = state.current_task_index or 1
+    self.identity = state.identity
+    self.file_tree = state.file_tree
+    self.pinned_files = state.pinned_files or {}
+    return true
+end
+
+function M.estimate_tokens(self, text)
+    if not text then return 0 end
+    local divisor = (self.config.LIMITS and self.config.LIMITS.CHARS_PER_TOKEN) or 3.5
+    return math.ceil(#text / divisor)
+end
+
+-- [REWRITTEN]: Инверсия позиционирования и XML Framing
+function M.get_memory_block(self, max_tokens)
+    max_tokens = max_tokens or 100000
+    local current_tokens = 0
+    
+    local pinned_buffer = {}
+    local ctx_buffer = {}
+    local target_buffer = ""
+
+    local current_task = self.execution_plan[self.current_task_index]
+    local active_target = current_task and current_task.file
+    local target_instruction = current_task and current_task.instruction or "N/A"
+
+    local files_list = {}
+    for path, content in pairs(self.knowledge_base) do
+        table.insert(files_list, {
+            path = path,
+            content = content,
+            rank = self.file_access_rank[path] or 0,
+            is_target = (path == active_target),
+            is_pinned = self.pinned_files[path] == true
+        })
+    end
+
+    -- Сортируем: Pinned -> High Rank
+    table.sort(files_list, function(a, b)
+        if a.is_pinned and not b.is_pinned then return true end
+        if not a.is_pinned and b.is_pinned then return false end
+        return a.rank > b.rank
+    end)
+
+    for _, f in ipairs(files_list) do
+        local raw_lines = require("utils").read_lines_raw(f.content)
+        local content_display = table.concat(raw_lines, "\n")
+        
+        local total_str = ""
+        local cost = 0
+
+        -- XML Boundary Framing
+        if f.is_target then
+            total_str = string.format("\n<file_target path=\"%s\" instruction=\"%s\">\n%s\n</file_target>\n", f.path, target_instruction, content_display)
+        elseif f.is_pinned then
+            total_str = string.format("\n<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>\n", f.path, content_display)
+        else
+            total_str = string.format("\n<file_context path=\"%s\" status=\"READ_ONLY\">\n%s\n</file_context>\n", f.path, content_display)
+        end
+
+        cost = self:estimate_tokens(total_str)
+
+        if (current_tokens + cost) < max_tokens then
+            current_tokens = current_tokens + cost
+            if f.is_target then
+                target_buffer = total_str
+            elseif f.is_pinned then
+                table.insert(pinned_buffer, total_str)
+            else
+                table.insert(ctx_buffer, total_str)
+            end
+        else
+            if f.is_target then
+                -- Target MUST be included, even if we truncate context
+                target_buffer = total_str
+                current_tokens = current_tokens + cost
+            else
+                table.insert(ctx_buffer, string.format("\n<file_context path=\"%s\" status=\"OMITTED_OUT_OF_MEMORY\" />\n", f.path))
+            end
+        end
+    end
+
+    -- Positional Inversion Assembly:
+    -- 1. Header
+    -- 2. Pinned Files (High importance reference)
+    -- 3. Standard Context
+    -- 4. Target File (Highest spatial proximity to generation)
+    local final_output = {"\n=== MEMORY (XML FRAMED CONTEXT) ===\n"}
+    if #pinned_buffer > 0 then
+        table.insert(final_output, "\n")
+        table.insert(final_output, table.concat(pinned_buffer, ""))
+    end
+    if #ctx_buffer > 0 then
+        table.insert(final_output, "\n")
+        table.insert(final_output, table.concat(ctx_buffer, ""))
+    end
+    if target_buffer ~= "" then
+        table.insert(final_output, "\n")
+        table.insert(final_output, target_buffer)
+    end
+
+    if #files_list == 0 then return "\n=== MEMORY ===\n(Empty)\n" end
+    return table.concat(final_output, "")
 end
 
 function M.get_search_digest(self, max_tokens)

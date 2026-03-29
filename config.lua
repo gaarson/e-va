@@ -35,7 +35,6 @@ function M.get()
         return res
     end
 
-    -- [РЕЕСТР АГЕНТОВ]
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
@@ -43,8 +42,7 @@ function M.get()
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             params = merge(BASE_PARAMS, PARAMS_ARCHITECT),
             prompt_file = "prompts/architect.md",
-            -- Добавлен ask_user для запроса уточнений
-            allowed_tools = { "read_file", "read_chunk", "search", "list_files",  "shell", "delegate_plan", "ask_user", "task_complete" }
+            allowed_tools = { "read_file", "read_chunk", "search", "list_files", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
         },
         CODER = {
             name = "CODER",
@@ -52,14 +50,12 @@ function M.get()
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             params = merge(BASE_PARAMS, PARAMS_CODER),
             prompt_file = "prompts/coder.md",
-            allowed_tools = { "patch", "create_file", "shell", "read_file", "search", "rollback", "cleanup_baks", "task_complete" }
+            allowed_tools = { "patch", "create_file", "shell", "read_file", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }
         }
     }
 
-    -- [ОРКЕСТРАЦИЯ ПАЙПЛАЙНА]
     cfg.PIPELINE = {
         { stage = "ANALYSIS_AND_PLANNING", agents = { "ARCHITECT" }, mode = "sequential" },
-        -- Новый интерактивный слот: Агент будет ждать ввода пользователя
         { stage = "REVIEW_AND_CHAT", agents = { "ARCHITECT" }, mode = "interactive" },
         { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
     }

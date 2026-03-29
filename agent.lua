@@ -217,6 +217,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     -- 2. Сохраняем мысли для дайджеста
     if thought ~= "" then ctx:add_thought(turn, thought) end
 
+    content = content:gsub(">>>>>>> REPLACE%s*\n?%s*</file_target>", ">>>>>>> REPLACE\n</cmd>")
+
     -- 3. Формируем ИДЕАЛЬНОЕ сообщение ассистента для истории (исправляем сломанные теги)
     local signal = nil
     local cmds_executed = 0
