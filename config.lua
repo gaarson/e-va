@@ -68,7 +68,7 @@ local BASE_PARAMS = {
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             params = deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
-            allowed_tools = { "patch", "create_file", "shell", "read_file", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }
+            allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }
         }
     }
 

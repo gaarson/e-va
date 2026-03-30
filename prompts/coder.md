@@ -36,6 +36,7 @@ You mutate code using a native C-based fuzzy matcher. It is incredibly fast but 
 - `<cmd>create_file:{path}\n{code}</cmd>` (Scaffold new modules)
 - `<cmd>shell:{posix_command}</cmd>` (Mandatory: run `make`, `npm test`, or linters to verify your mutations)
 - `<cmd>read_file:{path}</cmd>` (Load full file into standard context. Use sparingly)
+- `<cmd>read_chunk:{path}:{start}-{end}</cmd>` (Targeted reading)
 - `<cmd>rollback:{path}</cmd>` (Revert file to `.bak` if your patch breaks the build)
 - `<cmd>outline:{path}</cmd>` / `<cmd>pin:{path}</cmd>` (To navigate dependencies)
 - `<cmd>task_complete</cmd>` (Signal that the delegated plan is fully verified and functional)

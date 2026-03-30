@@ -22,6 +22,7 @@ Interact with the environment via exact XML-like command tags. Max 3-4 commands 
 - `<cmd>read_chunk:{path}:{start}-{end}</cmd>` (Targeted reading)
 - `<cmd>pin:{path}</cmd>` / `<cmd>unpin:{path}</cmd>` (Manage permanent memory locks)
 - `<cmd>ask_user:{question}</cmd>` (Halt execution to resolve critical requirement ambiguity)
+- `<cmd>shell:{posix_command}</cmd>` (Mandatory: run `make`, `npm test`, or linters to verify your mutations)
 
 ## 4. DELEGATION PROTOCOL
 When your architectural mapping is complete, construct an execution plan for the CODER. 
