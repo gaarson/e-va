@@ -249,13 +249,17 @@ local function init_core_tools()
     end)
 
     registry.register("delegate_plan", "Pass execution plan to next stage", function(args, ctx, agent_name)
-        local json_match = args:match("(%[.-%])") or args
         local memo_match = args:match("<memo>(.-)</memo>") or ""
 
+        local raw_json = args:gsub("<memo>.-</memo>", "")
+
+        local json_match = utils.trim(raw_json:gsub("`+", ""))
+
         local status, plan = pcall(function() return json:decode(json_match) end)
+
         if status and type(plan) == "table" and #plan > 0 then
             ctx.execution_plan = plan
-            if memo_match ~= "" then ctx.handoff_memo = require("utils").trim(memo_match) end
+            if memo_match ~= "" then ctx.handoff_memo = utils.trim(memo_match) end
 
             local loaded_files = {}
             for _, task in ipairs(plan) do
@@ -279,7 +283,9 @@ local function init_core_tools()
 
             return { output = "\n[SYSTEM]: Plan delegated successfully." .. auto_msg, signal = "PIPELINE_NEXT_STAGE" }
         end
-        return { output = "\n[ERROR]: Invalid JSON plan format. Please provide a valid JSON array.", signal = nil }
+
+        local debug_snip = json_match:sub(1, 100) .. "..."
+        return { output = "\n[ERROR]: Invalid JSON plan format. Engine saw: " .. debug_snip, signal = nil }
     end)
 
     registry.register("task_complete", "Signal pipeline completion", function(args, ctx, agent_name)

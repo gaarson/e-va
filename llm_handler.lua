@@ -27,16 +27,28 @@ function M.send_request(profile, messages, options)
     local headers, stream = req:go(600)
     if not headers then return nil, "Connection timeout or failed" end
 
-    local payload = merge_tables({
+    local payload = {
         model = profile.model,
         messages = messages,
-        stream = profile.params.stream or false
-    }, profile.params or {})
+    }
 
-    if override_params then
-        payload = merge_tables(payload, override_params)
+    -- 1. Сначала накатываем профильные настройки агента (включая TabbyAPI extensions)
+    if profile.params then
+        for k, v in pairs(profile.params) do
+            payload[k] = v
+        end
     end
 
+    -- 2. Сверху накатываем динамические оверрайды (полезно для авто-ретраев)
+    if override_params then
+        for k, v in pairs(override_params) do
+            payload[k] = v
+        end
+    end
+
+    -- Форсируем stream флаг, если он был переопределен
+    if payload.stream == nil then payload.stream = false end
+    
     local body = json:encode(payload)
     req:set_body(body)
 

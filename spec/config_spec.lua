@@ -40,10 +40,39 @@ describe("Configuration Subsystem (Pipeline & Agents)", function()
         local coder = config.AGENTS.CODER
 
         assert.is_table(coder)
-        assert.are.equal(0.2, coder.params.temperature)
+        -- Обновленный assertion: ожидаем температуру 0.35 из профиля ENGINEERING
+        assert.are.equal(0.35, coder.params.temperature)
         assert.truthy(require("utils").table_contains(coder.allowed_tools, "patch"))
     end)
-    
+
+    it("should assign deep-merged ANALYTICAL profile to ARCHITECT", function()
+        local config = config_module.get()
+        local params = config.AGENTS.ARCHITECT.params
+
+        -- Проверяем наличие базовых параметров
+        assert.is_true(params.stream)
+        assert.is_table(params.stop)
+
+        -- Проверяем наличие специфичных параметров TabbyAPI / ExLlamaV2
+        assert.are.equal(0.1, params.temperature)
+        assert.are.equal(1.0, params.top_p)
+        assert.are.equal(0.05, params.min_p)
+        assert.is_true(params.temperature_last)
+        assert.are.equal(0.1, params.smoothing_factor)
+    end)
+
+    it("should assign deep-merged ENGINEERING profile to CODER", function()
+        local config = config_module.get()
+        local params = config.AGENTS.CODER.params
+
+        -- Проверяем отличия инженерного профиля
+        assert.are.equal(0.35, params.temperature)
+        assert.are.equal(0.1, params.min_p)
+        assert.are.equal(0.2, params.smoothing_factor)
+        assert.are.equal(0.1, params.presence_penalty)
+    end)
+
+
     it("should have interactive REVIEW_AND_CHAT stage in PIPELINE", function()
         local config = config_module.get()
         local has_interactive = false
