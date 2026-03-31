@@ -4,7 +4,6 @@
 #include <string.h>
 #include <ctype.h>
 
-/* Блок совместимости для Lua 5.1 / LuaJIT */
 #if LUA_VERSION_NUM < 502
 #define lua_rawlen lua_objlen
 #define luaL_newlib(L, l) (lua_newtable(L), luaL_register(L, NULL, l))
@@ -15,7 +14,6 @@ typedef struct {
     size_t len;
 } StringRef;
 
-/* Zero-allocation fuzzy string comparison. Skips all whitespace. */
 static int fuzzy_streq(const char *s1, size_t len1, const char *s2, size_t len2) {
     size_t i = 0, j = 0;
     while (i < len1 && j < len2) {
@@ -33,7 +31,6 @@ static int fuzzy_streq(const char *s1, size_t len1, const char *s2, size_t len2)
     return (i == len1 && j == len2);
 }
 
-/* Helper to extract a Lua table of strings into a C array of StringRef */
 static StringRef* extract_string_array(lua_State *L, int index, size_t *count) {
     *count = lua_rawlen(L, index);
     if (*count == 0) return NULL;
@@ -49,10 +46,6 @@ static StringRef* extract_string_array(lua_State *L, int index, size_t *count) {
     return arr;
 }
 
-/* * Lua API: patcher_core.find_unique_fuzzy_block(content_lines, search_lines)
- * Returns: start_line, end_line (on success)
- * Returns: nil, nil, error_message (on failure)
- */
 static int l_find_unique_fuzzy_block(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TTABLE);

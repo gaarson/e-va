@@ -53,7 +53,6 @@ function M.replace_last_assistant_message(self, agent_name, new_content)
     return false
 end
 
--- [SIMILARITY ENGINE] Fast Jaccard index for string comparison
 local function calculate_similarity(s1, s2)
     local w1, w2 = {}, {}
     local set_size1, set_size2 = 0, 0
@@ -87,7 +86,6 @@ function M.add_thought(self, turn, thought_text)
         local last_thought = self.thoughts[#self.thoughts]
         local current_merge_count = last_thought.merged or 1
         
-        -- Heuristic 1: Substring inclusion
         if clean_thought:find(last_thought.content, 1, true) then
             last_thought.turn = turn
             last_thought.content = clean_thought
@@ -95,7 +93,6 @@ function M.add_thought(self, turn, thought_text)
             return
         end
 
-        -- Heuristic 2: Jaccard similarity check
         local sim = calculate_similarity(last_thought.content, clean_thought)
         if sim > MERGE_THRESHOLD then
             last_thought.turn = turn
@@ -223,7 +220,6 @@ function M.get_memory_block(self, max_tokens)
         })
     end
 
-    -- [ОПТИМИЗАЦИЯ]: Дефрагментация KV-Cache. Сортируем пути по алфавиту
     table.sort(files_list, function(a, b)
         if a.is_pinned and not b.is_pinned then return true end
         if not a.is_pinned and b.is_pinned then return false end

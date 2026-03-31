@@ -1,5 +1,6 @@
 local M = {}
 local os = require("os")
+local utils = require("utils")
 
 function M.get()
     local cfg = {}
@@ -13,6 +14,13 @@ function M.get()
         CHARS_PER_TOKEN = 3.5
     }
 
+    cfg.PIPELINE_SETTINGS = {
+        MAX_TURNS = 150,
+        ABORT_ON_FATAL = true
+    }
+
+    cfg.TASKS = {}
+
     cfg.CREATE_BACKUPS = false
 
     local BASE_PARAMS = {
@@ -24,40 +32,32 @@ function M.get()
         ANALYTICAL = {
             max_tokens = 16384,
             temperature = 0.1,
-            top_p = 1.0,               -- Отключаем top_p в пользу min_p
-            min_p = 0.05,              -- [Tabby] Отсекает длинный хвост мусорных токенов (гораздо лучше top_p)
-            smoothing_factor = 0.2,    -- [Tabby] Сглаживает пики уверенности модели (спасает Qwen от зацикливаний)
+            top_p = 1.0,
+            min_p = 0.05,
+            smoothing_factor = 0.2,
             repetition_penalty = 1.05,
-            token_healing = true,      -- [Tabby] Склеивает разорванные токены (критично для кода)
-            temperature_last = true    -- [Tabby] Применяет температуру ПОСЛЕ всех фильтров. Мастхэв.
+            token_healing = true,
+            temperature_last = true
         },
-        -- Баланс креативности и строгости синтаксиса. Идеально для CODER.
         ENGINEERING = {
             max_tokens = 16384,
-            temperature = 0.3,        -- Чуть выше для поиска нестандартных решений
+            temperature = 0.35,
             top_p = 1.0,
-            min_p = 0.1,               -- Жестче отсекаем бред при высокой температуре
-            smoothing_factor = 0.1,
+            min_p = 0.1,
+            smoothing_factor = 0.2,
             repetition_penalty = 1.1,
-            presence_penalty = 0.1,    -- [Tabby] Заставляет агента использовать новые конструкции
+            presence_penalty = 0.1,
             token_healing = true,
             temperature_last = true
         }
     }
-
-    local function deep_merge(base, specific)
-        local res = {}
-        for k, v in pairs(base) do res[k] = type(v) == "table" and deep_merge({}, v) or v end
-        for k, v in pairs(specific) do res[k] = type(v) == "table" and deep_merge(res[k] or {}, v) or v end
-        return res
-    end
 
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
             url = "http://192.168.0.116:5000/v1/chat/completions",
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
-            params = deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
+            params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = { "read_file", "read_chunk", "search", "list_files", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
         },
@@ -65,7 +65,7 @@ function M.get()
             name = "CODER",
             url = "http://192.168.0.116:5000/v1/chat/completions",
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
-            params = deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
+            params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }
         }

@@ -59,18 +59,15 @@ describe("utils I/O operations", function()
         it("replace_lines should handle out of bounds and normal replacement", function()
             utils.write_file(test_file, "line1\nline2\nline3\n")
             
-            -- Normal replace
             local ok = utils.replace_lines(test_file, 2, 2, "NEW_LINE2")
             assert.is_true(ok)
             local content = utils.read_file_range(test_file)
             assert.truthy(content:match("NEW_LINE2"))
 
-            -- Out of bounds
             local ok_err, err = utils.replace_lines(test_file, 10, 15, "x")
             assert.is_false(ok_err)
             assert.truthy(err:match("Invalid line range"))
 
-            -- Missing file
             local ok_err2, err2 = utils.replace_lines("nonexistent_file.txt", 1, 1, "x")
             assert.is_false(ok_err2)
             assert.truthy(err2:match("No such file") or err2:match("No such") or err2:match("Error"))

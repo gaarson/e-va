@@ -38,11 +38,9 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should successfully bootstrap, execute pipeline, and exit cleanly", function()
-        -- Эмулируем чтение ввода (для интерактивной стадии)
         stub(io, "read").returns("/continue")
 
         llm_handler.send_request = function(profile, messages)
-            -- Симулируем корректные ответы агентов для завершения стадий
             if profile.name == "ARCHITECT" then
                 return { choices = { { message = { content = '<cmd>delegate_plan:[{"file": "dummy.txt", "instruction": "init"}]</cmd>' } } } }, nil
             else
@@ -84,7 +82,6 @@ describe("Agent Control Plane (Integration)", function()
 
         local Context = require("context")
         local fake_ctx = Context.new({ PIPELINE = { {stage="TEST", agents={"ARCHITECT"}, mode="sequential"} }, AGENTS={ARCHITECT={}}, LIMITS = { MAX_CONTEXT = 100000 }})
-        -- Загружаем историю в правильный контейнер
         fake_ctx.agent_histories = { ARCHITECT = heavy_history }
         utils.write_file(test_state_file, fake_ctx:snapshot())
 
@@ -133,7 +130,6 @@ describe("Agent Control Plane (Integration)", function()
             end
         end
 
-        -- КРИТИЧЕСКИЙ ФИКС: Убеждаемся, что мысль ОСТАЛАСЬ в истории
         assert.truthy(assistant_msg:match("leaked thought"), "Thought MUST be preserved in history for CoT continuity!")
         assert.truthy(assistant_msg:match("Привет, я всё сделал"), "Russian communication was lost!")
         assert.truthy(captured_ctx.thoughts, "Thoughts table missing")
@@ -143,7 +139,6 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should handle interactive pipeline stage text injection", function()
-        -- Моделируем ситуацию: на интерактивной стадии юзер вводит текст, затем /continue
         local read_count = 0
         stub(io, "read").invokes(function()
             read_count = read_count + 1
@@ -153,14 +148,12 @@ describe("Agent Control Plane (Integration)", function()
         
         local llm_called_after_input = false
         llm_handler.send_request = function(profile, messages)
-            -- Проверяем, что сообщение дошло до LLM
             if messages[#messages].content == "Change the plan slightly" then
                 llm_called_after_input = true
             end
             return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
         end
         
-        -- Устанавливаем пайплайн только с одной интерактивной стадией для скорости
         local Context = require("context")
         local original_new = Context.new
         Context.new = function(cfg)
@@ -173,6 +166,45 @@ describe("Agent Control Plane (Integration)", function()
         
         assert.is_true(llm_called_after_input, "LLM was not triggered after manual user input in interactive mode")
         
+        Context.new = original_new
+        io.read:revert()
+    end)
+
+    it("should successfully execute batch processing when TASKS are defined", function()
+        stub(io, "read").returns("/continue")
+
+        local task1_called = false
+        local task2_called = false
+
+        llm_handler.send_request = function(profile, messages)
+            local prompt_text = messages[#messages].content
+            if prompt_text:match("TASK 1") then task1_called = true end
+            if prompt_text:match("TASK 2") then task2_called = true end
+            
+            return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
+        end
+
+        local Context = require("context")
+        local original_new = Context.new
+        
+        Context.new = function(cfg)
+            cfg.TASKS = {
+                { file = "dummy1.txt", instruction = "DO TASK 1" },
+                { file = "dummy2.txt", instruction = "DO TASK 2" }
+            }
+            cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
+            return original_new(cfg)
+        end
+
+        local chunk, compile_err = loadfile("agent.lua")
+        assert.is_truthy(chunk, "Failed to compile agent.lua: " .. tostring(compile_err))
+
+        local ok, err = pcall(function() chunk() end)
+
+        assert.is_true(ok)
+        assert.is_true(task1_called, "Task 1 was not executed in batch mode")
+        assert.is_true(task2_called, "Task 2 was not executed in batch mode")
+
         Context.new = original_new
         io.read:revert()
     end)

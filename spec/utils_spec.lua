@@ -26,4 +26,28 @@ describe("utils module", function()
     end)
   end)
 
+  describe("deep_merge()", function()
+    it("should recursively merge two tables", function()
+      local base = { a = 1, b = { x = 10, y = 20 } }
+      local specific = { b = { y = 99, z = 30 }, c = 2 }
+      
+      local merged = utils.deep_merge(base, specific)
+      
+      assert.are.equal(1, merged.a)
+      assert.are.equal(10, merged.b.x)
+      assert.are.equal(99, merged.b.y)
+      assert.are.equal(30, merged.b.z)
+      assert.are.equal(2, merged.c)    
+    end)
+    
+    it("should handle nil inputs gracefully", function()
+      local base = { a = 1 }
+      local merged = utils.deep_merge(base, nil)
+      assert.are.equal(1, merged.a)
+      
+      local merged2 = utils.deep_merge(nil, base)
+      assert.are.equal(1, merged2.a)
+    end)
+  end)
+
 end)

@@ -1,16 +1,17 @@
--- [ЯДЕРНЫЙ ФИКС]: Прямая загрузка файла в обход системного LUA_PATH
+local utils = require("utils")
 local agent_home = os.getenv("AGENT_HOME") or "."
 local project_root = os.getenv("PROJECT_ROOT") or "."
 
-local config_func, err = loadfile(project_root .. "/.e-va-conf/config.lua")
-if not config_func then
-    config_func, err = assert(loadfile(agent_home .. "/config.lua"), "CRITICAL: Could not find config.lua in " .. agent_home)
+local base_config_func = assert(loadfile(agent_home .. "/config.lua"), "CRITICAL: Could not find config.lua in " .. agent_home)
+local config = base_config_func().get()
+
+local local_config_func = loadfile(project_root .. "/.e-va-conf/config.lua")
+if local_config_func then
+    local local_config = local_config_func().get()
+    config = utils.deep_merge(config, local_config)
+    print("\n\27[36m[SYSTEM INFO]: Applied local overrides from .e-va-conf/config.lua\27[0m")
 end
 
-local config_module = config_func()
-local config = config_module.get()
-
--- [HOT-PATCH]: Строгая проверка целостности массива пайплайна
 if type(config.PIPELINE) ~= "table" or #config.PIPELINE == 0 then
     print("\n\27[33m[SYSTEM WARNING]: Bypassing config file. Injecting memory-safe PIPELINE.\27[0m")
     config.PIPELINE = {
@@ -20,18 +21,14 @@ if type(config.PIPELINE) ~= "table" or #config.PIPELINE == 0 then
     }
 end
 
--- Загрузка остальных модулей
 local llm = require("llm_handler")
 local logger = require("logger")
 local Context = require("context")
 local registry = require("tool_registry")
 local core_tools = require("core_tools")
-local utils = require("utils")
-
 local os = require("os")
 
 local ctx = Context.new(config)
-
 local STATE_FILE = ".e-va_state.json"
 local restored = false
 
@@ -50,24 +47,13 @@ local raw_instruction = arg2 or cli_args
 local start_file = type(raw_start_file) == "string" and raw_start_file or nil
 local instruction = type(raw_instruction) == "string" and raw_instruction or nil
 
-if not restored and not instruction then
-    print("Usage: eva [file] \"<instruction>\""); os.exit(1)
-end
-
--- ИСПРАВЛЕНИЕ: Умная загрузка промптов (Local Override -> Global Fallback)
 local function load_prompt(file_path)
-    local agent_home = os.getenv("AGENT_HOME") or "."
-
-    -- 1. Сначала ищем кастомный промпт в локальной конфигурации проекта
     local local_path = config.PROJECT_ROOT .. "/.e-va-conf/" .. file_path
     local content = utils.read_file_range(local_path)
-
-    -- 2. Если локального нет, берем дефолтный из ядра E-va
     if not content then
         local global_path = agent_home .. "/" .. file_path
         content = utils.read_file_range(global_path)
     end
-
     if not content then
         logger.warn("Failed to load prompt from both local and global paths: " .. file_path)
         return "You are an AI assistant. Follow the user's instructions."
@@ -75,7 +61,6 @@ local function load_prompt(file_path)
     return content
 end
 
--- Основная функция хода агента
 local function run_agent_turn(agent_name, agent_cfg, turn)
     local synced_files = ctx:sync_files()
     if #synced_files > 0 then
@@ -94,18 +79,16 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ctx:get_search_digest(digest_budget)
 
-    local combined_system_prompt = sys_prompt_text .. "\n\n" .. 
-                                   ctx:get_report(agent_name) .. "\n\n" .. 
-                                   memory_block .. "\n\n" .. 
-                                   search_digest .. "\n\n" .. 
+    local combined_system_prompt = sys_prompt_text .. "\n\n" ..
+                                   ctx:get_report(agent_name) .. "\n\n" ..
+                                   memory_block .. "\n\n" ..
+                                   search_digest .. "\n\n" ..
                                    ctx:get_thoughts_digest()
 
     local messages = { { role = "system", content = combined_system_prompt } }
-
     local chat_buffer = {}
     local current_chat_cost = 0
     local history = ctx:get_history(agent_name)
-
     local history_len = #history
 
     if history_len > 0 then
@@ -140,7 +123,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(msg.content)
     end
 
-    -- [FULL TRACE DUMP]: Логируем точный контекст перед отправкой
     local json = require("JSON")
     local trace_dump = json:encode({
         turn = turn,
@@ -196,7 +178,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local thought = ""
     local content = raw_content
 
-    -- 1. Умное извлечение мыслей, даже если теги повреждены
     local end_idx = content:find("</think>")
     if end_idx then
         local start_idx = content:find("<think>")
@@ -215,15 +196,13 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         end
     end
 
-    thought = require("utils").trim(thought)
-    content = require("utils").trim(content)
+    thought = utils.trim(thought)
+    content = utils.trim(content)
 
-    -- 2. Сохраняем мысли для дайджеста
     if thought ~= "" then ctx:add_thought(turn, thought) end
 
     content = content:gsub(">>>>>>> REPLACE%s*\n?%s*</file_target>", ">>>>>>> REPLACE\n</cmd>")
 
-    -- 3. Формируем ИДЕАЛЬНОЕ сообщение ассистента для истории (исправляем сломанные теги)
     local signal = nil
     local cmds_executed = 0
     local MAX_CMDS_PER_TURN = 5
@@ -250,10 +229,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         final_history_content = final_history_content .. content
     end
 
-    -- СТРОГО ОДИН РАЗ записываем сообщение агента в историю ДО выполнения инструментов
     ctx:add_message(agent_name, "assistant", final_history_content)
 
-    -- 4. Физически выполняем инструменты и сохраняем результаты системы
     local run_count = 0
     for cmd_block in content:gmatch("<cmd>(.-)</cmd>") do
         run_count = run_count + 1
@@ -269,7 +246,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             local display_out = res.output
             if #display_out > 500 then display_out = display_out:sub(1, 500) .. "\n...[TRUNCATED IN UI]" end
             print("\27[36m" .. display_out .. "\27[0m")
-
             ctx:add_message(agent_name, "user", res.output)
         end
         if res.signal then signal = res.signal end
@@ -288,7 +264,7 @@ end
 
 local function execute_pipeline()
     local turn = 1
-    local MAX_TURNS = 150
+    local MAX_TURNS = (config.PIPELINE_SETTINGS and config.PIPELINE_SETTINGS.MAX_TURNS) or 150
 
     for stage_idx, stage in ipairs(config.PIPELINE) do
         logger.info(string.format("\n=== PIPELINE STAGE [%d/%d]: %s ===", stage_idx, #config.PIPELINE, tostring(stage.stage)))
@@ -299,15 +275,10 @@ local function execute_pipeline()
             turn = turn + 1
 
             if stage.mode == "interactive" then
-                -- Строгое определение типа агента (Type Bounds Checking)
                 local target_agent = "ARCHITECT"
-                if type(stage.agent) == "string" then 
-                    target_agent = stage.agent
-                elseif type(stage.agents) == "table" and type(stage.agents) == "string" then 
-                    target_agent = stage.agents
-                elseif type(stage.agents) == "string" then
-                    target_agent = stage.agents
-                end
+                if type(stage.agent) == "string" then target_agent = stage.agent
+                elseif type(stage.agents) == "table" and type(stage.agents) == "string" then target_agent = stage.agents
+                elseif type(stage.agents) == "string" then target_agent = stage.agents end
 
                 logger.info(string.format("[INTERACTIVE MODE] Hooked to agent: %s", target_agent))
                 io.write("\n\27[36m=== HUMAN-IN-THE-LOOP (HITL) SESSION ===\27[0m\n")
@@ -324,7 +295,7 @@ local function execute_pipeline()
                         print("\n\27[32m[SYSTEM] Moving to the next pipeline stage...\27[0m")
                         stage_complete = true
                         break
-                    elseif require("utils").trim(user_input) ~= "" then
+                    elseif utils.trim(user_input) ~= "" then
                         ctx:add_message(target_agent, "user", user_input)
                         local sig = run_agent_turn(target_agent, config.AGENTS[target_agent], turn)
                         turn = turn + 1
@@ -338,9 +309,7 @@ local function execute_pipeline()
                 local threads = {}
                 for _, a_name in ipairs(stage.agents or {}) do
                     local agent_name = tostring(a_name)
-                    local co = coroutine.create(function()
-                        return run_agent_turn(agent_name, config.AGENTS[agent_name], turn)
-                    end)
+                    local co = coroutine.create(function() return run_agent_turn(agent_name, config.AGENTS[agent_name], turn) end)
                     table.insert(threads, { name = agent_name, co = co })
                 end
 
@@ -377,8 +346,10 @@ local function execute_pipeline()
     os.remove(STATE_FILE)
 end
 
-if not restored then
-    local initial_msg = "TASK: " .. instruction
+local function setup_and_run_task(task_file, task_instruction, max_turns)
+    ctx:reset()
+    
+    local initial_msg = "TASK: " .. task_instruction
     local docs_loaded = {}
 
     ctx.file_tree = utils.list_files_recursive(config.PROJECT_ROOT)
@@ -409,8 +380,8 @@ if not restored then
         initial_msg = initial_msg .. "\n\n(Note: Auto-loaded core documentation: " .. table.concat(docs_loaded, ", ") .. ")"
     end
 
-    if start_file then
-        local norm_start = utils.normalize_path(config.PROJECT_ROOT, start_file)
+    if task_file then
+        local norm_start = utils.normalize_path(config.PROJECT_ROOT, task_file)
         local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. norm_start)
         if content then
             ctx:add_file(norm_start, content)
@@ -418,13 +389,50 @@ if not restored then
         end
     end
 
-    -- 5. Изолированное извлечение первого агента
     local first_agent = "ARCHITECT"
     if type(config.PIPELINE) == "table" and config.PIPELINE and type(config.PIPELINE.agents) == "table" and type(config.PIPELINE.agents) == "string" then
         first_agent = config.PIPELINE.agents
     end
 
     ctx:add_message(first_agent, "user", initial_msg)
+    
+    local original_max = nil
+    if config.PIPELINE_SETTINGS then
+        original_max = config.PIPELINE_SETTINGS.MAX_TURNS
+        if max_turns then config.PIPELINE_SETTINGS.MAX_TURNS = max_turns end
+    end
+    
+    execute_pipeline()
+    
+    if config.PIPELINE_SETTINGS and original_max then
+        config.PIPELINE_SETTINGS.MAX_TURNS = original_max
+    end
 end
 
-execute_pipeline()
+if not restored then
+    if instruction then
+        setup_and_run_task(start_file, instruction, nil)
+    elseif config.TASKS and #config.TASKS > 0 then
+        logger.info(string.format("Batch processing initiated. Found %d tasks.", #config.TASKS))
+        for i, task in ipairs(config.TASKS) do
+            print(string.format("\n\27[35m=== STARTING TASK [%d/%d]: %s ===\27[0m", i, #config.TASKS, task.file or "Global Context"))
+            
+            local status, err = pcall(setup_and_run_task, task.file, task.instruction, task.max_turns)
+            
+            if not status then
+                logger.error("Task failed fatally: " .. tostring(err))
+                if config.PIPELINE_SETTINGS and config.PIPELINE_SETTINGS.ABORT_ON_FATAL then 
+                    print("\n\27[31m[SYSTEM] Aborting batch execution due to fatal error in task " .. i .. "\27[0m")
+                    os.exit(1) 
+                end
+            end
+            
+            print(string.format("\n\27[32m=== FINISHED TASK [%d/%d] ===\27[0m", i, #config.TASKS))
+        end
+    else
+        print("Usage: eva [file] \"<instruction>\" OR define TASKS in .e-va-conf/config.lua")
+        os.exit(1)
+    end
+else
+    execute_pipeline()
+end

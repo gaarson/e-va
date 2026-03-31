@@ -162,11 +162,9 @@ local function init_core_tools()
             local ans = utils.trim(raw_ans or "n")
 
             if ans:lower() == "y" or ans:lower() == "yes" then
-                -- Execution allowed, proceed
             elseif ans == "" or ans:lower() == "n" or ans:lower() == "no" then
                 return { output = "\n[SYSTEM]: Command execution DENIED by user. Do not try this command again." }
             else
-                -- User provided a specific string reason for denial
                 return { output = string.format("\n[SYSTEM]: Command execution DENIED by user. Reason: %s", ans) }
             end
         end
@@ -225,9 +223,6 @@ local function init_core_tools()
             res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")" 
         end
         
-        -- [SMART TRUNCATION]: Оставляем огромный лимит в 100,000 символов.
-        -- И главное: если лог всё-таки превысит лимит, мы оставляем КОНЕЦ лога,
-        -- так как именно там находятся итоги тестов и ошибки компиляции.
         local MAX_LOG_SIZE = 100000
         if #res > MAX_LOG_SIZE then 
             res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE) 
@@ -235,7 +230,6 @@ local function init_core_tools()
 
         local output = "\n[SHELL STDOUT/STDERR]:\n" .. res
 
-        -- [CIRCUIT BREAKER]
         ctx.test_failures = ctx.test_failures or 0
         if cmd:match("test") or cmd:match("make") or cmd:match("check") or cmd:match("build") then
             if res:match("[Ee]rror") or res:match("[Ff]ail") or res:match("command not found") or (exit_code and exit_code ~= 0) then
@@ -310,12 +304,10 @@ local function init_core_tools()
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
         
-        -- Убеждаемся, что файл существует
         local f = io.open(full_path, "r")
         if not f then return { output = "\n[ERROR]: File not found: " .. rel_path } end
         f:close()
 
-        -- Регулярное выражение для rg, захватывающее сигнатуры C, Lua, JS/TS, Python
         local safe_path = utils.shell_quote(full_path)
         local rg_regex = "'^\\s*(local\\s+)?(function|class|struct|interface|type)\\s+|^\\s*[a-zA-Z_]\\w*\\s+\\*?[a-zA-Z_]\\w*\\s*\\([^;]*\\)\\s*\\{?'"
         local cmd = string.format("rg -n -e %s --color never %s | head -n 100", rg_regex, safe_path)
@@ -331,11 +323,9 @@ local function init_core_tools()
         return { output = string.format("\n[SYSTEM OUTLINE FOR %s]:\n```\n%s\n```", rel_path, utils.trim(res)) }
     end)
 
-    -- [NEW]: Context Pinning
     registry.register("pin", "Pins a loaded file in memory so it is never evicted", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         
-        -- Пин возможен только если файл уже в knowledge_base
         if not ctx.knowledge_base[rel_path] then
             return { output = "\n[ERROR]: File '" .. rel_path .. "' is not in memory. Use <cmd>read_file:" .. rel_path .. "</cmd> first." }
         end

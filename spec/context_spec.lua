@@ -31,18 +31,14 @@ describe("Context class", function()
     it("should securely manage pinned files", function()
         ctx:add_file("core.lua", "local a = 1")
         
-        -- Pin success
         assert.is_true(ctx:pin_file("core.lua"))
         assert.is_true(ctx.pinned_files["core.lua"])
         
-        -- Pin failure (file not in knowledge base)
         assert.is_false(ctx:pin_file("missing.lua"))
         
-        -- Unpin success
         assert.is_true(ctx:unpin_file("core.lua"))
         assert.is_nil(ctx.pinned_files["core.lua"])
         
-        -- Unpin failure
         assert.is_false(ctx:unpin_file("missing.lua"))
     end)
 
@@ -124,7 +120,6 @@ describe("Context class", function()
 
             local mem_block = ctx:get_memory_block(30)
 
-            -- Check XML tags and omission
             assert.truthy(mem_block:match("<file_target path=\"target%.txt\" instruction=\"fix\">"))
             assert.truthy(mem_block:match("status=\"OMITTED_OUT_OF_MEMORY\""))
         end)
@@ -140,17 +135,14 @@ describe("Context class", function()
 
             local mem_block = ctx:get_memory_block(10000)
 
-            -- Ищем фактические XML-границы вместо комментариев (Plain String Search)
             local pos_pinned = mem_block:find('<file_context path="pinned.txt"', 1, true)
             local pos_bg = mem_block:find('<file_context path="bg.txt"', 1, true)
             local pos_target = mem_block:find('<file_target path="target.txt"', 1, true)
 
-            -- Жесткие guards: если тег не сгенерирован, выводим дамп
             assert.is_not_nil(pos_pinned, "Missing Pinned XML block. Dump:\n" .. mem_block)
             assert.is_not_nil(pos_bg, "Missing General Context XML block. Dump:\n" .. mem_block)
             assert.is_not_nil(pos_target, "Missing Target XML block. Dump:\n" .. mem_block)
 
-            -- Главная проверка Positional Inversion: Целевой файл должен быть строго в конце
             assert.is_true(pos_pinned < pos_target, "Pinned context must appear BEFORE target")
             assert.is_true(pos_bg < pos_target, "General context must appear BEFORE target")
         end)

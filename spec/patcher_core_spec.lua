@@ -1,5 +1,3 @@
--- spec/patcher_core_spec.lua
--- Загружаем скомпилированную библиотеку C
 local patcher_core = require("patcher_core")
 
 describe("C Native Module: patcher_core", function()
@@ -32,7 +30,6 @@ describe("C Native Module: patcher_core", function()
     end)
 
     it("should perform zero-allocation fuzzy matching (ignoring whitespace)", function()
-        -- Строки поиска искорежены: убраны пробелы, табуляции сбиты
         local search_fuzzy = {
             "localfunctioncalculate_diff(a,b)",
             "localresult=a-b",

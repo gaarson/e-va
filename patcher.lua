@@ -35,7 +35,6 @@ function M.apply_patch(original_content, llm_response)
             if l:match("%S") then has_content = true; break end
         end
 
-        -- [CIRCUIT BREAKER]: Защита от пустых патчей (Zero-Op)
         if search_block == replace_block then
             table.insert(errors, "FAILED BLOCK: SEARCH and REPLACE blocks are EXACTLY identical. No changes needed. If the file is correct, output <cmd>task_complete</cmd>.")
             has_content = false

@@ -65,11 +65,9 @@ describe("Core Tools via Registry Subsystem", function()
         assert.truthy(res_syn.output:match("Usage:"))
     end)
 
-    -- [NEW]: Tests for outline
     it("outline: should execute rg and return AST outline", function()
         utils.write_file(test_file, "dummy content")
         
-        -- Mock popen to simulate ripgrep finding a function signature
         local mock_f = { read = function() return "10:local function test_func()" end, close = function() end }
         stub(io, "popen").returns(mock_f)
 
@@ -78,36 +76,29 @@ describe("Core Tools via Registry Subsystem", function()
         assert.truthy(res.output:match("test_func"))
         io.popen:revert()
 
-        -- Test empty result
         local mock_empty = { read = function() return "" end, close = function() end }
         stub(io, "popen").returns(mock_empty)
         local res_empty = registry.execute("outline:" .. test_file, ctx, "TEST_AGENT")
         assert.truthy(res_empty.output:match("empty or no valid signatures"))
         io.popen:revert()
 
-        -- Test missing file
         local res_missing = registry.execute("outline:missing_file.c", ctx, "TEST_AGENT")
         assert.truthy(res_missing.output:match("%[ERROR%]: File not found"))
     end)
 
-    -- [NEW]: Tests for Context Pinning tools
     it("pin and unpin: should manage context locks", function()
-        -- Attempt to pin unread file
         local res_fail = registry.execute("pin:missing.lua", ctx, "TEST_AGENT")
         assert.truthy(res_fail.output:match("not in memory"))
 
-        -- Pin successful
         ctx:add_file("target.lua", "data")
         local res_pin = registry.execute("pin:target.lua", ctx, "TEST_AGENT")
         assert.truthy(res_pin.output:match("Pinned 'target.lua'"))
         assert.is_true(ctx.pinned_files["target.lua"])
 
-        -- Unpin successful
         local res_unpin = registry.execute("unpin:target.lua", ctx, "TEST_AGENT")
         assert.truthy(res_unpin.output:match("Unpinned 'target.lua'"))
         assert.is_nil(ctx.pinned_files["target.lua"])
 
-        -- Attempt to unpin file that is not pinned
         local res_unpin_fail = registry.execute("unpin:target.lua", ctx, "TEST_AGENT")
         assert.truthy(res_unpin_fail.output:match("was not pinned"))
     end)
@@ -143,26 +134,22 @@ describe("Core Tools via Registry Subsystem", function()
         local res = registry.execute("shell:echo 'shell output'", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("shell output"))
 
-        -- [TEST]: Simple denial (n)
         stub(io, "read").returns("n")
         local res2 = registry.execute("shell:rm -rf /", ctx, "TEST_AGENT")
         assert.truthy(res2.output:match("DENIED by user"))
         io.read:revert()
 
-        -- [TEST]: Denial with a custom reason (Closing the feedback loop)
         stub(io, "read").returns("we never delete the root directory, try deleting a specific tmp folder")
         local res_reason = registry.execute("shell:rm -rf /", ctx, "TEST_AGENT")
         assert.truthy(res_reason.output:match("DENIED by user"))
         assert.truthy(res_reason.output:match("Reason: we never delete the root directory, try deleting a specific tmp folder"))
         io.read:revert()
 
-        -- [TEST]: Allowed execution (y)
         stub(io, "read").returns("y")
         local res_allow = registry.execute("shell:rm -rf /fake/path/for/test", ctx, "TEST_AGENT")
         assert.truthy(res_allow.output:match("%[SHELL STDOUT/STDERR%]"))
         io.read:revert()
 
-        -- Circuit breaker for failing tests
         ctx.test_failures = 2
         local res4 = registry.execute("shell:echo 'Error: test failed' && false", ctx, "TEST_AGENT")
         assert.truthy(res4.output:match("CIRCUIT BREAKER TRIGGERED"))

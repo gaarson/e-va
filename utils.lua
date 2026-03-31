@@ -1,7 +1,6 @@
 local M = {}
 local io = require("io")
 
--- Buffer size for file operations (64KB matches typical pipe buffer size)
 local CHUNK_SIZE = 65536
 local MAX_FILE_SIZE = 1024 * 1024
 
@@ -25,7 +24,18 @@ function M.normalize_path(root, raw_path)
     return p:gsub("^/", "")
 end
 
--- NATIVE COPY IMPLEMENTATION (No fork/exec)
+-- [NEW]: Рекурсивное слияние таблиц (Deep Merge)
+function M.deep_merge(base, specific)
+    local res = {}
+    if type(base) == "table" then
+        for k, v in pairs(base) do res[k] = type(v) == "table" and M.deep_merge({}, v) or v end
+    end
+    if type(specific) == "table" then
+        for k, v in pairs(specific) do res[k] = type(v) == "table" and M.deep_merge(res[k] or {}, v) or v end
+    end
+    return res
+end
+
 function M.copy_file(src, dest)
     local input, err = io.open(src, "rb")
     if not input then return false, "Src open failed: " .. tostring(err) end
@@ -80,28 +90,22 @@ function M.write_file(path, content)
     return ok, w_err
 end
 
--- =====================================================================
--- FAST LINE COUNTER (O(N) with C-native gsub, binary safe)
--- =====================================================================
 local function count_lines_fast(filepath)
     local f = io.open(filepath, "rb")
     if not f then return "?" end
-    
+
     local count = 0
     local has_content = false
-    
+
     while true do
         local chunk = f:read(CHUNK_SIZE)
         if not chunk then break end
         has_content = true
-        -- В Lua gsub возвращает вторым аргументом количество замен.
-        -- Это работает на скорости C и не выделяет лишней памяти.
         local _, newlines = chunk:gsub("\n", "")
         count = count + newlines
     end
     f:close()
-    
-    -- Если файл не пустой, но без \n, считаем что там 1 строка
+
     if count == 0 and has_content then return 1 end
     return count
 end
@@ -124,10 +128,8 @@ function M.list_files_recursive(root_path)
             table.insert(files, string.format("%s (%s lines)", rel, tostring(lines_count)))
         end
     end
-    
+
     if #files == 0 then return "(No files found)" end
-    
-    -- Сортируем список по алфавиту для более красивой структуры
     table.sort(files)
     return table.concat(files, "\n")
 end

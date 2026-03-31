@@ -18,8 +18,6 @@ describe("LLM Handler (Network & Parsing)", function()
         orig_decode = json.decode
         orig_encode = json.encode
 
-        -- Бронебойная заглушка: возвращаем таблицу, достаточную для прохождения
-        -- всех внутренних проверок (if ok and part.choices...) внутри llm_handler
         json.encode = function() return "{}" end
         json.decode = function() 
             return { choices = { { delta = { content = "token" } } } } 
@@ -60,7 +58,6 @@ describe("LLM Handler (Network & Parsing)", function()
 
     it("processes SSE stream without crashing", function()
         mock_profile.params.stream = true
-        -- Эмулируем чанки, чтобы пройти по циклу each_chunk и сбросить [DONE]
         local chunks = { "data: {}\n\n", "data: [DONE]\n\n" }
         local mock_req = {
             headers = { upsert = function() end }, set_body = function() end,
@@ -70,7 +67,6 @@ describe("LLM Handler (Network & Parsing)", function()
         }
         http_request.new_from_uri = function() return mock_req end
 
-        -- Вызываем с on_token, чтобы покрыть 100% веток внутри цикла
         local res = llm_handler.send_request(mock_profile, {}, { on_token = function() end })
         assert.is_table(res)
     end)
@@ -78,13 +74,11 @@ describe("LLM Handler (Network & Parsing)", function()
     it("extracts content safely", function()
         assert.is_nil(llm_handler.extract_content(nil))
         assert.is_nil(llm_handler.extract_content({}))
-        -- Здесь мы передаем чистую таблицу, так что парсер нас не обманет
         assert.are.equal("ok", llm_handler.extract_content({ choices = { { message = { content = "ok" } } } }))
     end)
 
     it("flattens profile parameters into the payload root for TabbyAPI", function()
         local captured_payload = nil
-        -- Перехватываем вызов json.encode, чтобы изучить сформированную таблицу до сериализации
         json.encode = function(self, tbl)
             captured_payload = tbl
             return "{}"
@@ -111,13 +105,12 @@ describe("LLM Handler (Network & Parsing)", function()
         llm_handler.send_request(test_profile, { { role = "user", content = "test" } })
 
         assert.is_table(captured_payload)
-        -- КРИТИЧЕСКАЯ ПРОВЕРКА: параметры должны быть в корне, а не внутри captured_payload.params
         assert.are.equal("Qwen-Test", captured_payload.model)
         assert.are.equal(0.5, captured_payload.temperature)
         assert.are.equal(0.05, captured_payload.min_p)
         assert.are.equal(0.2, captured_payload.smoothing_factor)
         assert.is_true(captured_payload.temperature_last)
-        assert.is_false(captured_payload.stream) -- Проверка дефолтного fallback'а
+        assert.is_false(captured_payload.stream) 
     end)
 
     it("applies dynamic override_params directly to the payload root", function()
@@ -140,15 +133,14 @@ describe("LLM Handler (Network & Parsing)", function()
         }
         http_request.new_from_uri = function() return mock_req end
 
-        -- Имитируем запрос с оверрайдом (например, для circuit breaker'а)
         llm_handler.send_request(test_profile, {}, { 
             override_params = { temperature = 0.9, top_k = 50 } 
         })
 
         assert.is_table(captured_payload)
-        assert.are.equal(0.9, captured_payload.temperature) -- Должен перезаписать 0.1
-        assert.are.equal(0.05, captured_payload.min_p)      -- Должен остаться из профиля
-        assert.are.equal(50, captured_payload.top_k)        -- Должен добавиться новый
+        assert.are.equal(0.9, captured_payload.temperature)
+        assert.are.equal(0.05, captured_payload.min_p)
+        assert.are.equal(50, captured_payload.top_k)
     end)
 
 end)

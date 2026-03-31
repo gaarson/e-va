@@ -1,9 +1,7 @@
--- spec/patcher_spec.lua
 local patcher = require("patcher")
 
 describe("Core Patcher Subsystem", function()
     
-    -- Базовый код для тестирования (mock file content)
     local source_code = [[
 local function calculate_sum(a, b)
     local result = a + b
@@ -40,7 +38,6 @@ end
     end)
 
     it("2. [FUZZY] Should apply patch even with broken indentation/whitespaces", function()
-        -- Имитируем ситуацию, когда LLM "съел" пробелы
         local patch = [[
 <<<<<<< SEARCH
 localfunction calculate_sum(a,b)
@@ -59,7 +56,6 @@ local function add(a, b) return a + b end
     end)
 
     it("3. [SAFETY] Should REJECT ambiguous matches (Circuit Breaker)", function()
-        -- Пытаемся заменить кусок кода, который повторяется дважды
         local patch = [[
 <<<<<<< SEARCH
     local result = a + b
@@ -68,7 +64,6 @@ local function add(a, b) return a + b end
     return a + b
 >>>>>>> REPLACE
 ]]
-        -- Модифицируем source_code так, чтобы блок поиска не был уникальным
         local ambiguous_source = source_code:gsub("a %- b", "a %+ b") 
         
         local ok, err_msg = patcher.apply_patch(ambiguous_source, patch)
@@ -100,7 +95,7 @@ Some LLM commentary here...
         
         assert.is_true(ok)
         assert.are.equal(2, changes_count)
-        assert.falsy(modified_code:match("local result =")) -- Убеждаемся, что старые строки удалены
+        assert.falsy(modified_code:match("local result =")) 
     end)
 
     it("5. [FAILSAFE] Should fail gracefully on malformed patch boundaries", function()

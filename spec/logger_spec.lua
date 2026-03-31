@@ -38,14 +38,12 @@ describe("Logger Subsystem", function()
 
         logger.info("Cyclic test", a)
 
-        -- КРИТИЧЕСКИЙ ФИКС: Учитываем, что строковые ключи обрамляются двойными кавычками
         assert.truthy(print_capture:match('%+"child"'))
     end)
 
     it("should properly format ERROR logs to stderr", function()
         logger.error("Critical failure", { code = 139 })
         
-        -- КРИТИЧЕСКИЙ ФИКС: Используем .* для обхода невидимого ANSI-кода \27[0m
         assert.truthy(stderr_capture:match("%[ERROR%].*Critical failure"))
     end)
 
@@ -53,7 +51,6 @@ describe("Logger Subsystem", function()
         logger.warn("Warning test", { alert = true })
         assert.truthy(print_capture:match("%[WARN%].*Warning test"))
         
-        -- Mock io.open to test log_context failure branch
         local original_open = io.open
         io.open = function() return nil end
         logger.log_context(1, "test", "data")

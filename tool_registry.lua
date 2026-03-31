@@ -4,7 +4,6 @@ local M = {
 local logger = require("logger")
 local utils = require("utils")
 
--- Регистрация нового инструмента в runtime
 function M.register(name, description, handler)
     if type(handler) ~= "function" then
         logger.error("Failed to register tool: " .. name .. " (handler must be a function)")
@@ -13,7 +12,6 @@ function M.register(name, description, handler)
     M.tools[name] = { desc = description, exec = handler }
 end
 
--- Валидация прав агента на использование инструмента
 local function is_tool_allowed(agent_cfg, tool_name)
     if not agent_cfg or not agent_cfg.allowed_tools then return false end
     for _, allowed in ipairs(agent_cfg.allowed_tools) do
@@ -22,14 +20,13 @@ local function is_tool_allowed(agent_cfg, tool_name)
     return false
 end
 
--- Точка входа для выполнения
 function M.execute(action_string, ctx, agent_name)
     local config = ctx.config
     local agent_cfg = config.AGENTS[agent_name]
 
     local cmd_name, args = action_string:match("^([^:]+):?(.*)")
     if not cmd_name then
-        cmd_name = action_string -- Команда без аргументов
+        cmd_name = action_string 
         args = ""
     end
     
@@ -48,7 +45,6 @@ function M.execute(action_string, ctx, agent_name)
         return { output = "\n[SECURITY DENY]: Agent '" .. agent_name .. "' is not authorized to use tool '" .. cmd_name .. "'.", signal = nil }
     end
 
-    -- Безопасный вызов инструмента (перехват падений Lua)
     local status, res = pcall(tool.exec, args, ctx, agent_name)
     if not status then
         logger.error("Tool execution FATAL (" .. cmd_name .. ")", res)

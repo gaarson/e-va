@@ -3,13 +3,6 @@ local http = require("http.request")
 local json = require("JSON")
 local logger = require("logger")
 
-local function merge_tables(t1, t2)
-    local res = {}
-    if t1 then for k, v in pairs(t1) do res[k] = v end end
-    if t2 then for k, v in pairs(t2) do res[k] = v end end
-    return res
-end
-
 function M.send_request(profile, messages, options)
     options = options or {}
     local override_params = options.override_params
@@ -32,21 +25,18 @@ function M.send_request(profile, messages, options)
         messages = messages,
     }
 
-    -- 1. Сначала накатываем профильные настройки агента (включая TabbyAPI extensions)
     if profile.params then
         for k, v in pairs(profile.params) do
             payload[k] = v
         end
     end
 
-    -- 2. Сверху накатываем динамические оверрайды (полезно для авто-ретраев)
     if override_params then
         for k, v in pairs(override_params) do
             payload[k] = v
         end
     end
 
-    -- Форсируем stream флаг, если он был переопределен
     if payload.stream == nil then payload.stream = false end
     
     local body = json:encode(payload)

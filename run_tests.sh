@@ -11,7 +11,6 @@ TEST_STATUS=$?
 
 if [ $TEST_STATUS -eq 0 ]; then
     echo ">>> Generating coverage report..."
-    # Прямой вызов генератора отчетов без всяких fallback-ов
     ./lua_modules/bin/luacov
     
     echo "========================================="
