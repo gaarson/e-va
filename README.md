@@ -25,8 +25,8 @@
 
 **Lua зависимости (устанавливаются через LuaRocks):**
 
-  * `luajson` (Парсинг ответов LLM и файлов состояний)
-  * `lua-http` (Асинхронные HTTP-запросы и обработка SSE-стримов)
+  * `lua-json` (Парсинг ответов LLM и файлов состояний)
+  * `http` (Асинхронные HTTP-запросы и обработка SSE-стримов)
   * `busted` и `luacov` (Опционально, для запуска unit-тестов)
 
 ## Установка и Запуск (Build & Run)
@@ -42,8 +42,8 @@ make clean && make
 **2. Установка Lua-модулей:**
 
 ```bash
-luarocks install luajson --tree=lua_modules
-luarocks install lua-http --tree=lua_modules
+luarocks install lua-json --tree=lua_modules
+luarocks install http --tree=lua_modules
 ```
 
 **3. Запуск агента:**
