@@ -13,7 +13,9 @@ function M.get()
         CHARS_PER_TOKEN = 3.5
     }
 
-local BASE_PARAMS = {
+    cfg.CREATE_BACKUPS = false -- Отключаем создание .bak файлов для экономии I/O
+
+    local BASE_PARAMS = {
         stream = true,
         stop = { "<|im_end|>", "<|im_start|>" }
     }
@@ -27,7 +29,7 @@ local BASE_PARAMS = {
             temperature = 0.1,
             top_p = 1.0,               -- Отключаем top_p в пользу min_p
             min_p = 0.05,              -- [Tabby] Отсекает длинный хвост мусорных токенов (гораздо лучше top_p)
-            smoothing_factor = 0.1,    -- [Tabby] Сглаживает пики уверенности модели (спасает Qwen от зацикливаний)
+            smoothing_factor = 0.2,    -- [Tabby] Сглаживает пики уверенности модели (спасает Qwen от зацикливаний)
             repetition_penalty = 1.05,
             token_healing = true,      -- [Tabby] Склеивает разорванные токены (критично для кода)
             temperature_last = true    -- [Tabby] Применяет температуру ПОСЛЕ всех фильтров. Мастхэв.
@@ -35,10 +37,10 @@ local BASE_PARAMS = {
         -- Баланс креативности и строгости синтаксиса. Идеально для CODER.
         ENGINEERING = {
             max_tokens = 16384,
-            temperature = 0.35,        -- Чуть выше для поиска нестандартных решений
+            temperature = 0.3,        -- Чуть выше для поиска нестандартных решений
             top_p = 1.0,
             min_p = 0.1,               -- Жестче отсекаем бред при высокой температуре
-            smoothing_factor = 0.2,
+            smoothing_factor = 0.1,
             repetition_penalty = 1.1,
             presence_penalty = 0.1,    -- [Tabby] Заставляет агента использовать новые конструкции
             token_healing = true,

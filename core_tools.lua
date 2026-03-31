@@ -100,7 +100,9 @@ local function init_core_tools()
         local ok, new_content, changes, err_msg = patcher.apply_patch(ctx.knowledge_base[rel_path], patch_body)
 
         if ok then
-            utils.copy_file(full_path, full_path .. ".bak")
+            if ctx.config.CREATE_BACKUPS ~= false then
+                utils.copy_file(full_path, full_path .. ".bak")
+            end
             local w_ok, w_err = utils.write_file(full_path, new_content)
             if w_ok then
                 ctx:add_file(rel_path, new_content)
@@ -124,7 +126,9 @@ local function init_core_tools()
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
 
         if utils.read_file_range(full_path) then
-            utils.copy_file(full_path, full_path .. ".bak")
+            if ctx.config.CREATE_BACKUPS ~= false then
+                utils.copy_file(full_path, full_path .. ".bak")
+            end
         end
 
         local dir_path = full_path:match("^(.*)/[^/]+$")

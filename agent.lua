@@ -94,7 +94,11 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ctx:get_search_digest(digest_budget)
 
-    local combined_system_prompt = sys_prompt_text .. "\n\n" .. ctx:get_report(agent_name) .. ctx:get_thoughts_digest() .. "\n\n" .. search_digest .. "\n\n" .. memory_block
+    local combined_system_prompt = sys_prompt_text .. "\n\n" .. 
+                                   ctx:get_report(agent_name) .. "\n\n" .. 
+                                   memory_block .. "\n\n" .. 
+                                   search_digest .. "\n\n" .. 
+                                   ctx:get_thoughts_digest()
 
     local messages = { { role = "system", content = combined_system_prompt } }
 

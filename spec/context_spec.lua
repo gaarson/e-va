@@ -224,4 +224,38 @@ describe("Context class", function()
         end)
     end)
 
+    describe("Thought Deduplication (Jaccard Similarity Engine)", function()
+        it("should merge exact substring continuations", function()
+            ctx:add_thought(1, "I need to read the file.")
+            ctx:add_thought(2, "I need to read the file. Now I will patch it.")
+
+            assert.are.equal(1, #ctx.thoughts)
+            assert.are.equal(2, ctx.thoughts[1].merged)
+            assert.truthy(ctx.thoughts[1].content:match("Now I will patch it"))
+        end)
+
+        it("should merge highly similar rephrased thoughts", function()
+            ctx:add_thought(1, "The schema is broken, I must fix the database tables.")
+            ctx:add_thought(2, "I must fix the database tables because the schema is broken.")
+
+            assert.are.equal(1, #ctx.thoughts)
+            assert.are.equal(2, ctx.thoughts[1].merged)
+        end)
+
+        it("should not merge completely different thoughts", function()
+            ctx:add_thought(1, "I am analyzing the network stack.")
+            ctx:add_thought(2, "I am generating the UI components for the frontend.")
+
+            assert.are.equal(2, #ctx.thoughts)
+        end)
+
+        it("should format the digest with merge counters", function()
+            ctx:add_thought(1, "Setup complete.")
+            ctx:add_thought(2, "Setup complete.")
+            ctx:add_thought(3, "Setup complete.")
+
+            local digest = ctx:get_thoughts_digest()
+            assert.truthy(digest:match("Merged x3"))
+        end)
+    end)
 end)

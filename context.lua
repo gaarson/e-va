@@ -20,8 +20,7 @@ function M.reset(self)
     self.current_task_index = 1
     self.identity = nil
     self.file_tree = nil
-    -- [NEW]: Изолированное хранилище закрепленных файлов
-    self.pinned_files = {} 
+    self.pinned_files = {}
 end
 
 function M.get_history(self, agent_name)
@@ -54,17 +53,71 @@ function M.replace_last_assistant_message(self, agent_name, new_content)
     return false
 end
 
+-- [SIMILARITY ENGINE] Fast Jaccard index for string comparison
+local function calculate_similarity(s1, s2)
+    local w1, w2 = {}, {}
+    local set_size1, set_size2 = 0, 0
+    
+    for w in s1:gmatch("%a+") do 
+        local lw = w:lower()
+        if not w1[lw] then w1[lw] = true; set_size1 = set_size1 + 1 end
+    end
+    for w in s2:gmatch("%a+") do 
+        local lw = w:lower()
+        if not w2[lw] then w2[lw] = true; set_size2 = set_size2 + 1 end
+    end
+    
+    if set_size1 == 0 or set_size2 == 0 then return 0 end
+    
+    local intersect = 0
+    for w in pairs(w1) do if w2[w] then intersect = intersect + 1 end end
+    
+    local union = set_size1 + set_size2 - intersect
+    return intersect / union
+end
+
 function M.add_thought(self, turn, thought_text)
     self.thoughts = self.thoughts or {}
-    table.insert(self.thoughts, { turn = turn, content = thought_text })
-    if #self.thoughts > 10 then table.remove(self.thoughts, 1) end
+    local clean_thought = require("utils").trim(thought_text)
+    if clean_thought == "" then return end
+
+    local MERGE_THRESHOLD = 0.65
+
+    if #self.thoughts > 0 then
+        local last_thought = self.thoughts[#self.thoughts]
+        local current_merge_count = last_thought.merged or 1
+        
+        -- Heuristic 1: Substring inclusion
+        if clean_thought:find(last_thought.content, 1, true) then
+            last_thought.turn = turn
+            last_thought.content = clean_thought
+            last_thought.merged = current_merge_count + 1
+            return
+        end
+
+        -- Heuristic 2: Jaccard similarity check
+        local sim = calculate_similarity(last_thought.content, clean_thought)
+        if sim > MERGE_THRESHOLD then
+            last_thought.turn = turn
+            last_thought.content = clean_thought
+            last_thought.merged = current_merge_count + 1
+            return
+        end
+    end
+
+    table.insert(self.thoughts, { turn = turn, content = clean_thought, merged = 1 })
+    if #self.thoughts > 5 then table.remove(self.thoughts, 1) end
 end
 
 function M.get_thoughts_digest(self)
     if not self.thoughts or #self.thoughts == 0 then return "" end
     local out = {"\n=== AGENT RECENT THOUGHTS (Continuity) ==="}
     for _, th in ipairs(self.thoughts) do
-        table.insert(out, string.format("--- Turn %d Thought ---\n%s", th.turn, th.content))
+        local header = string.format("--- Turn %d Thought ---", th.turn)
+        if th.merged and th.merged > 1 then
+            header = string.format("--- Turn %d Thought (Merged x%d) ---", th.turn, th.merged)
+        end
+        table.insert(out, header .. "\n" .. th.content)
     end
     return table.concat(out, "\n")
 end
@@ -87,104 +140,6 @@ end
 
 function M.add_search_result(self, query, result)
     self.search_history[query] = result
-end
-
-function M.snapshot(self)
-    local state = {
-        knowledge_base = self.knowledge_base,
-        file_access_rank = self.file_access_rank,
-        global_access_counter = self.global_access_counter,
-        file_states = self.file_states,
-        search_history = self.search_history,
-        agent_histories = self.agent_histories,
-        thoughts = self.thoughts,
-        execution_plan = self.execution_plan,
-        current_task_index = self.current_task_index,
-        identity = self.identity,
-        file_tree = self.file_tree
-    }
-    return json:encode(state)
-end
-
-function M.load_from_snapshot(self, json_str)
-    local status, state = pcall(function() return json:decode(json_str) end)
-    if not status or not state then return false, "Corrupted JSON" end
-    self.knowledge_base = state.knowledge_base or {}
-    self.file_access_rank = state.file_access_rank or {}
-    self.global_access_counter = state.global_access_counter or 0
-    self.file_states = state.file_states or {}
-    self.search_history = state.search_history or {}
-    self.agent_histories = state.agent_histories or {}
-    self.thoughts = state.thoughts or {}
-    self.execution_plan = state.execution_plan or {}
-    self.current_task_index = state.current_task_index or 1
-    self.identity = state.identity
-    self.file_tree = state.file_tree
-    return true
-end
-
-function M.estimate_tokens(self, text)
-    if not text then return 0 end
-    local divisor = (self.config.LIMITS and self.config.LIMITS.CHARS_PER_TOKEN) or 3.5
-    return math.ceil(#text / divisor)
-end
-
-function M.get_memory_block(self, max_tokens)
-    max_tokens = max_tokens or 100000
-    local current_tokens = 0
-    local mem_buffer = {}
-
-    local current_task = self.execution_plan[self.current_task_index]
-    local active_target = current_task and current_task.file
-
-    local files_list = {}
-    for path, content in pairs(self.knowledge_base) do
-        table.insert(files_list, {
-            path = path,
-            content = content,
-            rank = self.file_access_rank[path] or 0,
-            is_target = (path == active_target)
-        })
-    end
-
-    table.sort(files_list, function(a, b)
-        if a.is_target and not b.is_target then return true end
-        if not a.is_target and b.is_target then return false end
-        return a.rank > b.rank
-    end)
-
-    table.insert(mem_buffer, "\n=== MEMORY (FULL CONTEXT) ===\n")
-
-      for _, f in ipairs(files_list) do
-        local content_display = ""
-        local raw_lines = require("utils").read_lines_raw(f.content)
-
-        for i, line in ipairs(raw_lines) do
-             content_display = content_display .. line .. "\n"
-        end
-
-        local marker = f.is_target and "[TARGET FILE - EDIT THIS]" or "[CONTEXT FILE - READ ONLY]"
-        local file_header = string.format("FILE: %s %s\n```\n", f.path, marker)
-        local file_footer = "```\n"
-
-        local total_str = file_header .. content_display .. file_footer
-        local cost = self:estimate_tokens(total_str)
-
-        if (current_tokens + cost) < max_tokens then
-            table.insert(mem_buffer, total_str)
-            current_tokens = current_tokens + cost
-        else
-            if f.is_target then
-                 table.insert(mem_buffer, total_str)
-                 current_tokens = current_tokens + cost
-            else
-                table.insert(mem_buffer, string.format("FILE: %s [OMITTED - OUT OF MEMORY]\n", f.path))
-            end
-        end
-    end
-
-    if #files_list == 0 then return "\n=== MEMORY ===\n(Empty)\n" end
-    return table.concat(mem_buffer, "")
 end
 
 function M.pin_file(self, path)
@@ -216,7 +171,7 @@ function M.snapshot(self)
         current_task_index = self.current_task_index,
         identity = self.identity,
         file_tree = self.file_tree,
-        pinned_files = self.pinned_files -- Сохраняем стейт пинов
+        pinned_files = self.pinned_files
     }
     return json:encode(state)
 end
@@ -245,11 +200,10 @@ function M.estimate_tokens(self, text)
     return math.ceil(#text / divisor)
 end
 
--- [REWRITTEN]: Инверсия позиционирования и XML Framing
 function M.get_memory_block(self, max_tokens)
     max_tokens = max_tokens or 100000
     local current_tokens = 0
-    
+
     local pinned_buffer = {}
     local ctx_buffer = {}
     local target_buffer = ""
@@ -269,21 +223,20 @@ function M.get_memory_block(self, max_tokens)
         })
     end
 
-    -- Сортируем: Pinned -> High Rank
+    -- [ОПТИМИЗАЦИЯ]: Дефрагментация KV-Cache. Сортируем пути по алфавиту
     table.sort(files_list, function(a, b)
         if a.is_pinned and not b.is_pinned then return true end
         if not a.is_pinned and b.is_pinned then return false end
-        return a.rank > b.rank
+        return a.path < b.path
     end)
 
     for _, f in ipairs(files_list) do
         local raw_lines = require("utils").read_lines_raw(f.content)
         local content_display = table.concat(raw_lines, "\n")
-        
+
         local total_str = ""
         local cost = 0
 
-        -- XML Boundary Framing
         if f.is_target then
             total_str = string.format("\n<file_target path=\"%s\" instruction=\"%s\">\n%s\n</file_target>\n", f.path, target_instruction, content_display)
         elseif f.is_pinned then
@@ -305,7 +258,6 @@ function M.get_memory_block(self, max_tokens)
             end
         else
             if f.is_target then
-                -- Target MUST be included, even if we truncate context
                 target_buffer = total_str
                 current_tokens = current_tokens + cost
             else
@@ -314,11 +266,6 @@ function M.get_memory_block(self, max_tokens)
         end
     end
 
-    -- Positional Inversion Assembly:
-    -- 1. Header
-    -- 2. Pinned Files (High importance reference)
-    -- 3. Standard Context
-    -- 4. Target File (Highest spatial proximity to generation)
     local final_output = {"\n=== MEMORY (XML FRAMED CONTEXT) ===\n"}
     if #pinned_buffer > 0 then
         table.insert(final_output, "\n")
@@ -423,18 +370,17 @@ end
 function M.sync_files(self)
     local utils = require("utils")
     local updated_files = {}
-    
+
     for path, old_content in pairs(self.knowledge_base) do
         local full_path = self.config.PROJECT_ROOT .. "/" .. path
         local new_content = utils.read_file_range(full_path)
-        
-        -- Если файл существует и его содержимое отличается от кэша
+
         if new_content and new_content ~= old_content then
             self.knowledge_base[path] = new_content
             table.insert(updated_files, path)
         end
     end
-    
+
     return updated_files
 end
 
