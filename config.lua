@@ -13,17 +13,14 @@ function M.get()
         CHARS_PER_TOKEN = 3.5
     }
 
-    cfg.CREATE_BACKUPS = false -- Отключаем создание .bak файлов для экономии I/O
+    cfg.CREATE_BACKUPS = false
 
     local BASE_PARAMS = {
         stream = true,
         stop = { "<|im_end|>", "<|im_start|>" }
     }
 
-    -- [TABBY API / EXLLAMAV2 SAMPLER PROFILES]
-    -- ExLlamaV2 pipeline: penalties -> top_k -> min_p -> top_p -> temperature (if temperature_last=true)
     local SAMPLERS = {
-        -- Максимальная детерминированность. Идеально для ARCHITECT (анализ, JSON-роутинг).
         ANALYTICAL = {
             max_tokens = 16384,
             temperature = 0.1,
