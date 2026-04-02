@@ -34,12 +34,27 @@ describe("Core Tools via Registry Subsystem", function()
         assert.truthy(res.output:match("%[SECURITY DENY%]"))
     end)
 
-    it("list_files: should execute and update file_tree", function()
-        stub(utils, "list_files_recursive").returns("file1.lua\nfile2.lua")
-        local res = registry.execute("list_files", ctx, "TEST_AGENT")
-        assert.truthy(res.output:match("updated"))
-        assert.are.equal("file1.lua\nfile2.lua", ctx.file_tree)
-        utils.list_files_recursive:revert()
+    it("explore_tree: should execute, update file_tree, and handle default depth", function()
+        stub(utils, "explore_directory").returns("Directory: /src\n  src/main.lua\n  src/utils/")
+        
+        local res_explicit = registry.execute("explore_tree:src:2", ctx, "TEST_AGENT")
+        assert.truthy(res_explicit.output:match("Explored directory 'src' %(Depth: 2%)"))
+        assert.are.equal("Directory: /src\n  src/main.lua\n  src/utils/", ctx.file_tree, "Agent context MUST be updated with the new view")
+
+        local res_default = registry.execute("explore_tree:docs", ctx, "TEST_AGENT")
+        assert.truthy(res_default.output:match("Depth: 1"), "Should default to depth 1 if not specified")
+
+        utils.explore_directory:revert()
+    end)
+
+    it("explore_tree: should reflect file line counts in the tool output", function()
+        stub(utils, "explore_directory").returns("Directory: /src\n  src/main.lua (10 lines)\n  src/utils/")
+        
+        local res = registry.execute("explore_tree:src", ctx, "TEST_AGENT")
+        
+        assert.truthy(res.output:match("src/main.lua %(10 lines%)"), "Tool output must display restored line counts")
+        
+        utils.explore_directory:revert()
     end)
 
     it("read_file: should handle missing file error", function()
@@ -154,5 +169,37 @@ describe("Core Tools via Registry Subsystem", function()
         local res4 = registry.execute("shell:echo 'Error: test failed' && false", ctx, "TEST_AGENT")
         assert.truthy(res4.output:match("CIRCUIT BREAKER TRIGGERED"))
         assert.are.equal(0, ctx.test_failures)
+    end)
+
+    describe("task_complete iterator logic", function()
+        it("should increment task index and suppress pipeline exit until plan is exhausted", function()
+            -- Имитируем план из двух шагов
+            ctx.execution_plan = {
+                { file = "file1.lua", instruction = "step 1" },
+                { file = "file2.lua", instruction = "step 2" }
+            }
+            ctx.current_task_index = 1
+
+            -- Итерация 1: завершаем первый шаг
+            local res1 = registry.execute("task_complete", ctx, "TEST_AGENT")
+            
+            assert.truthy(res1.output:match("Step 1/2 complete"), "Output should indicate step progression")
+            assert.is_nil(res1.signal, "Signal MUST be nil to prevent pipeline stage termination")
+            assert.are.equal(2, ctx.current_task_index, "Task index should be incremented")
+
+            -- Итерация 2: завершаем финальный шаг
+            local res2 = registry.execute("task_complete", ctx, "TEST_AGENT")
+            
+            assert.truthy(res2.output:match("All steps in the execution plan are complete"), "Output should indicate plan completion")
+            assert.are.equal("PIPELINE_NEXT_STAGE", res2.signal, "Signal MUST be PIPELINE_NEXT_STAGE when plan is exhausted")
+        end)
+
+        it("should gracefully handle empty or nil execution plans (fallback)", function()
+            ctx.execution_plan = {}
+            local res = registry.execute("task_complete", ctx, "TEST_AGENT")
+            
+            assert.truthy(res.output:match("Task marked as complete"))
+            assert.are.equal("PIPELINE_NEXT_STAGE", res.signal, "Must exit stage if no plan exists")
+        end)
     end)
 end)

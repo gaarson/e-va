@@ -146,6 +146,24 @@ describe("Context class", function()
             assert.is_true(pos_pinned < pos_target, "Pinned context must appear BEFORE target")
             assert.is_true(pos_bg < pos_target, "General context must appear BEFORE target")
         end)
+
+        it("should inject an accurate execution plan checklist into the memory block", function()
+            ctx.execution_plan = {
+                { file = "module_a.lua", instruction = "init" },
+                { file = "module_b.lua", instruction = "process" },
+                { file = "module_c.lua", instruction = "cleanup" }
+            }
+            ctx.current_task_index = 2 
+            
+            ctx:add_file("module_b.lua", "-- dummy content")
+
+            local mem_block = ctx:get_memory_block(10000)
+
+            assert.truthy(mem_block:match("=== EXECUTION PLAN STATUS ==="), "Checklist header must be present")
+            assert.truthy(mem_block:match("%[x%] Step 1: module_a%.lua"), "Step 1 must be marked as completed")
+            assert.truthy(mem_block:match("%[>%] Step 2: module_b%.lua"), "Step 2 must be marked as active")
+            assert.truthy(mem_block:match("%[ %] Step 3: module_c%.lua"), "Step 3 must be marked as pending")
+        end)
     end)
 
     describe("Search Digest & Context Compression", function()

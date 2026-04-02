@@ -6,9 +6,18 @@ local logger = require("logger")
 local os = require("os")
 
 local function init_core_tools()
-    registry.register("list_files", "Lists all files in project", function(args, ctx, agent_name)
-        ctx.file_tree = utils.list_files_recursive(ctx.config.PROJECT_ROOT)
-        return { output = "\n[SYSTEM]: File tree updated." }
+    registry.register("explore_tree", "Explore directory structure with depth limit", function(args, ctx, agent_name)
+        local path, depth = args:match("^(.-):(%d+)$")
+        if not path then 
+            path = utils.trim(args)
+            depth = 1 -- По умолчанию смотрим только на 1 уровень вглубь
+        end
+
+        local tree_view = utils.explore_directory(ctx.config.PROJECT_ROOT, path, depth)
+        
+        ctx.file_tree = tree_view
+        
+        return { output = string.format("\n[SYSTEM]: Explored directory '%s' (Depth: %s).\n```text\n%s\n```", path, depth, tree_view) }
     end)
 
     registry.register("read_file", "Loads full file into memory", function(args, ctx, agent_name)
@@ -286,8 +295,28 @@ local function init_core_tools()
         return { output = "\n[ERROR]: Invalid JSON plan format. Engine saw: " .. debug_snip, signal = nil }
     end)
 
-    registry.register("task_complete", "Signal pipeline completion", function(args, ctx, agent_name)
-        return { output = "\n[SYSTEM]: Task marked as complete.", signal = "PIPELINE_NEXT_STAGE" }
+    registry.register("task_complete", "Signal completion of the current task step", function(args, ctx, agent_name)
+        if ctx.execution_plan and #ctx.execution_plan > 0 then
+            if ctx.current_task_index < #ctx.execution_plan then
+                local old_idx = ctx.current_task_index
+                ctx.current_task_index = ctx.current_task_index + 1
+                local next_task = ctx.execution_plan[ctx.current_task_index]
+                
+                return {
+                    output = string.format("\n[SYSTEM]: Step %d/%d complete. Moving to step %d. New target loaded: %s", 
+                                           old_idx, #ctx.execution_plan, ctx.current_task_index, tostring(next_task.file)), 
+                    signal = nil
+                }
+            else
+                return { 
+                    output = "\n[SYSTEM]: All steps in the execution plan are complete. Ending stage.", 
+                    signal = "PIPELINE_NEXT_STAGE"
+                }
+            end
+        else
+            -- Fallback, если плана нет (например, прямая инструкция пользователя)
+            return { output = "\n[SYSTEM]: Task marked as complete.", signal = "PIPELINE_NEXT_STAGE" }
+        end
     end)
 
     registry.register("ask_user", "Pause execution and ask the human user a question", function(args, ctx, agent_name)

@@ -90,7 +90,7 @@ function M.write_file(path, content)
     return ok, w_err
 end
 
-local function count_lines_fast(filepath)
+function M.count_lines_fast(filepath)
     local f = io.open(filepath, "rb")
     if not f then return "?" end
 
@@ -244,6 +244,44 @@ function M.replace_lines(full_path, start_line, end_line, new_code)
 
     local final_content = table.concat(lines, "\n")
     return M.write_file(full_path, final_content)
+end
+
+function M.explore_directory(root_path, target_subpath, max_depth)
+    local target = target_subpath and target_subpath ~= "" and target_subpath or "."
+    local full_target = M.normalize_path(root_path, target)
+    
+    local absolute_target = root_path .. "/" .. full_target
+    local safe_target = M.shell_quote(absolute_target)
+    local depth = tonumber(max_depth) or 1
+
+    local cmd = string.format(
+        "find %s -maxdepth %d -not -path '*/\\.git/*' -not -path '*/node_modules/*' -not -path '*/build/*' 2>/dev/null | sort",
+        safe_target, depth
+    )
+
+    local p = io.popen(cmd)
+    if not p then return "[ERROR] Failed to execute directory scan" end
+    local out = p:read("*a")
+    p:close()
+
+    local files = {}
+    for line in out:gmatch("[^\r\n]+") do
+        local rel = M.normalize_path(root_path, line)
+        if rel ~= "" and rel ~= full_target then
+            local full_path = root_path .. "/" .. rel
+            local is_dir = os.execute(string.format("test -d '%s'", full_path)) == 0
+            
+            if is_dir then
+                table.insert(files, "  " .. rel .. "/")
+            else
+                local lines_count = M.count_lines_fast(full_path)
+                table.insert(files, string.format("  %s (%s lines)", rel, tostring(lines_count)))
+            end
+        end
+    end
+
+    if #files == 0 then return "(Directory is empty or access denied)" end
+    return string.format("Directory: /%s\n%s", full_target, table.concat(files, "\n"))
 end
 
 return M

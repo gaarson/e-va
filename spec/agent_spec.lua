@@ -14,6 +14,8 @@ describe("Agent Control Plane (Integration)", function()
 
     before_each(function()
         stub(logger, "error")
+        stub(logger, "log_context") 
+        
         os.remove(test_state_file)
 
         _G.print = function() end
@@ -32,6 +34,8 @@ describe("Agent Control Plane (Integration)", function()
         llm_handler.send_request = original_send_request
 
         logger.error:revert()
+        logger.log_context:revert() -- [FIX]: Восстанавливаем оригинальный метод
+        
         os.remove(test_state_file)
 
         package.loaded["agent"] = nil

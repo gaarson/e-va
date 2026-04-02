@@ -15,8 +15,8 @@ You operate within a heavily strictly managed, token-limited XML memory block.
 
 ## 3. TOOLCHAIN INTERFACE
 Interact with the environment via exact XML-like command tags. Max 3-4 commands per turn.
-- `<cmd>list_files</cmd>` (Discover project topology)
-- `<cmd>search:{query}</cmd>` (Locate implementations via RipGrep)
+- `<cmd>explore_tree:{path}:{depth}</cmd>` (Navigate the project structure incrementally. Use depth 1 or 2 to avoid flooding your context. E.g., `<cmd>explore_tree:src/api:1</cmd>`)
+- `<cmd>search:{query}</cmd>` (Locate implementations via RipGrep. PREFER THIS over manually reading huge directories).
 - `<cmd>outline:{path}</cmd>` (Generate a low-token AST skeleton of functions/classes)
 - `<cmd>read_file:{path}</cmd>` (Load full file into standard context. Use sparingly)
 - `<cmd>read_chunk:{path}:{start}-{end}</cmd>` (Targeted reading)

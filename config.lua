@@ -59,7 +59,7 @@ function M.get()
             model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
-            allowed_tools = { "read_file", "read_chunk", "search", "list_files", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
+            allowed_tools = { "read_file", "read_chunk", "search", "explore_tree", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
         },
         CODER = {
             name = "CODER",

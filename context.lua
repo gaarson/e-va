@@ -263,6 +263,23 @@ function M.get_memory_block(self, max_tokens)
     end
 
     local final_output = {"\n=== MEMORY (XML FRAMED CONTEXT) ===\n"}
+
+    if self.execution_plan and #self.execution_plan > 0 then
+        table.insert(final_output, "=== EXECUTION PLAN STATUS ===\n")
+        for i, task in ipairs(self.execution_plan) do
+            local status_marker
+            if i < self.current_task_index then
+                status_marker = "[x]"
+            elseif i == self.current_task_index then
+                status_marker = "[>]"
+            else
+                status_marker = "[ ]"
+            end
+            table.insert(final_output, string.format("%s Step %d: %s -> %s\n", status_marker, i, tostring(task.file), tostring(task.instruction)))
+        end
+        table.insert(final_output, "\n")
+    end
+
     if #pinned_buffer > 0 then
         table.insert(final_output, "\n")
         table.insert(final_output, table.concat(pinned_buffer, ""))
@@ -276,7 +293,10 @@ function M.get_memory_block(self, max_tokens)
         table.insert(final_output, target_buffer)
     end
 
-    if #files_list == 0 then return "\n=== MEMORY ===\n(Empty)\n" end
+    if #files_list == 0 then 
+        table.insert(final_output, "\n(No files loaded in memory)\n") 
+    end
+    
     return table.concat(final_output, "")
 end
 
@@ -346,14 +366,12 @@ function M.get_report(self, agent_name)
         search_summary = string.format("\n## SEARCH HISTORY\n(Cached %d queries)\n", count)
     end
 
-    local tree_block = ""
-    if agent_name == "ARCHITECT" then
-        local tree_content = self.file_tree or "(empty)"
-        if #tree_content > 100000 then
-            tree_content = tree_content:sub(1, 100000) .. "\n... [TREE TRUNCATED - USE <cmd>list_files</cmd> OR <cmd>search:query</cmd> TO EXPLORE FURTHER]"
-        end
-        tree_block = string.format("## FILE TREE\n```text\n%s\n```\n", tree_content)
+    local tree_content = self.file_tree or "(empty)"
+    if #tree_content > 30000 then
+        tree_content = tree_content:sub(1, 30000) .. "\n... [TREE TRUNCATED - USE <cmd>explore_tree:path:depth</cmd> TO NAVIGATE]"
     end
+    
+    local tree_block = string.format("## PROJECT STRUCTURE (Current View)\n```text\n%s\n```\n", tree_content)
 
     return string.format(
         "# PROJECT CONTEXT\nRoot: %s\n---\n%s%s",

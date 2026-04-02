@@ -29,7 +29,7 @@ local core_tools = require("core_tools")
 local os = require("os")
 
 local ctx = Context.new(config)
-local STATE_FILE = ".e-va_state.json"
+local STATE_FILE = config.PROJECT_ROOT .. "/.e-va-conf/.state.json"
 local restored = false
 
 if utils.read_file_range(STATE_FILE) then
@@ -141,36 +141,49 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local tag_open = "<think>"
     local tag_close = "</think>"
 
-    local response_data, err = llm.send_request(agent_cfg, messages, {
-        on_token = function(t)
-            print_buf = print_buf .. t
-            if not in_thought then
-                local s, e = print_buf:find(tag_open)
-                if s then
-                    io.write(print_buf:sub(1, s - 1)); io.flush()
-                    print_buf = print_buf:sub(e + 1)
-                    in_thought = true
-                elseif #print_buf > #tag_open then
-                    local safe_len = #print_buf - #tag_open
-                    io.write(print_buf:sub(1, safe_len)); io.flush()
-                    print_buf = print_buf:sub(safe_len + 1)
-                end
-            else
-                local s, e = print_buf:find(tag_close)
-                if s then
-                    print_buf = print_buf:sub(e + 1)
-                    in_thought = false
-                end
-            end
+    local response_data, err
+    local max_retries = 5
+    local retry_delay = 5
+
+    for attempt = 1, max_retries do
+        response_data, err = llm.send_request(agent_cfg, messages, {
+          on_token = function(t)
+              print_buf = print_buf .. t
+              if not in_thought then
+                  local s, e = print_buf:find(tag_open)
+                  if s then
+                      io.write(print_buf:sub(1, s - 1)); io.flush()
+                      print_buf = print_buf:sub(e + 1)
+                      in_thought = true
+                  elseif #print_buf > #tag_open then
+                      local safe_len = #print_buf - #tag_open
+                      io.write(print_buf:sub(1, safe_len)); io.flush()
+                      print_buf = print_buf:sub(safe_len + 1)
+                  end
+              else
+                  local s, e = print_buf:find(tag_close)
+                  if s then
+                      print_buf = print_buf:sub(e + 1)
+                      in_thought = false
+                  end
+              end
+          end
+        })
+
+        if response_data then break end
+        logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
+        if attempt < max_retries then
+            print(string.format("\27[33m[SYSTEM] Retrying in %d seconds...\27[0m", retry_delay))
+            os.execute("sleep " .. tostring(retry_delay))
+            retry_delay = retry_delay * 3 
         end
-    })
+    end
 
     if print_buf ~= "" and not in_thought then io.write(print_buf) end
     io.write("\n")
 
     if not response_data then
-        logger.error("Network Error for " .. tostring(agent_name), err)
-        os.execute("sleep 3")
+        logger.error("FATAL: Network unreachable after " .. max_retries .. " attempts.", err)
         return "ERROR"
     end
 
@@ -259,6 +272,9 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     end
 
     utils.write_file(STATE_FILE, ctx:snapshot())
+
+    collectgarbage("collect")
+
     return signal
 end
 
@@ -352,7 +368,7 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
     local initial_msg = "TASK: " .. task_instruction
     local docs_loaded = {}
 
-    ctx.file_tree = utils.list_files_recursive(config.PROJECT_ROOT)
+    ctx.file_tree = utils.explore_directory(config.PROJECT_ROOT, ".", 1)
 
     local readme_path = "README.md"
     local readme_content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. readme_path)
