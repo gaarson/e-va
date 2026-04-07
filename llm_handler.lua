@@ -2,43 +2,26 @@ local M = {}
 local http = require("http.request")
 local json = require("JSON")
 local logger = require("logger")
+local providers = require("llm_providers")
 
 function M.send_request(profile, messages, options)
     options = options or {}
-    local override_params = options.override_params
     local on_token_cb = options.on_token
 
     if not profile or not profile.url then
         return nil, "Invalid Profile"
     end
 
+    local provider_name = profile.provider or "openai"
+    local provider = providers.get(provider_name)
+
     local req = http.new_from_uri(profile.url)
     req.headers:upsert(":method", "POST")
     req.headers:upsert("content-type", "application/json")
     req.headers:upsert("accept", "text/event-stream")
 
-    local headers, stream = req:go(600)
-    if not headers then return nil, "Connection timeout or failed" end
+    local payload = provider.build_payload(profile, messages, options)
 
-    local payload = {
-        model = profile.model,
-        messages = messages,
-    }
-
-    if profile.params then
-        for k, v in pairs(profile.params) do
-            payload[k] = v
-        end
-    end
-
-    if override_params then
-        for k, v in pairs(override_params) do
-            payload[k] = v
-        end
-    end
-
-    if payload.stream == nil then payload.stream = false end
-    
     local body = json:encode(payload)
     req:set_body(body)
 
@@ -63,6 +46,7 @@ function M.send_request(profile, messages, options)
 
     local full_content = ""
     local buffer = ""
+    local in_reasoning = false
 
     for chunk in stream:each_chunk() do
         buffer = buffer .. chunk
@@ -76,19 +60,31 @@ function M.send_request(profile, messages, options)
 
             line = line:gsub("\r", ""):gsub("^%s+", "")
 
-            if line ~= "" then
-                if line:sub(1, 5) == "data:" then
-                    local json_str = line:sub(6)
-                    if json_str:match("%[DONE%]") then
-                    else
-                        local ok, part = pcall(json.decode, json, json_str)
-                        if ok and part and part.choices and part.choices[1] then
-                            local delta = part.choices[1].delta
-                            if delta and delta.content then
-                                local token = delta.content
-                                full_content = full_content .. token
-                                if on_token_cb then on_token_cb(token) end
-                            end
+            if line ~= "" and line:sub(1, 5) == "data:" then
+                local json_str = line:sub(6)
+                if not json_str:match("%[DONE%]") then
+                    -- Делегируем безопасный парсинг чанка провайдеру
+                    local c_text, c_reason = provider.extract_stream(json_str)
+
+                    if c_reason and c_reason ~= "" then
+                        if not in_reasoning then
+                            in_reasoning = true
+                            local token = "<think>\n" .. c_reason
+                            full_content = full_content .. token
+                            if on_token_cb then on_token_cb(token) end
+                        else
+                            full_content = full_content .. c_reason
+                            if on_token_cb then on_token_cb(c_reason) end
+                        end
+                    elseif c_text and c_text ~= "" then
+                        if in_reasoning then
+                            in_reasoning = false
+                            local token = "\n</think>\n" .. c_text
+                            full_content = full_content .. token
+                            if on_token_cb then on_token_cb(token) end
+                        else
+                            full_content = full_content .. c_text
+                            if on_token_cb then on_token_cb(c_text) end
                         end
                     end
                 end
@@ -108,9 +104,11 @@ function M.send_request(profile, messages, options)
     }
 end
 
-function M.extract_content(data)
-    if not data or not data.choices or not data.choices[1] then return nil end
-    return data.choices[1].message.content
+function M.extract_content(data, provider_name)
+    provider_name = provider_name or "openai"
+    local provider = providers.get(provider_name)
+
+    return provider.extract_sync(data)
 end
 
 return M

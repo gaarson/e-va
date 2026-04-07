@@ -34,9 +34,8 @@ describe("LLM Handler (Network & Parsing)", function()
         local mock_req = { headers = { upsert = function() end }, set_body = function() end, go = function() return nil, "timeout" end }
         http_request.new_from_uri = function() return mock_req end
         assert.is_nil(llm_handler.send_request(mock_profile, {}))
-
         mock_req.go = function(self)
-            if not self.c then self.c = true return {}, {} end
+            if not self.c then self.c = true return { get = function() return "500" end }, {} end
             return nil, "fail"
         end
         assert.is_nil(llm_handler.send_request(mock_profile, {}))

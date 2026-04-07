@@ -7,6 +7,7 @@ return {
       "agent",
       "context",
       "core_tools",
+      "llm_providers",
       "llm_handler",
       "logger",
       "patcher",

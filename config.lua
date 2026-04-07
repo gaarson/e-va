@@ -55,16 +55,18 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            url = "http://192.168.0.116:5000/v1/chat/completions",
-            model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
+            url = "http://192.168.0.116:8000/v1/chat/completions",
+            -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
+            model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = { "read_file", "read_chunk", "search", "explore_tree", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
         },
         CODER = {
             name = "CODER",
-            url = "http://192.168.0.116:5000/v1/chat/completions",
-            model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
+            url = "http://192.168.0.116:8000/v1/chat/completions",
+            -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
+            model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }
