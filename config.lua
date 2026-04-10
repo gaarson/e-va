@@ -55,7 +55,7 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            url = "http://192.168.0.116:8000/v1/chat/completions",
+            url = "http://192.168.0.116:5000/v1/chat/completions",
             -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
@@ -64,7 +64,7 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = "http://192.168.0.116:8000/v1/chat/completions",
+            url = "http://192.168.0.116:5000/v1/chat/completions",
             -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),

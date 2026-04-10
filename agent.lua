@@ -146,6 +146,12 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local retry_delay = 5
 
     for attempt = 1, max_retries do
+        -- response_data, err = llm.send_request(agent_cfg, messages, {
+        --   on_token = function(t)
+        --       io.write(t)
+        --       io.flush()
+        --   end
+        -- })
         response_data, err = llm.send_request(agent_cfg, messages, {
           on_token = function(t)
               print_buf = print_buf .. t
