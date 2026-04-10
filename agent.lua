@@ -40,12 +40,16 @@ end
 core_tools.init()
 
 local arg1, arg2 = ...
-local cli_args = arg or _G.arg or {}
-local raw_start_file = arg1 or cli_args
-local raw_instruction = arg2 or cli_args
+local start_file = type(arg1) == 'string' and arg1 or nil
+local instruction = type(arg2) == 'string' and arg2 or nil
 
-local start_file = type(raw_start_file) == "string" and raw_start_file or nil
-local instruction = type(raw_instruction) == "string" and raw_instruction or nil
+if not instruction then
+    local task_path = config.PROJECT_ROOT .. '/.e-va-conf/task.txt'
+    local task_content = utils.read_file_range(task_path)
+    if task_content and task_content ~= '' then
+        instruction = utils.trim(task_content)
+    end
+end
 
 local function load_prompt(file_path)
     local local_path = config.PROJECT_ROOT .. "/.e-va-conf/" .. file_path

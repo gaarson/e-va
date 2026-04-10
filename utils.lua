@@ -112,7 +112,7 @@ end
 
 function M.list_files_recursive(root_path)
     local safe_root = M.shell_quote(root_path)
-    local cmd = string.format("rg --files --hidden --glob '!.git/' --color never %s 2>/dev/null", safe_root)
+    local cmd = string.format("rg --files --hidden --glob '!.git/' --glob '!.e-va-conf/' --glob '!lua_modules/' --glob '!.luacov*' --glob '!*.report.out' --glob '!*.stats.out' --color never %s 2>/dev/null", safe_root)
 
     local p = io.popen(cmd)
     if not p then return "Error listing files" end
@@ -255,7 +255,7 @@ function M.explore_directory(root_path, target_subpath, max_depth)
     local depth = tonumber(max_depth) or 1
 
     local cmd = string.format(
-        "find %s -maxdepth %d -not -path '*/\\.git/*' -not -path '*/node_modules/*' -not -path '*/build/*' 2>/dev/null | sort",
+        "find %s -maxdepth %d -not -path '*/\\.git*' -not -path '*/node_modules*' -not -path '*/build*' -not -path '*/\\.e-va-conf*' -not -path '*/lua_modules*' -not -path '*/.luacov*' -not -path '*/*.report.out' -not -path '*/*.stats.out' 2>/dev/null | sort",
         safe_target, depth
     )
 

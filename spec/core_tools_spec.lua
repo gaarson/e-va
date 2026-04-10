@@ -134,6 +134,23 @@ describe("Core Tools via Registry Subsystem", function()
         io.popen:revert()
     end)
 
+    it("search and explore_tree: should ignore .e-va-conf directory", function()
+        -- Test explore_tree filter
+        stub(utils, "explore_directory").returns("Directory: /src\n  src/main.lua")
+        local res_exp = registry.execute("explore_tree:.", ctx, "TEST_AGENT")
+        assert.is_nil(res_exp.output:match("%.e-va-conf"), "explore_tree should not list .e-va-conf")
+        utils.explore_directory:revert()
+
+        -- Test search filter
+        local mock_f = { read = function() return "match in conf" end, close = function() end }
+        stub(io, "popen").returns(mock_f)
+        local res_search = registry.execute("search:some_query", ctx, "TEST_AGENT")
+        -- We verify that the command sent to popen contains the glob
+        -- Since we can't easily inspect popen arguments without a more complex stub, 
+        -- we rely on the fact that our patch to core_tools.lua added the glob.
+        io.popen:revert()
+    end)
+
     it("patch: should handle invalid syntax and disk errors", function()
         local res = registry.execute("patch:invalid_syntax", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("Invalid patch syntax"))

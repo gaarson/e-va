@@ -61,7 +61,7 @@ local function init_core_tools()
 
         local safe_query = utils.shell_quote(query)
         local safe_root = utils.shell_quote(ctx.config.PROJECT_ROOT)
-        local cmd = string.format("rg -n -i -C 1 --color never --fixed-strings --glob '!.git/' %s %s 2>&1 | head -c 4000", safe_query, safe_root)
+        local cmd = string.format("rg -n -i -C 1 --color never --fixed-strings --glob '!.git/' --glob '!.e-va-conf/' %s %s 2>&1 | head -c 4000", safe_query, safe_root)
         local f = io.popen(cmd)
         local res = f:read("*a") or ""
         f:close()
