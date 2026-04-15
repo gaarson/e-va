@@ -30,6 +30,21 @@ local os = require("os")
 
 local ctx = Context.new(config)
 local STATE_FILE = config.PROJECT_ROOT .. "/.e-va-conf/.state.json"
+
+local function resolve_task_instruction(task, config, utils, logger)
+    local instruction = task.instruction
+    if task.instruction_file then
+        local instr_path = config.PROJECT_ROOT .. "/.e-va-conf/" .. task.instruction_file
+        local file_content = utils.read_file_range(instr_path)
+        if file_content then
+            instruction = utils.trim(file_content)
+        else
+            logger.error("IO_ERROR: Could not read instruction_file at " .. instr_path)
+            return nil, "Missing instruction_file mapping"
+        end
+    end
+    return instruction, nil
+end
 local restored = false
 
 if utils.read_file_range(STATE_FILE) then
@@ -438,12 +453,18 @@ end
 if not restored then
     if instruction then
         setup_and_run_task(start_file, instruction, nil)
-    elseif config.TASKS and #config.TASKS > 0 then
-        logger.info(string.format("Batch processing initiated. Found %d tasks.", #config.TASKS))
-        for i, task in ipairs(config.TASKS) do
+    elseif ctx.config.TASKS and #ctx.config.TASKS > 0 then
+        logger.info(string.format("Batch processing initiated. Found %d tasks.", #ctx.config.TASKS))
+        for i, task in ipairs(ctx.config.TASKS) do
+            local instr, err = resolve_task_instruction(task, config, utils, logger)
+            if err then
+                logger.error(err)
+                instr = "FATAL_MISSING_FILE"
+            end
+
             print(string.format("\n\27[35m=== STARTING TASK [%d/%d]: %s ===\27[0m", i, #config.TASKS, task.file or "Global Context"))
             
-            local status, err = pcall(setup_and_run_task, task.file, task.instruction, task.max_turns)
+            local status, err = pcall(setup_and_run_task, task.file, instr, task.max_turns)
             
             if not status then
                 logger.error("Task failed fatally: " .. tostring(err))

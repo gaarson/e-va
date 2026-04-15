@@ -177,6 +177,16 @@ describe("Agent Control Plane (Integration)", function()
     it("should successfully execute batch processing when TASKS are defined", function()
         stub(io, "read").returns("/continue")
 
+        local utils = require("utils")
+        local original_read_file = utils.read_file_range
+        stub(utils, "read_file_range").invokes(function(path)
+            if path:match("task%.txt$") then return nil end
+            return original_read_file(path)
+        end)
+
+        local Context = require("context")
+        stub(Context, "load_from_snapshot").returns(false, "Force fail for test")
+
         local task1_called = false
         local task2_called = false
 
@@ -184,13 +194,12 @@ describe("Agent Control Plane (Integration)", function()
             local prompt_text = messages[#messages].content
             if prompt_text:match("TASK 1") then task1_called = true end
             if prompt_text:match("TASK 2") then task2_called = true end
-            
+
             return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
         end
 
-        local Context = require("context")
         local original_new = Context.new
-        
+
         Context.new = function(cfg)
             cfg.TASKS = {
                 { file = "dummy1.txt", instruction = "DO TASK 1" },
@@ -211,5 +220,44 @@ describe("Agent Control Plane (Integration)", function()
 
         Context.new = original_new
         io.read:revert()
+        utils.read_file_range:revert()
     end)
-end)
+
+    it("should resolve instruction_file from local config during batch processing", function()
+        stub(io, "read").returns("/continue")
+
+        local utils = require("utils")
+        local original_read_file = utils.read_file_range
+        stub(utils, "read_file_range").invokes(function(path)
+            if path:match("task%.txt$") then return nil end
+            if path:match("arch_spec%.md") then
+                return "MOCKED INSTRUCTION PAYLOAD"
+            end
+            return original_read_file(path)
+        end)
+
+        local passed_payload = nil
+        llm_handler.send_request = function(profile, messages)
+            passed_payload = messages[#messages].content
+            return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
+        end
+
+        local Context = require("context")
+        local original_new = Context.new
+
+        Context.new = function(cfg)
+            cfg.TASKS = { { file = "target.c", instruction_file = "arch_spec.md" } }
+            cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
+            return original_new(cfg)
+        end
+
+        local chunk = loadfile("agent.lua")
+        pcall(function() chunk() end)
+
+        assert.truthy(passed_payload:match("MOCKED INSTRUCTION PAYLOAD"), "Agent failed to inject payload from instruction_file")
+
+        utils.read_file_range:revert()
+        Context.new = original_new
+        io.read:revert()
+    end)
+  end)

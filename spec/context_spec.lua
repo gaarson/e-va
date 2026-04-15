@@ -124,6 +124,45 @@ describe("Context class", function()
             assert.truthy(mem_block:match("status=\"OMITTED_OUT_OF_MEMORY\""))
         end)
 
+        it("should prioritize high-rank (MRU) files during memory pressure", function()
+            ctx:add_file("low.txt", "Content Low")
+            ctx:add_file("mid.txt", "Content Mid")
+            ctx:add_file("high.txt", "Content High")
+
+            -- Establish ranks via touch (simulating usage)
+            ctx:touch_file("low.txt")
+            ctx:touch_file("mid.txt")
+            ctx:touch_file("high.txt")
+
+            -- Budget enough for roughly one file
+            local mem_block = ctx:get_memory_block(60)
+
+            assert.truthy(mem_block:match("high%.txt"), "High-rank file should be preserved")
+            assert.truthy(mem_block:match("low%.txt") and mem_block:match("OMITTED_OUT_OF_MEMORY"), "Low-rank file should be evicted")
+        end)
+
+        it("should prioritize MRU files during memory pressure eviction", function()
+            ctx:add_file("file1.txt", "Some content for file 1")
+            ctx:add_file("file2.txt", "Some content for file 2")
+            ctx:add_file("file3.txt", "Some content for file 3")
+
+            -- Set rank: file1 (1), file2 (2), file3 (3)
+            ctx:touch_file("file1.txt")
+            ctx:touch_file("file2.txt")
+            ctx:touch_file("file3.txt")
+
+            -- Force file2 to be the most recent (MRU)
+            ctx:touch_file("file2.txt")
+
+            -- Total tokens for 3 files is approx 3 * (~25 tokens) = 75.
+            -- We set limit to 40 to force eviction of everything except the highest rank.
+            local mem_block = ctx:get_memory_block(40)
+
+            assert.truthy(mem_block:match("file2%.txt"), "MRU file (file2) must be included")
+            assert.truthy(mem_block:match("OMITTED_OUT_OF_MEMORY"), "Non-MRU files must be marked as OMITTED")
+            assert.truthy(mem_block:match("file1%.txt.*OMITTED_OUT_OF_MEMORY"), "Lower rank file (file1) must be marked as OMITTED")
+        end)
+
         it("should enforce Positional Inversion and XML Boundary Framing", function()
             ctx:add_file("bg.txt", "background context")
             ctx:add_file("target.txt", "active target")

@@ -75,6 +75,19 @@ local function calculate_similarity(s1, s2)
     return intersect / union
 end
 
+local function prioritize_memory_blocks(a, b)
+    if a.is_target ~= b.is_target then
+        return a.is_target
+    end
+    if a.is_pinned ~= b.is_pinned then
+        return a.is_pinned
+    end
+    if a.rank ~= b.rank then
+        return a.rank > b.rank
+    end
+    return a.path < b.path
+end
+
 function M.add_thought(self, turn, thought_text)
     self.thoughts = self.thoughts or {}
     local clean_thought = require("utils").trim(thought_text)
@@ -220,11 +233,7 @@ function M.get_memory_block(self, max_tokens)
         })
     end
 
-    table.sort(files_list, function(a, b)
-        if a.is_pinned and not b.is_pinned then return true end
-        if not a.is_pinned and b.is_pinned then return false end
-        return a.path < b.path
-    end)
+    table.sort(files_list, prioritize_memory_blocks)
 
     for _, f in ipairs(files_list) do
         local raw_lines = require("utils").read_lines_raw(f.content)
