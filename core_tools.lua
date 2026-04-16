@@ -6,21 +6,19 @@ local logger = require("logger")
 local os = require("os")
 
 local function init_core_tools()
-    registry.register("explore_tree", "Explore directory structure with depth limit", function(args, ctx, agent_name)
+    registry.register("explore_tree", "Explore directory structure with depth limit", "<cmd>explore_tree:src/api:2</cmd>", function(args, ctx, agent_name)
         local path, depth = args:match("^(.-):(%d+)$")
-        if not path then 
+        if not path then
             path = utils.trim(args)
-            depth = 1 -- По умолчанию смотрим только на 1 уровень вглубь
+            depth = 1
         end
 
         local tree_view = utils.explore_directory(ctx.config.PROJECT_ROOT, path, depth)
-        
         ctx.file_tree = tree_view
-        
         return { output = string.format("\n[SYSTEM]: Explored directory '%s' (Depth: %s).\n```text\n%s\n```", path, depth, tree_view) }
     end)
 
-    registry.register("read_file", "Loads full file into memory", function(args, ctx, agent_name)
+    registry.register("read_file", "Loads full file into memory", "<cmd>read_file:src/main.c</cmd>", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         if ctx.knowledge_base[rel_path] then
              return { output = "\n[SYSTEM]: File '" .. rel_path .. "' is ALREADY in memory." }
@@ -36,7 +34,7 @@ local function init_core_tools()
         end
     end)
 
-    registry.register("read_chunk", "Reads specific lines", function(args, ctx, agent_name)
+    registry.register("read_chunk", "Reads specific lines from a file", "<cmd>read_chunk:src/main.c:10-25</cmd>", function(args, ctx, agent_name)
         local path, start_l, end_l = args:match("^(.-):(%d+)%-(%d+)$")
         if not path then path, start_l, end_l = args:match("^path:(.-):(%d+)%-(%d+)$") end
 
@@ -54,7 +52,7 @@ local function init_core_tools()
         end
     end)
 
-    registry.register("search", "Fast RipGrep search", function(args, ctx, agent_name)
+    registry.register("search", "Fast RipGrep search", "<cmd>search:function_name</cmd>", function(args, ctx, agent_name)
         local query = utils.trim(args)
         if query == "" then return { output = "\n[ERROR]: Empty search query." } end
         if ctx:has_searched(query) then return { output = "\n[SYSTEM]: Skipped duplicate search. Check History." } end
@@ -72,7 +70,7 @@ local function init_core_tools()
         return { output = "\n[SEARCH RESULTS for '"..query.."']:\n" .. res }
     end)
 
-    registry.register("rollback", "Restores file from .bak", function(args, ctx, agent_name)
+    registry.register("rollback", "Restores file from its .bak version", "<cmd>rollback:src/main.c</cmd>", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
         local ok, err = utils.restore_backup(full_path)
@@ -85,13 +83,13 @@ local function init_core_tools()
         end
     end)
 
-    registry.register("cleanup_baks", "Deletes all .bak files", function(args, ctx, agent_name)
+    registry.register("cleanup_baks", "Deletes all .bak files", "<cmd>cleanup_baks</cmd>", function(args, ctx, agent_name)
         local ok = utils.cleanup_backups(ctx.config.PROJECT_ROOT)
         if ok then return { output = "\n[SYSTEM]: All .bak files removed." }
         else return { output = "\n[ERROR]: Failed to clean up .bak files." } end
     end)
 
-    registry.register("patch", "Applies diffs to code", function(args, ctx, agent_name)
+    registry.register("patch", "Applies diffs to code. REQUIRES 1-2 lines of unchanged surrounding code (MUC) in the SEARCH block to make the match unique. Do not emit zero-op patches.", "<cmd>patch:src/main.c\n<<<<<<< SEARCH\n unchanged context\n code to remove\n unchanged context\n=======\n unchanged context\n code to add\n unchanged context\n>>>>>>> REPLACE\n</cmd>", function(args, ctx, agent_name)
         local path, patch_body = args:match("^([^%s\n]+)%s*\n(.*)")
         if not path or not patch_body then
             return { output = "\n[ERROR]: Invalid patch syntax. Use <cmd>patch:file\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n</cmd>" }
@@ -125,7 +123,7 @@ local function init_core_tools()
         end
     end)
 
-    registry.register("create_file", "Creates or overwrites a file", function(args, ctx, agent_name)
+    registry.register("create_file", "Creates or overwrites a file with new content", "<cmd>create_file:src/new.c\n#include <stdio.h>\nint main() { return 0; }\n</cmd>", function(args, ctx, agent_name)
         local path, new_code = args:match("^([^%s]+)%s*\n(.*)")
         if not path then
             return { output = "\n[ERROR]: Invalid create_file syntax. Use <cmd>create_file:path/to/file\n[code]</cmd>" }
@@ -155,9 +153,9 @@ local function init_core_tools()
         end
     end)
 
-    registry.register("shell", "Executes shell commands with streaming output and timeouts", function(args, ctx, agent_name)
+    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts (Mandatory for linters/tests)", "<cmd>shell:make test</cmd>", function(args, ctx, agent_name)
         local cmd = utils.trim(args)
-        local safe_prefixes = { "ls", "cat", "grep", "rg", "echo", "pwd", "ps", "find", "head", "tail", "whoami", "make", "test" }
+        local safe_prefixes = { "ls", "cat", "grep", "rg", "echo", "pwd", "ps", "find", "head", "tail", "whoami", "make", "test", "npm", "cargo" }
         local is_safe = false
 
         for _, prefix in ipairs(safe_prefixes) do
@@ -228,13 +226,13 @@ local function init_core_tools()
         os.remove(exit_file)
 
         local res = table.concat(output_chunks)
-        if #res == 0 then 
-            res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")" 
+        if #res == 0 then
+            res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")"
         end
-        
+
         local MAX_LOG_SIZE = 100000
-        if #res > MAX_LOG_SIZE then 
-            res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE) 
+        if #res > MAX_LOG_SIZE then
+            res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE)
         end
 
         local output = "\n[SHELL STDOUT/STDERR]:\n" .. res
@@ -255,11 +253,9 @@ local function init_core_tools()
         return { output = output }
     end)
 
-    registry.register("delegate_plan", "Pass execution plan to next stage", function(args, ctx, agent_name)
+    registry.register("delegate_plan", "Pass execution plan to next stage (JSON Array)", "<cmd>delegate_plan:\n[\n  {\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking\"}\n]\n<memo>Context for coder</memo>\n</cmd>", function(args, ctx, agent_name)
         local memo_match = args:match("<memo>(.-)</memo>") or ""
-
         local raw_json = args:gsub("<memo>.-</memo>", "")
-
         local json_match = utils.trim(raw_json:gsub("`+", ""))
 
         local status, plan = pcall(function() return json:decode(json_match) end)
@@ -295,31 +291,30 @@ local function init_core_tools()
         return { output = "\n[ERROR]: Invalid JSON plan format. Engine saw: " .. debug_snip, signal = nil }
     end)
 
-    registry.register("task_complete", "Signal completion of the current task step", function(args, ctx, agent_name)
+    registry.register("task_complete", "Signal completion of the current task step", "<cmd>task_complete</cmd>", function(args, ctx, agent_name)
         if ctx.execution_plan and #ctx.execution_plan > 0 then
             if ctx.current_task_index < #ctx.execution_plan then
                 local old_idx = ctx.current_task_index
                 ctx.current_task_index = ctx.current_task_index + 1
                 local next_task = ctx.execution_plan[ctx.current_task_index]
-                
+
                 return {
-                    output = string.format("\n[SYSTEM]: Step %d/%d complete. Moving to step %d. New target loaded: %s", 
-                                           old_idx, #ctx.execution_plan, ctx.current_task_index, tostring(next_task.file)), 
+                    output = string.format("\n[SYSTEM]: Step %d/%d complete. Moving to step %d. New target loaded: %s",
+                                           old_idx, #ctx.execution_plan, ctx.current_task_index, tostring(next_task.file)),
                     signal = nil
                 }
             else
-                return { 
-                    output = "\n[SYSTEM]: All steps in the execution plan are complete. Ending stage.", 
+                return {
+                    output = "\n[SYSTEM]: All steps in the execution plan are complete. Ending stage.",
                     signal = "PIPELINE_NEXT_STAGE"
                 }
             end
         else
-            -- Fallback, если плана нет (например, прямая инструкция пользователя)
             return { output = "\n[SYSTEM]: Task marked as complete.", signal = "PIPELINE_NEXT_STAGE" }
         end
     end)
 
-    registry.register("ask_user", "Pause execution and ask the human user a question", function(args, ctx, agent_name)
+    registry.register("ask_user", "Pause execution and ask the human user a question", "<cmd>ask_user:Is this logic correct?</cmd>", function(args, ctx, agent_name)
         io.write(string.format("\n\27[33m[AGENT '%s' ASKS]:\27[0m %s\n", agent_name, args))
         io.write("\27[36m>>> YOUR REPLY (or press Enter to skip):\27[0m ")
         local ans = io.read("*l")
@@ -329,10 +324,10 @@ local function init_core_tools()
         return { output = "\n[USER REPLY]: " .. ans }
     end)
 
-    registry.register("outline", "Generates an AST-like outline of a file (functions, classes, structs)", function(args, ctx, agent_name)
+    registry.register("outline", "Generates an AST-like outline of a file (functions, classes, structs)", "<cmd>outline:src/main.c</cmd>", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
-        
+
         local f = io.open(full_path, "r")
         if not f then return { output = "\n[ERROR]: File not found: " .. rel_path } end
         f:close()
@@ -340,7 +335,7 @@ local function init_core_tools()
         local safe_path = utils.shell_quote(full_path)
         local rg_regex = "'^\\s*(local\\s+)?(function|class|struct|interface|type)\\s+|^\\s*[a-zA-Z_]\\w*\\s+\\*?[a-zA-Z_]\\w*\\s*\\([^;]*\\)\\s*\\{?'"
         local cmd = string.format("rg -n -e %s --color never %s | head -n 100", rg_regex, safe_path)
-        
+
         local p = io.popen(cmd)
         local res = p:read("*a") or ""
         p:close()
@@ -352,9 +347,9 @@ local function init_core_tools()
         return { output = string.format("\n[SYSTEM OUTLINE FOR %s]:\n```\n%s\n```", rel_path, utils.trim(res)) }
     end)
 
-    registry.register("pin", "Pins a loaded file in memory so it is never evicted", function(args, ctx, agent_name)
+    registry.register("pin", "Pins a loaded file in memory so it is never evicted", "<cmd>pin:src/core.h</cmd>", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
-        
+
         if not ctx.knowledge_base[rel_path] then
             return { output = "\n[ERROR]: File '" .. rel_path .. "' is not in memory. Use <cmd>read_file:" .. rel_path .. "</cmd> first." }
         end
@@ -366,7 +361,7 @@ local function init_core_tools()
         end
     end)
 
-    registry.register("unpin", "Unpins a file from permanent memory", function(args, ctx, agent_name)
+    registry.register("unpin", "Unpins a file from permanent memory", "<cmd>unpin:src/core.h</cmd>", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         if ctx:unpin_file(rel_path) then
             return { output = "\n[SYSTEM]: Unpinned '" .. rel_path .. "'." }
@@ -376,5 +371,29 @@ local function init_core_tools()
     end)
 
 end
+
+registry.register("trace_execution", "Attach eBPF tracer to a binary to extract real-time arguments and return values", "<cmd>trace_execution:./binary\nuretprobe:./binary:func_name { printf(\"Ret: %d\", retval); }\n</cmd>", function(args, ctx, agent_name)
+    local binary, bpf_script = args:match("^([^%s\n]+)%s*\n(.*)")
+    if not binary or not bpf_script then
+        return { output = "\n[ERROR]: Usage: <cmd>trace_execution:./binary\nuretprobe:./binary:func_name { printf(\"Ret: %d\", retval); }</cmd>" }
+    end
+
+    local tmp_script = os.tmpname()
+    utils.write_file(tmp_script, bpf_script)
+
+    local wrapper = string.format(
+        "sudo bpftrace %s > %s.out 2>&1 & BPF_PID=$!; sleep 1; %s; kill -INT $BPF_PID; sleep 1; cat %s.out",
+        tmp_script, tmp_script, binary, tmp_script
+    )
+
+    local f = io.popen(wrapper)
+    local trace_result = f:read("*a")
+    f:close()
+
+    os.remove(tmp_script)
+    os.remove(tmp_script .. ".out")
+
+    return { output = "\n[eBPF TRACE RESULTS]:\n" .. trace_result }
+end)
 
 return { init = init_core_tools }

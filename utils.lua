@@ -24,7 +24,6 @@ function M.normalize_path(root, raw_path)
     return p:gsub("^/", "")
 end
 
--- [NEW]: Рекурсивное слияние таблиц (Deep Merge)
 function M.deep_merge(base, specific)
     local res = {}
     if type(base) == "table" then
@@ -34,6 +33,26 @@ function M.deep_merge(base, specific)
         for k, v in pairs(specific) do res[k] = type(v) == "table" and M.deep_merge(res[k] or {}, v) or v end
     end
     return res
+end
+
+-- [NEW]: Полиморфный загрузчик конфигураций
+function M.load_config(filepath)
+    local chunk, err = loadfile(filepath)
+    if not chunk then return nil, err end
+    
+    local ok, res = pcall(chunk)
+    if not ok then return nil, "Execution error: " .. tostring(res) end
+    
+    if type(res) == "table" then
+        -- Поддержка легаси/корневого формата с M.get()
+        if type(res.get) == "function" then
+            return res.get()
+        end
+        -- Поддержка упрощенного формата
+        return res
+    end
+    
+    return nil, "Config must return a table"
 end
 
 function M.copy_file(src, dest)
@@ -249,7 +268,7 @@ end
 function M.explore_directory(root_path, target_subpath, max_depth)
     local target = target_subpath and target_subpath ~= "" and target_subpath or "."
     local full_target = M.normalize_path(root_path, target)
-    
+
     local absolute_target = root_path .. "/" .. full_target
     local safe_target = M.shell_quote(absolute_target)
     local depth = tonumber(max_depth) or 1
@@ -270,7 +289,7 @@ function M.explore_directory(root_path, target_subpath, max_depth)
         if rel ~= "" and rel ~= full_target then
             local full_path = root_path .. "/" .. rel
             local is_dir = os.execute(string.format("test -d '%s'", full_path)) == 0
-            
+
             if is_dir then
                 table.insert(files, "  " .. rel .. "/")
             else

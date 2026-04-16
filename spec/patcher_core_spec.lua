@@ -62,11 +62,25 @@ describe("C Native Module: patcher_core", function()
             "local function do_magic()",
             "end"
         }
-        
+
         local start_idx, end_idx, err = patcher_core.find_unique_fuzzy_block(content, search_missing)
-        
+
         assert.is_nil(start_idx)
         assert.is_nil(end_idx)
         assert.are.equal("Block not found", err)
+    end)
+
+    describe("POSIX Signal Management", function()
+        it("should expose setup_sigint and consume_sigint to Lua space", function()
+            assert.is_function(patcher_core.setup_sigint)
+            assert.is_function(patcher_core.consume_sigint)
+        end)
+
+        it("should initialize signal state safely and clear flags", function()
+            patcher_core.setup_sigint()
+            
+            local is_interrupted = patcher_core.consume_sigint()
+            assert.is_false(is_interrupted)
+        end)
     end)
 end)

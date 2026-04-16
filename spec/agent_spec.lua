@@ -1,5 +1,56 @@
 local utils = require("utils")
 
+describe("Agent Bootstrapper Mode (--bootstrap)", function()
+    local utils = require("utils")
+    local llm_handler = require("llm_handler")
+    local original_send_request = llm_handler.send_request
+    local original_execute = os.execute
+    
+    local test_state_file = ".e-va_state.json"
+
+    before_each(function()
+        os.remove(test_state_file)
+        stub(os, "exit").invokes(function(code) error("EXIT:" .. code) end)
+        _G.print = function() end
+    end)
+
+    after_each(function()
+        os.exit:revert()
+        os.execute = original_execute
+        llm_handler.send_request = original_send_request
+    end)
+
+    it("should bypass standard execution and initialize BOOTSTRAPPER pipeline", function()
+        local execute_called_with = {}
+        os.execute = function(cmd) table.insert(execute_called_with, cmd); return 0 end
+        
+        local llm_was_called = false
+        local used_profile = nil
+        
+        llm_handler.send_request = function(profile, messages)
+            llm_was_called = true
+            used_profile = profile.name
+            return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
+        end
+
+        local chunk = loadfile("agent.lua")
+        
+        local ok, err = pcall(function() chunk("--bootstrap") end)
+        
+        assert.is_false(ok)
+        assert.truthy(err:match("EXIT:0"))
+        
+        local mkdir_called = false
+        for _, cmd in ipairs(execute_called_with) do
+            if cmd:match("mkdir %-p.*%.e%-va%-conf/prompts") then mkdir_called = true end
+        end
+        assert.is_true(mkdir_called, "Must create scaffolding directories")
+        
+        assert.is_true(llm_was_called)
+        assert.are.equal("BOOTSTRAPPER", used_profile, "Must run under the BOOTSTRAPPER meta-profile")
+    end)
+end)
+
 describe("Agent Control Plane (Integration)", function()
     local original_exit = os.exit
     local original_read = io.read
@@ -172,6 +223,44 @@ describe("Agent Control Plane (Integration)", function()
         
         Context.new = original_new
         io.read:revert()
+    end)
+
+    it("should stream thoughts and normal content with distinct ANSI formatting", function()
+        stub(io, "read").returns("/continue")
+
+        local write_capture = ""
+        local orig_write = io.write
+        io.write = function(s) write_capture = write_capture .. tostring(s) end
+
+        llm_handler.send_request = function(profile, messages, options)
+            if options and options.on_token then
+                options.on_token("Pre-thought. <thi")
+                options.on_token("nk>Internal monolo")
+                options.on_token("gue</th")
+                options.on_token("ink> Final output.")
+            end
+            return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
+        end
+
+        local Context = require("context")
+        local original_new = Context.new
+        Context.new = function(cfg)
+            cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
+            return original_new(cfg)
+        end
+
+        local chunk = loadfile("agent.lua")
+        pcall(function() chunk("dummy.txt", "test streaming format") end)
+
+        Context.new = original_new
+        io.read:revert()
+        io.write = orig_write
+
+        assert.truthy(write_capture:match("Pre%-thought%. "), "Must print pre-thought text")
+        assert.truthy(write_capture:match("\27%[90m<think>"), "Must inject ANSI gray start for thought")
+        assert.truthy(write_capture:match("Internal monologue"), "Must print the thought content")
+        assert.truthy(write_capture:match("</think>\27%[0m"), "Must inject ANSI reset after thought")
+        assert.truthy(write_capture:match(" Final output%."), "Must print post-thought text")
     end)
 
     it("should successfully execute batch processing when TASKS are defined", function()

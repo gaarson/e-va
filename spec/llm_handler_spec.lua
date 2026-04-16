@@ -60,7 +60,7 @@ describe("LLM Handler (Network & Parsing)", function()
         local chunks = { "data: {}\n\n", "data: [DONE]\n\n" }
         local mock_req = {
             headers = { upsert = function() end }, set_body = function() end,
-            go = function() 
+            go = function()
                 return { get = function() return "200" end }, { each_chunk = function() local i=0 return function() i=i+1 return chunks[i] end end }
             end
         }
@@ -68,6 +68,56 @@ describe("LLM Handler (Network & Parsing)", function()
 
         local res = llm_handler.send_request(mock_profile, {}, { on_token = function() end })
         assert.is_table(res)
+    end)
+
+    it("should gracefully interrupt generation when SIGINT is caught mid-stream", function()
+        local patcher_core = require("patcher_core")
+        
+        local original_consume_sigint = patcher_core.consume_sigint
+        patcher_core.consume_sigint = function() return true end
+
+        json.decode = orig_decode
+
+        mock_profile.params.stream = true
+        local chunks = { 
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Chunk1 \"}}]}\n\n", 
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Chunk2\"}}]}\n\n" 
+        }
+        local mock_req = {
+            headers = { upsert = function() end }, set_body = function() end,
+            go = function()
+                return { get = function() return "200" end }, { each_chunk = function() local i=0 return function() i=i+1 return chunks[i] end end }
+            end
+        }
+        http_request.new_from_uri = function() return mock_req end
+
+        local tokens = {}
+        local res = llm_handler.send_request(mock_profile, {}, { on_token = function(t) table.insert(tokens, t) end })
+
+        assert.is_table(res)
+
+        local full_stream_output = table.concat(tokens, "")
+
+        assert.truthy(full_stream_output:match("INTERRUPTED BY USER"), "Stream output must contain the system interrupt message")
+        assert.falsy(full_stream_output:match("Chunk2"), "Stream was not interrupted, processed chunks after SIGINT")
+
+        patcher_core.consume_sigint = original_consume_sigint
+
+        json.decode = function() 
+            return { choices = { { delta = { content = "token" } } } } 
+        end
+
+        local chunks2 = { "data: {}\n\n", "data: [DONE]\n\n" }
+        local mock_req2 = {
+            headers = { upsert = function() end }, set_body = function() end,
+            go = function() 
+                return { get = function() return "200" end }, { each_chunk = function() local i=0 return function() i=i+1 return chunks2[i] end end }
+            end
+        }
+        http_request.new_from_uri = function() return mock_req2 end
+
+        local res2 = llm_handler.send_request(mock_profile, {}, { on_token = function() end })
+        assert.is_table(res2)
     end)
 
     it("extracts content safely", function()

@@ -3,8 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <signal.h>
 
 #if LUA_VERSION_NUM < 502
+
 #define lua_rawlen lua_objlen
 #define luaL_newlib(L, l) (lua_newtable(L), luaL_register(L, NULL, l))
 #endif
@@ -111,8 +113,33 @@ static int l_find_unique_fuzzy_block(lua_State *L) {
     return 2;
 }
 
+/* --- POSIX SIGNAL HANDLING --- */
+static volatile sig_atomic_t sigint_flag = 0;
+
+static void handle_sigint(int sig) {
+    (void)sig;
+    sigint_flag = 1;
+}
+
+static int l_setup_sigint() {
+    struct sigaction sa;
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; 
+    sigaction(SIGINT, &sa, NULL);
+    return 0;
+}
+
+static int l_consume_sigint(lua_State *L) {
+    lua_pushboolean(L, sigint_flag);
+    sigint_flag = 0; 
+    return 1;
+}
+
 static const struct luaL_Reg patcher_core_funcs[] = {
     {"find_unique_fuzzy_block", l_find_unique_fuzzy_block},
+    {"setup_sigint", l_setup_sigint},
+    {"consume_sigint", l_consume_sigint},
     {NULL, NULL}
 };
 

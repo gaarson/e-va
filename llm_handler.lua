@@ -44,11 +44,20 @@ function M.send_request(profile, messages, options)
         return response
     end
 
+    local patcher_core = require("patcher_core")
     local full_content = ""
     local buffer = ""
     local in_reasoning = false
 
     for chunk in stream:each_chunk() do
+        if patcher_core.consume_sigint and patcher_core.consume_sigint() then
+            logger.warn("Generation forcefully interrupted by SIGINT (Ctrl+C).")
+            local interrupt_msg = "\n\n\27[33m[SYSTEM: GENERATION INTERRUPTED BY USER]\27[0m\n"
+            full_content = full_content .. interrupt_msg
+            if on_token_cb then on_token_cb(interrupt_msg) end
+            break
+        end
+
         buffer = buffer .. chunk
 
         while true do

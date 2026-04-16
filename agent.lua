@@ -2,12 +2,10 @@ local utils = require("utils")
 local agent_home = os.getenv("AGENT_HOME") or "."
 local project_root = os.getenv("PROJECT_ROOT") or "."
 
-local base_config_func = assert(loadfile(agent_home .. "/config.lua"), "CRITICAL: Could not find config.lua in " .. agent_home)
-local config = base_config_func().get()
+local config = assert(utils.load_config(agent_home .. "/config.lua"), "CRITICAL: Could not load base config.lua")
+local local_config = utils.load_config(project_root .. "/.e-va-conf/config.lua")
 
-local local_config_func = loadfile(project_root .. "/.e-va-conf/config.lua")
-if local_config_func then
-    local local_config = local_config_func().get()
+if local_config then
     config = utils.deep_merge(config, local_config)
     print("\n\27[36m[SYSTEM INFO]: Applied local overrides from .e-va-conf/config.lua\27[0m")
 end
@@ -54,6 +52,22 @@ end
 
 core_tools.init()
 
+local patcher_core = require("patcher_core")
+if type(patcher_core.setup_sigint) == "function" then
+    patcher_core.setup_sigint()
+end
+
+local custom_tools_path = config.PROJECT_ROOT .. "/.e-va-conf/custom_tools.lua"
+
+local custom_tools_func = loadfile(custom_tools_path)
+if custom_tools_func then
+    local ok, err = pcall(function()
+        local setup_tools = custom_tools_func()
+        setup_tools(registry, utils, Context)
+    end)
+    if not ok then logger.error("Failed to load custom tools: " .. tostring(err)) end
+end
+
 local arg1, arg2 = ...
 local start_file = type(arg1) == 'string' and arg1 or nil
 local instruction = type(arg2) == 'string' and arg2 or nil
@@ -67,14 +81,23 @@ if not instruction then
 end
 
 local function load_prompt(file_path)
+    if not file_path then return "You are an AI assistant. Follow the user's instructions." end
+
     local local_path = config.PROJECT_ROOT .. "/.e-va-conf/" .. file_path
     local content = utils.read_file_range(local_path)
+
+    if not content then
+        local proj_path = config.PROJECT_ROOT .. "/" .. file_path
+        content = utils.read_file_range(proj_path)
+    end
+
     if not content then
         local global_path = agent_home .. "/" .. file_path
         content = utils.read_file_range(global_path)
     end
+
     if not content then
-        logger.warn("Failed to load prompt from both local and global paths: " .. file_path)
+        logger.warn("Failed to load prompt from all paths: " .. file_path)
         return "You are an AI assistant. Follow the user's instructions."
     end
     return content
@@ -94,11 +117,14 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 
     local memory_block = ctx:get_memory_block(memory_budget)
     local sys_prompt_text = load_prompt(agent_cfg.prompt_file)
+    
+    local toolchain_manifest = registry.generate_tool_manifest(agent_cfg.allowed_tools)
 
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ctx:get_search_digest(digest_budget)
 
     local combined_system_prompt = sys_prompt_text .. "\n\n" ..
+                                   toolchain_manifest .. "\n\n" ..
                                    ctx:get_report(agent_name) .. "\n\n" ..
                                    memory_block .. "\n\n" ..
                                    search_digest .. "\n\n" ..
@@ -165,33 +191,40 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local retry_delay = 5
 
     for attempt = 1, max_retries do
-        -- response_data, err = llm.send_request(agent_cfg, messages, {
-        --   on_token = function(t)
-        --       io.write(t)
-        --       io.flush()
-        --   end
-        -- })
-        response_data, err = llm.send_request(agent_cfg, messages, {
+      response_data, err = llm.send_request(agent_cfg, messages, {
           on_token = function(t)
               print_buf = print_buf .. t
-              if not in_thought then
-                  local s, e = print_buf:find(tag_open)
-                  if s then
-                      io.write(print_buf:sub(1, s - 1)); io.flush()
-                      print_buf = print_buf:sub(e + 1)
-                      in_thought = true
-                  elseif #print_buf > #tag_open then
-                      local safe_len = #print_buf - #tag_open
-                      io.write(print_buf:sub(1, safe_len)); io.flush()
-                      print_buf = print_buf:sub(safe_len + 1)
-                  end
-              else
-                  local s, e = print_buf:find(tag_close)
-                  if s then
-                      print_buf = print_buf:sub(e + 1)
-                      in_thought = false
+              while #print_buf > 0 do
+                  if not in_thought then
+                      local s, e = print_buf:find(tag_open)
+                      if s then
+                          io.write(print_buf:sub(1, s - 1))
+                          io.write("\27[90m" .. tag_open) -- Включаем серый цвет для мыслей
+                          print_buf = print_buf:sub(e + 1)
+                          in_thought = true
+                      elseif #print_buf > #tag_open then
+                          local safe_len = #print_buf - #tag_open
+                          io.write(print_buf:sub(1, safe_len))
+                          print_buf = print_buf:sub(safe_len + 1)
+                      else
+                          break
+                      end
+                  else
+                      local s, e = print_buf:find(tag_close)
+                      if s then
+                          io.write(print_buf:sub(1, s - 1) .. tag_close .. "\27[0m") -- Выключаем серый цвет
+                          print_buf = print_buf:sub(e + 1)
+                          in_thought = false
+                      elseif #print_buf > #tag_close then
+                          local safe_len = #print_buf - #tag_close
+                          io.write(print_buf:sub(1, safe_len))
+                          print_buf = print_buf:sub(safe_len + 1)
+                      else
+                          break
+                      end
                   end
               end
+              io.flush()
           end
         })
 
@@ -200,11 +233,14 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         if attempt < max_retries then
             print(string.format("\27[33m[SYSTEM] Retrying in %d seconds...\27[0m", retry_delay))
             os.execute("sleep " .. tostring(retry_delay))
-            retry_delay = retry_delay * 3 
+            retry_delay = retry_delay * 3
         end
     end
 
-    if print_buf ~= "" and not in_thought then io.write(print_buf) end
+    if print_buf ~= "" then
+        if in_thought then io.write(print_buf .. "\27[0m")
+        else io.write(print_buf) end
+    end
     io.write("\n")
 
     if not response_data then
@@ -389,7 +425,7 @@ end
 
 local function setup_and_run_task(task_file, task_instruction, max_turns)
     ctx:reset()
-    
+
     local initial_msg = "TASK: " .. task_instruction
     local docs_loaded = {}
 
@@ -436,22 +472,62 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
     end
 
     ctx:add_message(first_agent, "user", initial_msg)
-    
+
     local original_max = nil
     if config.PIPELINE_SETTINGS then
         original_max = config.PIPELINE_SETTINGS.MAX_TURNS
         if max_turns then config.PIPELINE_SETTINGS.MAX_TURNS = max_turns end
     end
-    
+
     execute_pipeline()
-    
+
     if config.PIPELINE_SETTINGS and original_max then
         config.PIPELINE_SETTINGS.MAX_TURNS = original_max
     end
 end
 
 if not restored then
-    if instruction then
+    if arg1 == "--bootstrap" then
+        print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent...\27[0m")
+
+        os.execute("mkdir -p " .. config.PROJECT_ROOT .. "/.e-va-conf/prompts")
+
+        config.AGENTS = config.AGENTS or {}
+        local fallback_agent = config.AGENTS.ARCHITECT
+        if not fallback_agent then
+            local _, first_val = next(config.AGENTS)
+            fallback_agent = first_val or {}
+        end
+
+        config.AGENTS.BOOTSTRAPPER = {
+            name = "BOOTSTRAPPER",
+            url = fallback_agent.url or "http://127.0.0.1:8000/v1/chat/completions",
+            model = fallback_agent.model or "default-model",
+            params = fallback_agent.params or { stream = true },
+            prompt_file = "prompts/bootstrapper.md",
+            allowed_tools = { "explore_tree", "read_file", "search", "create_file", "shell", "task_complete" }
+        }
+
+        config.PIPELINE = {
+            { stage = "PROJECT_DISCOVERY_AND_SCAFFOLDING", agents = { "BOOTSTRAPPER" }, mode = "sequential" }
+        }
+
+        ctx = Context.new(config)
+
+        local trigger_msg = "Analyze the project structure and detect the tech stack. Generate .e-va-conf/config.lua. Only generate custom_tools.lua if the domain strictly requires it beyond built-in tools. Write agent prompts to .e-va-conf/prompts/. Use <cmd>task_complete</cmd> when done."
+
+        if instruction and instruction ~= "" then
+            trigger_msg = trigger_msg .. "\n\n[USER DIRECTIVE / DOMAIN CONTEXT]:\n" .. instruction
+        end
+
+        ctx:add_message("BOOTSTRAPPER", "user", trigger_msg)
+
+        execute_pipeline()
+
+        print("\n\27[32m[SUCCESS] Project bootstrapped! You can now run standard E-va commands.\27[0m")
+        os.exit(0)
+
+    elseif instruction then
         setup_and_run_task(start_file, instruction, nil)
     elseif ctx.config.TASKS and #ctx.config.TASKS > 0 then
         logger.info(string.format("Batch processing initiated. Found %d tasks.", #ctx.config.TASKS))
@@ -463,17 +539,17 @@ if not restored then
             end
 
             print(string.format("\n\27[35m=== STARTING TASK [%d/%d]: %s ===\27[0m", i, #config.TASKS, task.file or "Global Context"))
-            
+
             local status, err = pcall(setup_and_run_task, task.file, instr, task.max_turns)
-            
+
             if not status then
                 logger.error("Task failed fatally: " .. tostring(err))
-                if config.PIPELINE_SETTINGS and config.PIPELINE_SETTINGS.ABORT_ON_FATAL then 
+                if config.PIPELINE_SETTINGS and config.PIPELINE_SETTINGS.ABORT_ON_FATAL then
                     print("\n\27[31m[SYSTEM] Aborting batch execution due to fatal error in task " .. i .. "\27[0m")
-                    os.exit(1) 
+                    os.exit(1)
                 end
             end
-            
+
             print(string.format("\n\27[32m=== FINISHED TASK [%d/%d] ===\27[0m", i, #config.TASKS))
         end
     else
