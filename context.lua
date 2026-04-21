@@ -76,15 +76,10 @@ local function calculate_similarity(s1, s2)
 end
 
 local function prioritize_memory_blocks(a, b)
-    if a.is_target ~= b.is_target then
-        return a.is_target
-    end
-    if a.is_pinned ~= b.is_pinned then
-        return a.is_pinned
-    end
-    if a.rank ~= b.rank then
-        return a.rank > b.rank
-    end
+    if a.is_target ~= b.is_target then return a.is_target end
+    if a.is_modified ~= b.is_modified then return a.is_modified end
+    if a.is_pinned ~= b.is_pinned then return a.is_pinned end
+    if a.rank ~= b.rank then return a.rank > b.rank end
     return a.path < b.path
 end
 
@@ -215,6 +210,7 @@ function M.get_memory_block(self, max_tokens)
     local current_tokens = 0
 
     local pinned_buffer = {}
+    local modified_buffer = {} -- [NEW] Отдельный буфер для наглядности
     local ctx_buffer = {}
     local target_buffer = ""
 
@@ -229,7 +225,8 @@ function M.get_memory_block(self, max_tokens)
             content = content,
             rank = self.file_access_rank[path] or 0,
             is_target = (path == active_target),
-            is_pinned = self.pinned_files[path] == true
+            is_pinned = self.pinned_files[path] == true,
+            is_modified = (self.file_states[path] == "RECENTLY_MODIFIED") -- [NEW]
         })
     end
 
@@ -244,6 +241,8 @@ function M.get_memory_block(self, max_tokens)
 
         if f.is_target then
             total_str = string.format("\n<file_target path=\"%s\" instruction=\"%s\">\n%s\n</file_target>\n", f.path, target_instruction, content_display)
+        elseif f.is_modified then
+            total_str = string.format("\n<file_context path=\"%s\" status=\"RECENTLY_MODIFIED\">\n%s\n</file_context>\n", f.path, content_display)
         elseif f.is_pinned then
             total_str = string.format("\n<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>\n", f.path, content_display)
         else
@@ -256,6 +255,8 @@ function M.get_memory_block(self, max_tokens)
             current_tokens = current_tokens + cost
             if f.is_target then
                 target_buffer = total_str
+            elseif f.is_modified then
+                table.insert(modified_buffer, total_str)
             elseif f.is_pinned then
                 table.insert(pinned_buffer, total_str)
             else
@@ -276,19 +277,16 @@ function M.get_memory_block(self, max_tokens)
     if self.execution_plan and #self.execution_plan > 0 then
         table.insert(final_output, "=== EXECUTION PLAN STATUS ===\n")
         for i, task in ipairs(self.execution_plan) do
-            local status_marker
-            if i < self.current_task_index then
-                status_marker = "[x]"
-            elseif i == self.current_task_index then
-                status_marker = "[>]"
-            else
-                status_marker = "[ ]"
-            end
+            local status_marker = (i < self.current_task_index) and "[x]" or (i == self.current_task_index and "[>]" or "[ ]")
             table.insert(final_output, string.format("%s Step %d: %s -> %s\n", status_marker, i, tostring(task.file), tostring(task.instruction)))
         end
         table.insert(final_output, "\n")
     end
 
+    if #modified_buffer > 0 then
+        table.insert(final_output, "\n")
+        table.insert(final_output, table.concat(modified_buffer, ""))
+    end
     if #pinned_buffer > 0 then
         table.insert(final_output, "\n")
         table.insert(final_output, table.concat(pinned_buffer, ""))
@@ -302,10 +300,10 @@ function M.get_memory_block(self, max_tokens)
         table.insert(final_output, target_buffer)
     end
 
-    if #files_list == 0 then 
-        table.insert(final_output, "\n(No files loaded in memory)\n") 
+    if #files_list == 0 then
+        table.insert(final_output, "\n(No files loaded in memory)\n")
     end
-    
+
     return table.concat(final_output, "")
 end
 
@@ -337,34 +335,6 @@ function M.get_search_digest(self, max_tokens)
         end
     end
     return table.concat(digest_buffer, "\n")
-end
-
-function M.squash_last_mutation(self, agent_name)
-    local history = self:get_history(agent_name)
-    for i = #history, 1, -1 do
-        local msg = history[i]
-        if msg.role == "assistant" then
-            local original = msg.content or ""
-            local squashed = original
-
-            squashed = squashed:gsub(
-                "<cmd>patch:([^%s\n]+)\n<<<<<<< SEARCH.->>>>>>> REPLACE\n</cmd>",
-                "\n[SYSTEM NOTE: Patch successfully applied to '%1'. Changes are in memory.]\n"
-            )
-
-            squashed = squashed:gsub(
-                "<cmd>create_file:([^%s\n]+)\n.-</cmd>",
-                "\n[SYSTEM NOTE: File '%1' successfully created.]\n"
-            )
-
-            if original ~= squashed then
-                history[i].content = squashed
-                return true
-            end
-            break
-        end
-    end
-    return false
 end
 
 function M.get_report(self, agent_name)
@@ -405,6 +375,37 @@ function M.sync_files(self)
     end
 
     return updated_files
+end
+
+function M.squash_last_mutation(self, agent_name)
+    local history = self:get_history(agent_name)
+    for i = #history, 1, -1 do
+        local msg = history[i]
+        if msg.role == "assistant" then
+            local original = msg.content or ""
+            local squashed = original
+
+            squashed = squashed:gsub(
+                "<cmd>patch:([^%s\n]+)%s*\n<<<<<<< SEARCH.->>>>>>> REPLACE\n</cmd>",
+                "\n[SYSTEM MEMORY: You successfully executed a patch on '%1'. The heavy code block was squashed to save tokens.]\n"
+            )
+
+            squashed = squashed:gsub(
+                "<cmd>create_file:([^%s\n]+)%s*\n.-</cmd>",
+                "\n[SYSTEM MEMORY: You successfully created/overwrote file '%1'. The heavy code block was squashed.]\n"
+            )
+
+            squashed = squashed:gsub("\n\n+", "\n\n")
+            squashed = require("utils").trim(squashed)
+
+            if original ~= squashed then
+                history[i].content = squashed
+                return true
+            end
+            break
+        end
+    end
+    return false
 end
 
 return M

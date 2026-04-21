@@ -113,9 +113,10 @@ local function init_core_tools()
             local w_ok, w_err = utils.write_file(full_path, new_content)
             if w_ok then
                 ctx:add_file(rel_path, new_content)
+                ctx.file_states[rel_path] = "RECENTLY_MODIFIED"
                 ctx:squash_last_mutation(agent_name)
                 return { output = string.format("\n[SUCCESS]: Applied %d patch block(s) to %s.", changes, rel_path), signal = "MUTATION_SUCCESS" }
-            else
+              else
                 return { output = "\n[DISK ERROR]: " .. tostring(w_err) }
             end
         else
@@ -146,6 +147,7 @@ local function init_core_tools()
         local ok, err = utils.write_file(full_path, new_code or "")
         if ok then
             ctx:add_file(rel_path, new_code or "")
+            ctx.file_states[rel_path] = "RECENTLY_MODIFIED"
             ctx:squash_last_mutation(agent_name)
             return { output = string.format("\n[SUCCESS]: Created/Overwritten file %s.", rel_path), signal = "MUTATION_SUCCESS" }
         else
@@ -230,7 +232,7 @@ local function init_core_tools()
             res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")"
         end
 
-        local MAX_LOG_SIZE = 100000
+        local MAX_LOG_SIZE = 1000000
         if #res > MAX_LOG_SIZE then
             res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE)
         end

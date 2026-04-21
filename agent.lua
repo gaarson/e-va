@@ -117,20 +117,47 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 
     local memory_block = ctx:get_memory_block(memory_budget)
     local sys_prompt_text = load_prompt(agent_cfg.prompt_file)
-    
+
     local toolchain_manifest = registry.generate_tool_manifest(agent_cfg.allowed_tools)
 
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ctx:get_search_digest(digest_budget)
+
+    local has_delegate = false
+    local has_complete = false
+    for _, t in ipairs(agent_cfg.allowed_tools or {}) do
+        if t == "delegate_plan" or t == "*" then has_delegate = true end
+        if t == "task_complete" or t == "*" then has_complete = true end
+    end
+
+    local pipeline_rule = "1. PIPELINE CONTROL: "
+    if has_delegate and has_complete then
+        pipeline_rule = pipeline_rule .. "To advance the pipeline, use `<cmd>delegate_plan</cmd>` to assign work to the next stage, OR use `<cmd>task_complete</cmd>` if no code changes are needed."
+    elseif has_delegate then
+        pipeline_rule = pipeline_rule .. "To advance the pipeline, you MUST use `<cmd>delegate_plan</cmd>` to assign work."
+    elseif has_complete then
+        pipeline_rule = pipeline_rule .. "To advance or finish your stage, you MUST execute `<cmd>task_complete</cmd>`."
+    else
+        pipeline_rule = pipeline_rule .. "Analyze the context and answer the user."
+    end
+
+    local engine_directives = string.format([[
+==================================================
+⚙️ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
+%s
+2. TOOL EXECUTION: You are bound by the toolchain. Do NOT hallucinate actions or emit standalone code blocks without wrapping them in proper XML `<cmd>` tags.
+==================================================]], pipeline_rule)
 
     local combined_system_prompt = sys_prompt_text .. "\n\n" ..
                                    toolchain_manifest .. "\n\n" ..
                                    ctx:get_report(agent_name) .. "\n\n" ..
                                    memory_block .. "\n\n" ..
                                    search_digest .. "\n\n" ..
-                                   ctx:get_thoughts_digest()
+                                   ctx:get_thoughts_digest() .. "\n\n" ..
+                                   engine_directives
 
     local messages = { { role = "system", content = combined_system_prompt } }
+
     local chat_buffer = {}
     local current_chat_cost = 0
     local history = ctx:get_history(agent_name)
@@ -182,9 +209,11 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", tostring(agent_name)))
 
     local print_buf = ""
-    local in_thought = false
+    local in_thought = agent_cfg.is_reasoning or false
     local tag_open = "<think>"
     local tag_close = "</think>"
+
+    if in_thought then io.write("\27[90m") end
 
     local response_data, err
     local max_retries = 5
@@ -293,14 +322,11 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     end
 
     local final_history_content = ""
-    if thought ~= "" then
-        final_history_content = "<think>\n" .. thought .. "\n</think>\n"
-    end
 
     if spammed then
-        final_history_content = final_history_content .. safe_assistant_content
+        final_history_content = safe_assistant_content
     else
-        final_history_content = final_history_content .. content
+        final_history_content = content
     end
 
     ctx:add_message(agent_name, "assistant", final_history_content)
@@ -488,43 +514,47 @@ end
 
 if not restored then
     if arg1 == "--bootstrap" then
-        print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent...\27[0m")
+        print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent with High Creativity...\27[0m")
 
         os.execute("mkdir -p " .. config.PROJECT_ROOT .. "/.e-va-conf/prompts")
 
         config.AGENTS = config.AGENTS or {}
-        local fallback_agent = config.AGENTS.ARCHITECT
-        if not fallback_agent then
-            local _, first_val = next(config.AGENTS)
-            fallback_agent = first_val or {}
-        end
+        local fallback_agent = config.AGENTS.ARCHITECT or {}
 
         config.AGENTS.BOOTSTRAPPER = {
             name = "BOOTSTRAPPER",
-            url = fallback_agent.url or "http://127.0.0.1:8000/v1/chat/completions",
-            model = fallback_agent.model or "default-model",
-            params = fallback_agent.params or { stream = true },
+            url = fallback_agent.url or os.getenv("LLM_URL") or "http://127.0.0.1:8000/v1/chat/completions",
+            model = fallback_agent.model or os.getenv("LLM_MODEL") or "default-model",
+            params = {
+                stream = true,
+                temperature = 0.7,
+                max_tokens = 8192,
+            },
             prompt_file = "prompts/bootstrapper.md",
             allowed_tools = { "explore_tree", "read_file", "search", "create_file", "shell", "task_complete" }
         }
 
         config.PIPELINE = {
-            { stage = "PROJECT_DISCOVERY_AND_SCAFFOLDING", agents = { "BOOTSTRAPPER" }, mode = "sequential" }
+            { stage = "BOOTSTRAP_DISCOVERY", agents = { "BOOTSTRAPPER" }, mode = "sequential" }
         }
 
         ctx = Context.new(config)
 
-        local trigger_msg = "Analyze the project structure and detect the tech stack. Generate .e-va-conf/config.lua. Only generate custom_tools.lua if the domain strictly requires it beyond built-in tools. Write agent prompts to .e-va-conf/prompts/. Use <cmd>task_complete</cmd> when done."
+        local trigger_msg = [[
+1. Explore the project.
+2. Run 'npm run lint:write' (piped through head) to see current errors.
+3. Generate .e-va-conf/config.lua. 
+4. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
+5. Generate MD prompts for your agents.
+Use <cmd>task_complete</cmd> when the scaffold is ready.
+]]
 
         if instruction and instruction ~= "" then
-            trigger_msg = trigger_msg .. "\n\n[USER DIRECTIVE / DOMAIN CONTEXT]:\n" .. instruction
+            trigger_msg = trigger_msg .. "\n\n[USER CONTEXT]: " .. instruction
         end
 
         ctx:add_message("BOOTSTRAPPER", "user", trigger_msg)
-
         execute_pipeline()
-
-        print("\n\27[32m[SUCCESS] Project bootstrapped! You can now run standard E-va commands.\27[0m")
         os.exit(0)
 
     elseif instruction then

@@ -129,16 +129,35 @@ describe("Context class", function()
             ctx:add_file("mid.txt", "Content Mid")
             ctx:add_file("high.txt", "Content High")
 
-            -- Establish ranks via touch (simulating usage)
             ctx:touch_file("low.txt")
             ctx:touch_file("mid.txt")
             ctx:touch_file("high.txt")
 
-            -- Budget enough for roughly one file
             local mem_block = ctx:get_memory_block(60)
 
             assert.truthy(mem_block:match("high%.txt"), "High-rank file should be preserved")
             assert.truthy(mem_block:match("low%.txt") and mem_block:match("OMITTED_OUT_OF_MEMORY"), "Low-rank file should be evicted")
+        end)
+
+        it("should prioritize RECENTLY_MODIFIED files and assign them a specific XML status", function()
+            ctx:add_file("bg.txt", "background context")
+            ctx:add_file("edited.txt", "newly edited code")
+            ctx:add_file("target.txt", "active target")
+            
+            ctx.file_states["edited.txt"] = "RECENTLY_MODIFIED"
+            ctx.execution_plan = { { file = "target.txt", instruction = "update" } }
+            ctx.current_task_index = 1
+
+            local mem_block = ctx:get_memory_block(10000)
+
+            local pos_modified = mem_block:find('<file_context path="edited.txt" status="RECENTLY_MODIFIED">', 1, true)
+            local pos_bg = mem_block:find('<file_context path="bg.txt"', 1, true)
+            local pos_target = mem_block:find('<file_target path="target.txt"', 1, true)
+
+            assert.is_not_nil(pos_modified, "Missing RECENTLY_MODIFIED XML block")
+            
+            assert.is_true(pos_modified < pos_bg, "Recently modified files must appear BEFORE read-only background context")
+            assert.is_true(pos_bg < pos_target, "General context must appear BEFORE the primary target workspace")
         end)
 
         it("should prioritize MRU files during memory pressure eviction", function()
@@ -233,11 +252,11 @@ describe("Context class", function()
         end)
     end)
 
-    describe("Context Squashing (ReAct Optimization)", function()
-        it("should successfully squash heavy patch blocks from assistant history", function()
-            local raw_msg = "Here is the fix:\n<cmd>patch:file.c\n<<<<<<< SEARCH\nbad_code\n=======\ngood_code\n>>>>>>> REPLACE\n</cmd>"
+    describe("Context Squashing (Safe Memory Markers)", function()
+        it("should replace heavy patch blocks with safe SYSTEM MEMORY markers", function()
+            local raw_msg = "Here is my CoT reasoning:\n<cmd>patch:file.c\n<<<<<<< SEARCH\nbad_code\n=======\ngood_code\n>>>>>>> REPLACE\n</cmd>\nSome trailing thoughts."
 
-            ctx:add_message("CODER", "user", "Fix it")
+            ctx:add_message("CODER", "user", "Fix the bug")
             ctx:add_message("CODER", "assistant", raw_msg)
 
             local squashed = ctx:squash_last_mutation("CODER")
@@ -246,10 +265,27 @@ describe("Context class", function()
             local history = ctx:get_history("CODER")
             local final_content = history[#history].content
 
-            assert.falsy(final_content:match("bad_code"))
-            assert.falsy(final_content:match("<<<<<<< SEARCH"))
-            assert.truthy(final_content:match("Patch successfully applied to 'file.c'"))
-            assert.truthy(final_content:match("Changes are in memory"))
+            assert.falsy(final_content:match("<<<<<<< SEARCH"), "Patch markers must be removed")
+            assert.falsy(final_content:match("bad_code"), "Code snippet must be removed")
+            assert.falsy(final_content:match("<cmd>patch:"), "Command tag must be removed to prevent syntax hallucination")
+
+            assert.truthy(final_content:match("%[SYSTEM MEMORY: You successfully executed a patch on 'file%.c'"), "Safe memory marker must be injected")
+
+            assert.truthy(final_content:match("Here is my CoT reasoning:"), "Preceding text must be preserved")
+            assert.truthy(final_content:match("Some trailing thoughts."), "Trailing text must be preserved")
+        end)
+
+        it("should inject safe markers for create_file blocks as well", function()
+            local raw_msg = "<think>creating</think>\n<cmd>create_file:new.js\nconst a = 1;\n</cmd>"
+            
+            ctx:add_message("CODER", "assistant", raw_msg)
+            local squashed = ctx:squash_last_mutation("CODER")
+            
+            assert.is_true(squashed)
+            local final_content = ctx:get_history("CODER")[#ctx:get_history("CODER")].content
+            
+            assert.truthy(final_content:match("%[SYSTEM MEMORY: You successfully created/overwrote file 'new%.js'"), "Safe marker for create_file must be injected")
+            assert.truthy(final_content:match("<think>creating</think>"), "Thoughts must be preserved")
         end)
     end)
 

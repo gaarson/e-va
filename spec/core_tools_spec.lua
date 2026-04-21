@@ -8,8 +8,10 @@ local os = require("os")
 describe("Core Tools via Registry Subsystem", function()
     local ctx
     local test_file = "test_core_file.txt"
+    local original_write = io.write
 
     before_each(function()
+        io.write = function() end
         registry.tools = {}
         core_tools.init()
         ctx = Context.new({
@@ -24,6 +26,7 @@ describe("Core Tools via Registry Subsystem", function()
     end)
 
     after_each(function()
+        io.write = original_write
         os.remove(test_file)
         os.remove(test_file .. ".bak")
     end)
@@ -151,15 +154,29 @@ describe("Core Tools via Registry Subsystem", function()
         io.popen:revert()
     end)
 
-    it("patch: should handle invalid syntax and disk errors", function()
+    it("patch: should handle invalid syntax, disk errors, and set RECENTLY_MODIFIED state on success", function()
         local res = registry.execute("patch:invalid_syntax", ctx, "TEST_AGENT")
         assert.truthy(res.output:match("Invalid patch syntax"))
 
-        ctx:add_file("target.lua", "1")
+        ctx:add_file("target.lua", "old_code")
+        assert.are.equal("READ", ctx.file_states["target.lua"], "Initial state should be READ")
+
         stub(patcher, "apply_patch").returns(false, nil, 0, "fuzzy failed")
-        local res3 = registry.execute("patch:target.lua\n<<<<<<< SEARCH\n1\n=======\n2\n>>>>>>> REPLACE", ctx, "TEST_AGENT")
-        assert.truthy(res3.output:match("PATCH FAILED"))
+        local res_fail = registry.execute("patch:target.lua\n<<<<<<< SEARCH\nold_code\n=======\nnew_code\n>>>>>>> REPLACE", ctx, "TEST_AGENT")
+        assert.truthy(res_fail.output:match("PATCH FAILED"))
+        assert.are.equal("READ", ctx.file_states["target.lua"], "State should remain READ on failure")
         patcher.apply_patch:revert()
+
+        stub(patcher, "apply_patch").returns(true, "new_code", 1, nil)
+        stub(utils, "write_file").returns(true, nil) 
+        
+        local res_succ = registry.execute("patch:target.lua\n<<<<<<< SEARCH\nold_code\n=======\nnew_code\n>>>>>>> REPLACE", ctx, "TEST_AGENT")
+        
+        assert.truthy(res_succ.output:match("%[SUCCESS%]"))
+        assert.are.equal("RECENTLY_MODIFIED", ctx.file_states["target.lua"], "Tool MUST update file state to RECENTLY_MODIFIED upon successful patch")
+        
+        patcher.apply_patch:revert()
+        utils.write_file:revert()
     end)
 
     it("shell: should execute commands, check safety, stream output, and handle circuit breaker", function()

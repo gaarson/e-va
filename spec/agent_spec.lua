@@ -5,8 +5,8 @@ describe("Agent Bootstrapper Mode (--bootstrap)", function()
     local llm_handler = require("llm_handler")
     local original_send_request = llm_handler.send_request
     local original_execute = os.execute
-    
-    local test_state_file = ".e-va_state.json"
+
+    local test_state_file = ".e-va-conf/.state.json"
 
     before_each(function()
         os.remove(test_state_file)
@@ -146,50 +146,6 @@ describe("Agent Control Plane (Integration)", function()
         pcall(function() chunk("dummy_file.txt", "Task with heavy history") end)
 
         assert.is_true(llm_calls > 0, "LLM should have been called")
-        io.read:revert()
-    end)
-
-    it("should preserve thoughts in chat history to maintain Chain-of-Thought continuity", function()
-        stub(io, "read").returns("/continue")
-        local raw_content_missing_start = "This is a leaked thought in English.\nLet's write code.\n</think>\nПривет, я всё сделал.\n<cmd>delegate_plan:[{\"file\": \"dummy.txt\", \"instruction\": \"init\"}]</cmd>"
-
-        llm_handler.send_request = function(profile)
-             if profile.name == "ARCHITECT" then
-                 return { choices = { { message = { content = raw_content_missing_start } } } }, nil
-             else
-                 return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
-             end
-        end
-
-        local Context = require("context")
-        local captured_ctx
-        local original_new = Context.new
-
-        Context.new = function(...)
-            captured_ctx = original_new(...)
-            return captured_ctx
-        end
-
-        local chunk, _ = loadfile("agent.lua")
-        pcall(function() chunk("dummy.txt", "Instruction") end)
-
-        Context.new = original_new
-        assert.truthy(captured_ctx, "Context was not initialized in memory")
-
-        local history = captured_ctx:get_history("ARCHITECT")
-        local assistant_msg = ""
-        for i = #history, 1, -1 do
-            if history[i].role == "assistant" then
-                assistant_msg = history[i].content
-                break
-            end
-        end
-
-        assert.truthy(assistant_msg:match("leaked thought"), "Thought MUST be preserved in history for CoT continuity!")
-        assert.truthy(assistant_msg:match("Привет, я всё сделал"), "Russian communication was lost!")
-        assert.truthy(captured_ctx.thoughts, "Thoughts table missing")
-        assert.is_true(#captured_ctx.thoughts > 0, "Thought was not saved to isolation context!")
-        assert.truthy(captured_ctx.thoughts[#captured_ctx.thoughts].content:match("Let's write code"), "Thought content is incorrect!")
         io.read:revert()
     end)
 
@@ -348,5 +304,115 @@ describe("Agent Control Plane (Integration)", function()
         utils.read_file_range:revert()
         Context.new = original_new
         io.read:revert()
+    end)
+
+    it("should dynamically inject Tool-Aware Engine Directives based on allowed tools", function()
+        stub(io, "read").returns("/continue")
+
+        local captured_system_prompt = ""
+        llm_handler.send_request = function(profile, messages)
+            for _, msg in ipairs(messages) do
+                if msg.role == "system" then captured_system_prompt = msg.content end
+            end
+            return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
+        end
+
+        local Context = require("context")
+        local original_new = Context.new
+        
+        Context.new = function(cfg)
+            cfg.PIPELINE = { {stage="TEST", agents={"ARCHITECT"}, mode="sequential"} }
+            cfg.AGENTS = { ARCHITECT = { allowed_tools = {"delegate_plan"} } }
+            return original_new(cfg)
+        end
+        
+        local chunk = loadfile("agent.lua")
+        pcall(function() chunk("dummy.txt", "init") end)
+
+        assert.truthy(captured_system_prompt:match("ENGINE DIRECTIVES %(CRITICAL & NON%-NEGOTIABLE%)"))
+        assert.truthy(captured_system_prompt:match("MUST use `<cmd>delegate_plan</cmd>`"), "Should force delegate_plan when only it is available")
+
+        Context.new = original_new
+        io.read:revert()
+    end)
+
+    it("should initialize stream with ANSI gray if agent.is_reasoning is true (Implicit Start)", function()
+        stub(io, "read").returns("/continue")
+
+        local write_capture = ""
+        local orig_write = io.write
+        io.write = function(s) write_capture = write_capture .. tostring(s) end
+
+        llm_handler.send_request = function(profile, messages, options)
+            if options and options.on_token then
+                options.on_token("Analyzing architecture...")
+                options.on_token(" Seems fine.\n")
+                options.on_token("</think>\n")
+                options.on_token("<cmd>task_complete</cmd>")
+            end
+            return { choices = { { message = { content = "dummy" } } } }, nil
+        end
+
+        local Context = require("context")
+        local original_new = Context.new
+        Context.new = function(cfg)
+            cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
+            cfg.AGENTS.ARCHITECT.is_reasoning = true 
+            return original_new(cfg)
+        end
+
+        local chunk = loadfile("agent.lua")
+        pcall(function() chunk("dummy.txt", "test implicit reasoning stream") end)
+
+        Context.new = original_new
+        io.read:revert()
+        io.write = orig_write
+
+        assert.truthy(write_capture:match("AI %(ARCHITECT%):\27%[0m \27%[90m"), "Stream MUST inject ANSI gray right after the agent prefix if is_reasoning is true")
+        assert.truthy(write_capture:match("Analyzing architecture"), "Thought content must be printed")
+        assert.truthy(write_capture:match("</think>\27%[0m"), "Parser must inject ANSI reset after </think> tag")
+    end)
+
+    it("should strictly isolate massive CoT blocks from agent_histories to prevent Context Poisoning", function()
+        stub(io, "read").returns("/continue")
+
+        local massive_thought = string.rep("This is a massive internal monologue evaluating the AST. ", 100)
+        local raw_llm_output = "<think>\n" .. massive_thought .. "\n</think>\n<cmd>task_complete</cmd>"
+
+        llm_handler.send_request = function(profile, messages, options)
+             return { choices = { { message = { content = raw_llm_output } } } }, nil
+        end
+
+        local Context = require("context")
+        local captured_ctx
+        local original_new = Context.new
+
+        Context.new = function(...)
+            captured_ctx = original_new(...)
+            return captured_ctx
+        end
+
+        local chunk, _ = loadfile("agent.lua")
+        pcall(function() chunk("dummy.txt", "Execute and isolate memory") end)
+
+        Context.new = original_new
+        assert.truthy(captured_ctx, "Context was not initialized in memory")
+
+        local history = captured_ctx:get_history("ARCHITECT")
+        
+        local assistant_msg = ""
+        for i = #history, 1, -1 do
+            if history[i].role == "assistant" then
+                assistant_msg = history[i].content
+                break
+            end
+        end
+
+        assert.falsy(assistant_msg:match("<think>"), "History MUST NOT contain <think> tags to prevent Context Poisoning")
+        assert.falsy(assistant_msg:match("massive internal monologue"), "History MUST NOT contain the thought payload")
+        assert.truthy(assistant_msg:match("<cmd>task_complete</cmd>"), "History must contain the final deterministic action")
+
+        assert.truthy(captured_ctx.thoughts, "Thoughts table missing in isolated context")
+        assert.is_true(#captured_ctx.thoughts > 0, "Thought was not routed to the isolation table")
     end)
   end)

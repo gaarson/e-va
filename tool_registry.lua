@@ -72,7 +72,6 @@ function M.generate_tool_manifest(allowed_tools)
 
     local tools_to_list = {}
     if has_all then
-        -- [FIX]: Возвращаем фразу, которую ожидает тест и которая полезна для понимания агента
         table.insert(doc, "**(Admin privileges granted: ALL_TOOLS enabled)**\n")
         for name, tool in pairs(M.tools) do table.insert(tools_to_list, {name = name, tool = tool}) end
     else
@@ -87,7 +86,7 @@ function M.generate_tool_manifest(allowed_tools)
         table.insert(doc, string.format("### Tool: `<cmd>%s</cmd>`\n**Description**: %s\n**Usage Example**:\n```xml\n%s\n```\n", item.name, item.tool.desc, item.tool.usage))
     end
 
-    table.insert(doc, "CRITICAL RULE: You MUST execute `<cmd>task_complete</cmd>` when your instructions are fulfilled to advance the pipeline.")
+    -- table.insert(doc, "CRITICAL RULE: You MUST execute `<cmd>task_complete</cmd>` when your instructions are fulfilled to advance the pipeline.")
 
     return table.concat(doc, "\n")
 end

@@ -32,7 +32,6 @@ describe("Tool Registry Edge Cases & Manifest Generation", function()
         assert.truthy(manifest:match("### Tool: `<cmd>dummy_tool</cmd>`"), "Must generate markdown header for the tool")
         assert.truthy(manifest:match("Does something dummy"), "Must include description")
         assert.truthy(manifest:match("<cmd>dummy_tool:arg</cmd>"), "Must include usage example")
-        assert.truthy(manifest:match("CRITICAL RULE:"), "Must include the critical task_complete instruction")
     end)
 
     it("should grant and list ALL_TOOLS if allowed_tools contains '*'", function()

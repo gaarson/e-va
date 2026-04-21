@@ -7,8 +7,8 @@ function M.get()
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 100000,
-        RESERVED_OUTPUT = 12000,
+        MAX_CONTEXT = 150000,
+        RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
         CHARS_PER_TOKEN = 3.5
@@ -32,7 +32,7 @@ function M.get()
         ANALYTICAL = {
             max_tokens = 16384,
             temperature = 0.1,
-            top_p = 1.0,
+            top_p = 0.45,
             min_p = 0.05,
             smoothing_factor = 0.2,
             repetition_penalty = 1.05,
@@ -40,9 +40,9 @@ function M.get()
             temperature_last = true
         },
         ENGINEERING = {
-            max_tokens = 16384,
+            max_tokens = 8192,
             temperature = 0.35,
-            top_p = 1.0,
+            top_p = 0.45,
             min_p = 0.1,
             smoothing_factor = 0.2,
             repetition_penalty = 1.1,
@@ -55,7 +55,7 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            url = "http://192.168.0.116:8000/v1/chat/completions",
+            url = "http://192.168.0.102:8000/v1/chat/completions",
             -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
@@ -64,7 +64,7 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = "http://192.168.0.116:8000/v1/chat/completions",
+            url = "http://192.168.0.102:8000/v1/chat/completions",
             -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
             model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
