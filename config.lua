@@ -40,9 +40,9 @@ function M.get()
             temperature_last = true
         },
         ENGINEERING = {
-            max_tokens = 8192,
-            temperature = 0.35,
-            top_p = 0.45,
+            max_tokens = 16384,
+            temperature = 0.55,
+            top_p = 0.95,
             min_p = 0.1,
             smoothing_factor = 0.2,
             repetition_penalty = 1.1,
@@ -56,8 +56,9 @@ function M.get()
         ARCHITECT = {
             name = "ARCHITECT",
             url = "http://192.168.0.102:8000/v1/chat/completions",
+            is_reasoning = true,
             -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
-            model = "gemma-4-31B-it-IQ4_XS",
+            -- model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = { "read_file", "read_chunk", "search", "explore_tree", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
@@ -65,8 +66,9 @@ function M.get()
         CODER = {
             name = "CODER",
             url = "http://192.168.0.102:8000/v1/chat/completions",
+            is_reasoning = true,
             -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
-            model = "gemma-4-31B-it-IQ4_XS",
+            -- model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }

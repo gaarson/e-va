@@ -322,11 +322,14 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     end
 
     local final_history_content = ""
+    if thought ~= "" then
+        final_history_content = "<think>".. thought .. "</think>\n"
+    end
 
     if spammed then
-        final_history_content = safe_assistant_content
+        final_history_content = final_history_content .. safe_assistant_content
     else
-        final_history_content = content
+        final_history_content = final_history_content .. content
     end
 
     ctx:add_message(agent_name, "assistant", final_history_content)
