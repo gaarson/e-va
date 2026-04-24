@@ -255,16 +255,28 @@ local function init_core_tools()
         return { output = output }
     end)
 
-    registry.register("delegate_plan", "Pass execution plan to next stage (JSON Array)", "<cmd>delegate_plan:\n[\n  {\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking\"}\n]\n<memo>Context for coder</memo>\n</cmd>", function(args, ctx, agent_name)
-        local memo_match = args:match("<memo>(.-)</memo>") or ""
-        local raw_json = args:gsub("<memo>.-</memo>", "")
-        local json_match = utils.trim(raw_json:gsub("`+", ""))
+    registry.register("delegate_plan", "Pass execution plan to next stage (JSON Object)", "<cmd>delegate_plan:\n{\n  \"plan\": [{\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking\"}],\n  \"memo\": \"Context for coder\"\n}\n</cmd>", function(args, ctx, agent_name)
+        local json_match = utils.trim(args:gsub("`+", ""))
 
-        local status, plan = pcall(function() return json:decode(json_match) end)
+        local status, payload = pcall(function() return json:decode(json_match) end)
 
-        if status and type(plan) == "table" and #plan > 0 then
+        local plan = nil
+        local memo_text = ""
+
+        if status and type(payload) == "table" then
+            if type(payload.plan) == "table" then
+                plan = payload.plan
+                memo_text = payload.memo or ""
+            elseif type(payload) == "table" then
+                plan = payload
+            end
+        end
+
+        if type(plan) == "table" and #plan > 0 then
             ctx.execution_plan = plan
-            if memo_match ~= "" then ctx.handoff_memo = utils.trim(memo_match) end
+            if type(memo_text) == "string" and memo_text ~= "" then 
+                ctx.handoff_memo = utils.trim(memo_text) 
+            end
 
             local loaded_files = {}
             for _, task in ipairs(plan) do

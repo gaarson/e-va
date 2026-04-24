@@ -4,6 +4,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <signal.h>
+#include <time.h>
+#include <unistd.h>
 
 #if LUA_VERSION_NUM < 502
 
@@ -115,9 +117,22 @@ static int l_find_unique_fuzzy_block(lua_State *L) {
 
 /* --- POSIX SIGNAL HANDLING --- */
 static volatile sig_atomic_t sigint_flag = 0;
+static struct timespec last_sigint_ts = {0, 0};
 
 static void handle_sigint(int sig) {
     (void)sig;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    if (last_sigint_ts.tv_sec != 0 || last_sigint_ts.tv_nsec != 0) {
+        long diff_ms = (long)(now.tv_sec - last_sigint_ts.tv_sec) * 1000 +
+                       (long)((now.tv_nsec - last_sigint_ts.tv_nsec) / 1000000);
+        if (diff_ms < 500) {
+            _exit(1);
+        }
+    }
+
+    last_sigint_ts = now;
     sigint_flag = 1;
 }
 

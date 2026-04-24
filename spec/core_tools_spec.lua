@@ -205,23 +205,37 @@ describe("Core Tools via Registry Subsystem", function()
         assert.are.equal(0, ctx.test_failures)
     end)
 
+    it("delegate_plan: should parse JSON object with plan and memo, and handle fallback arrays", function()
+        local res = registry.execute('delegate_plan:{"plan": [{"file": "test.c", "instruction": "fix"}], "memo": "Be careful"}', ctx, "TEST_AGENT")
+        assert.truthy(res.output:match("Plan delegated successfully"))
+        assert.are.equal("PIPELINE_NEXT_STAGE", res.signal)
+
+        assert.is_table(ctx.execution_plan)
+        local plan_str = require("JSON"):encode(ctx.execution_plan)
+        assert.truthy(plan_str:match("test%.c"), "Execution plan must contain test.c")
+        assert.are.equal("Be careful", ctx.handoff_memo)
+
+        local res2 = registry.execute('delegate_plan:[{"file": "test2.c", "instruction": "fix2"}]', ctx, "TEST_AGENT")
+
+        assert.is_table(ctx.execution_plan)
+        local plan_str2 = require("JSON"):encode(ctx.execution_plan)
+        assert.truthy(plan_str2:match("test2%.c"), "Execution plan must contain test2.c")
+    end)
+
     describe("task_complete iterator logic", function()
         it("should increment task index and suppress pipeline exit until plan is exhausted", function()
-            -- Имитируем план из двух шагов
             ctx.execution_plan = {
                 { file = "file1.lua", instruction = "step 1" },
                 { file = "file2.lua", instruction = "step 2" }
             }
             ctx.current_task_index = 1
 
-            -- Итерация 1: завершаем первый шаг
             local res1 = registry.execute("task_complete", ctx, "TEST_AGENT")
             
             assert.truthy(res1.output:match("Step 1/2 complete"), "Output should indicate step progression")
             assert.is_nil(res1.signal, "Signal MUST be nil to prevent pipeline stage termination")
             assert.are.equal(2, ctx.current_task_index, "Task index should be incremented")
 
-            -- Итерация 2: завершаем финальный шаг
             local res2 = registry.execute("task_complete", ctx, "TEST_AGENT")
             
             assert.truthy(res2.output:match("All steps in the execution plan are complete"), "Output should indicate plan completion")

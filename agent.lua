@@ -218,51 +218,72 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local response_data, err
     local max_retries = 5
     local retry_delay = 5
+    local interruption_retries = 0
+    local MAX_INTERRUPTION_RETRIES = 3
 
-    for attempt = 1, max_retries do
-      response_data, err = llm.send_request(agent_cfg, messages, {
-          on_token = function(t)
-              print_buf = print_buf .. t
-              while #print_buf > 0 do
-                  if not in_thought then
-                      local s, e = print_buf:find(tag_open)
-                      if s then
-                          io.write(print_buf:sub(1, s - 1))
-                          io.write("\27[90m" .. tag_open) -- Включаем серый цвет для мыслей
-                          print_buf = print_buf:sub(e + 1)
-                          in_thought = true
-                      elseif #print_buf > #tag_open then
-                          local safe_len = #print_buf - #tag_open
-                          io.write(print_buf:sub(1, safe_len))
-                          print_buf = print_buf:sub(safe_len + 1)
-                      else
-                          break
-                      end
-                  else
-                      local s, e = print_buf:find(tag_close)
-                      if s then
-                          io.write(print_buf:sub(1, s - 1) .. tag_close .. "\27[0m") -- Выключаем серый цвет
-                          print_buf = print_buf:sub(e + 1)
-                          in_thought = false
-                      elseif #print_buf > #tag_close then
-                          local safe_len = #print_buf - #tag_close
-                          io.write(print_buf:sub(1, safe_len))
-                          print_buf = print_buf:sub(safe_len + 1)
-                      else
-                          break
-                      end
-                  end
-              end
-              io.flush()
-          end
-        })
+    local on_token_fn = function(t)
+        print_buf = print_buf .. t
+        while #print_buf > 0 do
+            if not in_thought then
+                local s, e = print_buf:find(tag_open)
+                if s then
+                    io.write(print_buf:sub(1, s - 1))
+                    io.write("\27[90m" .. tag_open)
+                    print_buf = print_buf:sub(e + 1)
+                    in_thought = true
+                elseif #print_buf > #tag_open then
+                    local safe_len = #print_buf - #tag_open
+                    io.write(print_buf:sub(1, safe_len))
+                    print_buf = print_buf:sub(safe_len + 1)
+                else
+                    break
+                end
+            else
+                local s, e = print_buf:find(tag_close)
+                if s then
+                    io.write(print_buf:sub(1, s - 1) .. tag_close .. "\27[0m")
+                    print_buf = print_buf:sub(e + 1)
+                    in_thought = false
+                elseif #print_buf > #tag_close then
+                    local safe_len = #print_buf - #tag_close
+                    io.write(print_buf:sub(1, safe_len))
+                    print_buf = print_buf:sub(safe_len + 1)
+                else
+                    break
+                end
+            end
+        end
+        io.flush()
+    end
 
-        if response_data then break end
-        logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
-        if attempt < max_retries then
-            print(string.format("\27[33m[SYSTEM] Retrying in %d seconds...\27[0m", retry_delay))
-            os.execute("sleep " .. tostring(retry_delay))
-            retry_delay = retry_delay * 3
+    while true do
+        for attempt = 1, max_retries do
+            response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
+            if response_data then break end
+            logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
+            if attempt < max_retries then
+                print(string.format("\27[33m[SYSTEM] Retrying in %d seconds...\27[0m", retry_delay))
+                os.execute("sleep " .. tostring(retry_delay))
+                retry_delay = retry_delay * 3
+            end
+        end
+
+        if not response_data then break end
+
+        if response_data.interrupted then
+            interruption_retries = interruption_retries + 1
+            if interruption_retries > MAX_INTERRUPTION_RETRIES then
+                logger.warn("[SYSTEM] Max interruption retries reached. Resuming with current context.")
+                break
+            end
+            print("\n\27[33m[SYSTEM] Generation interrupted. Provide additional context or corrections (or press Enter to continue):\27[0m")
+            local user_input = io.read("*l")
+            if user_input and user_input ~= "" then
+                table.insert(messages, { role = "user", content = user_input })
+            end
+            response_data = nil
+        else
+            break
         end
     end
 
@@ -322,8 +343,9 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     end
 
     local final_history_content = ""
+
     if thought ~= "" then
-        final_history_content = "<think>".. thought .. "</think>\n"
+        final_history_content = "[SYSTEM MEMORY: Internal cognitive process abstracted and saved to memory digest]\n"
     end
 
     if spammed then

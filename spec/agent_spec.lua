@@ -97,8 +97,8 @@ describe("Agent Control Plane (Integration)", function()
 
         llm_handler.send_request = function(profile, messages)
             if profile.name == "ARCHITECT" then
-                return { choices = { { message = { content = '<cmd>delegate_plan:[{"file": "dummy.txt", "instruction": "init"}]</cmd>' } } } }, nil
-            else
+                return { choices = { { message = { content = '<cmd>delegate_plan:{"plan": [{"file": "dummy.txt", "instruction": "init"}], "memo": "init"}</cmd>' } } } }, nil
+              else
                 return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
             end
         end
@@ -127,7 +127,7 @@ describe("Agent Control Plane (Integration)", function()
         local llm_calls = 0
         llm_handler.send_request = function(profile, messages)
             llm_calls = llm_calls + 1
-            return { choices = { { message = { content = '<cmd>delegate_plan:[{"file": "dummy.txt", "instruction": "init"}]</cmd>' } } } }, nil
+            return { choices = { { message = { content = '<cmd>delegate_plan:{"plan": [{"file": "dummy.txt", "instruction": "init"}], "memo": ""}</cmd>' } } } }, nil
         end
 
         local heavy_history = {}
@@ -202,6 +202,7 @@ describe("Agent Control Plane (Integration)", function()
         local original_new = Context.new
         Context.new = function(cfg)
             cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
+            cfg.AGENTS.ARCHITECT.is_reasoning = false
             return original_new(cfg)
         end
 
@@ -293,6 +294,7 @@ describe("Agent Control Plane (Integration)", function()
         Context.new = function(cfg)
             cfg.TASKS = { { file = "target.c", instruction_file = "arch_spec.md" } }
             cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
+            cfg.AGENTS.ARCHITECT.is_reasoning = false
             return original_new(cfg)
         end
 
@@ -373,11 +375,11 @@ describe("Agent Control Plane (Integration)", function()
         assert.truthy(write_capture:match("</think>\27%[0m"), "Parser must inject ANSI reset after </think> tag")
     end)
 
-    it("should strictly isolate massive CoT blocks from agent_histories to prevent Context Poisoning", function()
+    it("should extract CoT to Context and replace it with a safe SYSTEM MEMORY marker in agent_histories", function()
         stub(io, "read").returns("/continue")
 
-        local massive_thought = string.rep("This is a massive internal monologue evaluating the AST. ", 100)
-        local raw_llm_output = "<think>\n" .. massive_thought .. "\n</think>\n<cmd>task_complete</cmd>"
+        local raw_thought = "This is a massive internal monologue evaluating the AST."
+        local raw_llm_output = "<think>\n" .. raw_thought .. "\n</think>\n<cmd>task_complete</cmd>"
 
         llm_handler.send_request = function(profile, messages, options)
              return { choices = { { message = { content = raw_llm_output } } } }, nil
@@ -399,7 +401,7 @@ describe("Agent Control Plane (Integration)", function()
         assert.truthy(captured_ctx, "Context was not initialized in memory")
 
         local history = captured_ctx:get_history("ARCHITECT")
-        
+
         local assistant_msg = ""
         for i = #history, 1, -1 do
             if history[i].role == "assistant" then
@@ -410,9 +412,12 @@ describe("Agent Control Plane (Integration)", function()
 
         assert.falsy(assistant_msg:match("<think>"), "History MUST NOT contain <think> tags to prevent Context Poisoning")
         assert.falsy(assistant_msg:match("massive internal monologue"), "History MUST NOT contain the thought payload")
+        
+        assert.truthy(assistant_msg:match("%[SYSTEM MEMORY: Internal cognitive process abstracted"), "History MUST contain the safe memory marker")
         assert.truthy(assistant_msg:match("<cmd>task_complete</cmd>"), "History must contain the final deterministic action")
 
         assert.truthy(captured_ctx.thoughts, "Thoughts table missing in isolated context")
         assert.is_true(#captured_ctx.thoughts > 0, "Thought was not routed to the isolation table")
+        assert.truthy(captured_ctx.thoughts[#captured_ctx.thoughts].content:match("massive internal monologue"), "Thought text was not correctly extracted into context state")
     end)
-  end)
+end)
