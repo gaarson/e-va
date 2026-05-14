@@ -21,8 +21,7 @@ fi
 
 LUA_VERSION=$(lua -v 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
-# ИСПРАВЛЕНИЕ: Добавляем .e-va-conf в начало LUA_PATH для приоритета локальных конфигов
-export LUA_PATH="$PROJECT_ROOT/.e-va-conf/?.lua;$AGENT_HOME/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?/init.lua;;"
+export LUA_PATH="$PROJECT_ROOT/.e-va-conf/?.lua;$AGENT_HOME/?.lua;$AGENT_HOME/?/init.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?/init.lua;;"
 export LUA_CPATH="$AGENT_HOME/?.so;$AGENT_HOME/lua_modules/lib/lua/${LUA_VERSION}/?.so;;"
 
 exec lua "$AGENT_HOME/agent.lua" "$@"

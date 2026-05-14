@@ -23,7 +23,8 @@ local llm = require("llm_handler")
 local logger = require("logger")
 local Context = require("context")
 local registry = require("tool_registry")
-local core_tools = require("core_tools")
+local tools = require("tools")
+local parser = require("parser")
 local os = require("os")
 
 local ctx = Context.new(config)
@@ -50,7 +51,7 @@ if utils.read_file_range(STATE_FILE) then
     if ctx:load_from_snapshot(content) then restored = true end
 end
 
-core_tools.init()
+tools.init()
 
 local patcher_core = require("patcher_core")
 if type(patcher_core.setup_sigint) == "function" then
@@ -333,7 +334,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local safe_assistant_content = ""
     local spammed = false
 
-    for cmd_block in content:gmatch("<cmd>(.-)</cmd>") do
+    local cmd_iterator = parser.extract_commands(content)
+    for cmd_block in cmd_iterator do
         cmds_executed = cmds_executed + 1
         if cmds_executed > MAX_CMDS_PER_TURN then
             spammed = true
@@ -357,7 +359,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     ctx:add_message(agent_name, "assistant", final_history_content)
 
     local run_count = 0
-    for cmd_block in content:gmatch("<cmd>(.-)</cmd>") do
+    local cmd_iterator_exec = parser.extract_commands(content)
+    for cmd_block in cmd_iterator_exec do
         run_count = run_count + 1
         if run_count > MAX_CMDS_PER_TURN then
             local warn_msg = string.format("\n[SYSTEM NOTE]: You reached the execution limit of %d commands per turn. Remaining commands were safely ignored.", MAX_CMDS_PER_TURN)
