@@ -35,7 +35,6 @@ function M.deep_merge(base, specific)
     return res
 end
 
--- [NEW]: Полиморфный загрузчик конфигураций
 function M.load_config(filepath)
     local chunk, err = loadfile(filepath)
     if not chunk then return nil, err end
@@ -48,7 +47,6 @@ function M.load_config(filepath)
         if type(res.get) == "function" then
             return res.get()
         end
-        -- Поддержка упрощенного формата
         return res
     end
     
@@ -288,7 +286,8 @@ function M.explore_directory(root_path, target_subpath, max_depth)
         local rel = M.normalize_path(root_path, line)
         if rel ~= "" and rel ~= full_target then
             local full_path = root_path .. "/" .. rel
-            local is_dir = os.execute(string.format("test -d '%s'", full_path)) == 0
+            local safe_full_path = M.shell_quote(full_path)
+            local is_dir = os.execute(string.format("test -d %s", safe_full_path)) == 0
 
             if is_dir then
                 table.insert(files, "  " .. rel .. "/")

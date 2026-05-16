@@ -11,9 +11,10 @@ local function register(registry)
         local tmp_script = os.tmpname()
         utils.write_file(tmp_script, bpf_script)
 
+        local safe_binary = utils.shell_quote(binary)
         local wrapper = string.format(
-            "sudo bpftrace %s > %s.out 2>&1 & BPF_PID=$!; sleep 1; %s; kill -INT $BPF_PID; sleep 1; cat %s.out",
-            tmp_script, tmp_script, binary, tmp_script
+            "bpftrace %s > %s.out 2>&1 & BPF_PID=$!; sleep 1; %s; kill -INT $BPF_PID; sleep 1; cat %s.out",
+            tmp_script, tmp_script, safe_binary, tmp_script
         )
 
         local f = io.popen(wrapper)

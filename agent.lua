@@ -69,9 +69,40 @@ if custom_tools_func then
     if not ok then logger.error("Failed to load custom tools: " .. tostring(err)) end
 end
 
-local arg1, arg2 = ...
-local start_file = type(arg1) == 'string' and arg1 or nil
-local instruction = type(arg2) == 'string' and arg2 or nil
+local cli_args = {...}
+local start_file = nil
+local instruction = nil
+local is_bootstrap = false
+local target_agent = nil
+
+local idx = 1
+while idx <= #cli_args do
+    local a = cli_args[idx]
+    if type(a) == "string" then
+        if a == "--bootstrap" then
+            is_bootstrap = true
+        elseif a == "--agent" and idx < #cli_args then
+            target_agent = cli_args[idx+1]
+            idx = idx + 1
+        elseif not start_file then
+            start_file = a
+        elseif not instruction then
+            instruction = a
+        end
+    end
+    idx = idx + 1
+end
+
+if target_agent then
+    if not config.AGENTS[target_agent] then
+        print(string.format("\n\27[31m[FATAL] Agent '%s' not found in config.AGENTS\27[0m", target_agent))
+        os.exit(1)
+    end
+    config.PIPELINE = {
+        { stage = "DIRECT_EXECUTION", agents = { target_agent }, mode = "sequential" }
+    }
+    print(string.format("\n\27[36m[SYSTEM INFO]: Direct execution mode. Overriding pipeline for agent: %s\27[0m", target_agent))
+end
 
 if not instruction then
     local task_path = config.PROJECT_ROOT .. '/.e-va-conf/task.txt'
@@ -146,7 +177,9 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 ==================================================
 ⚙️ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
 %s
-2. TOOL EXECUTION: You are bound by the toolchain. Do NOT hallucinate actions or emit standalone code blocks without wrapping them in proper XML `<cmd>` tags.
+2. STRICT TOOL SYNTAX: You MUST wrap all tool executions STRICTLY in `<cmd>tool:args</cmd>` tags.
+WARNING: DO NOT use `<tool_call>`, `<function>`, or standard markdown blocks to execute tools. This will crash the system.
+Example: <cmd>read_file:src/main.c</cmd>
 ==================================================]], pipeline_rule)
 
     local combined_system_prompt = sys_prompt_text .. "\n\n" ..
@@ -521,8 +554,13 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
     end
 
     local first_agent = "ARCHITECT"
-    if type(config.PIPELINE) == "table" and config.PIPELINE and type(config.PIPELINE.agents) == "table" and type(config.PIPELINE.agents) == "string" then
-        first_agent = config.PIPELINE.agents
+    if type(config.PIPELINE) == "table" and config.PIPELINE[1] then
+        local p_agents = config.PIPELINE[1].agents
+        if type(p_agents) == "table" and #p_agents > 0 then
+            first_agent = p_agents[1]
+        elseif type(p_agents) == "string" then
+            first_agent = p_agents
+        end
     end
 
     ctx:add_message(first_agent, "user", initial_msg)
@@ -541,8 +579,8 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
 end
 
 if not restored then
-    if arg1 == "--bootstrap" then
-        print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent with High Creativity...\27[0m")
+    if is_bootstrap then
+      print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent with High Creativity...\27[0m")
 
         os.execute("mkdir -p " .. config.PROJECT_ROOT .. "/.e-va-conf/prompts")
 

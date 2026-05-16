@@ -59,7 +59,7 @@ static int l_find_unique_fuzzy_block(lua_State *L) {
     StringRef *content = extract_string_array(L, 1, &content_count);
     StringRef *search = extract_string_array(L, 2, &search_count);
 
-    if (!search || search_count == 0) {
+    if (!content || !search || search_count == 0) {
         if (content) free(content);
         if (search) free(search);
         lua_pushnil(L);

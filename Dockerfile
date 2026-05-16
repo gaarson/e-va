@@ -31,11 +31,7 @@ RUN luarocks install luajson --tree=lua_modules
 FROM debian:bookworm-slim AS runtime
 
 # Установка только runtime-утилит (ripgrep критичен для tool_executor.lua)
-RUN apt-get update && apt-get install -y \
-    lua5.1 \
-    ripgrep \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y lua5.1 ripgrep ca-certificates bpftrace && rm -rf /var/lib/apt/lists/*
 
 # Security Best Practice: Создаем непривилегированного пользователя
 RUN useradd -m -s /bin/bash agent

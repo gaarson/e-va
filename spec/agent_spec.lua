@@ -420,4 +420,33 @@ describe("Agent Control Plane (Integration)", function()
         assert.is_true(#captured_ctx.thoughts > 0, "Thought was not routed to the isolation table")
         assert.truthy(captured_ctx.thoughts[#captured_ctx.thoughts].content:match("massive internal monologue"), "Thought text was not correctly extracted into context state")
     end)
+
+    it("should override pipeline when --agent is specified", function()
+        stub(io, "read").returns("/continue")
+
+        local used_agent = nil
+        llm_handler.send_request = function(profile, messages)
+            used_agent = profile.name
+            return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
+        end
+
+        local Context = require("context")
+        local original_new = Context.new
+        Context.new = function(cfg)
+            cfg.AGENTS = {
+                DEFAULT_AGENT = { name = "DEFAULT_AGENT" },
+                CUSTOM_CODER = { allowed_tools = {"*"}, name = "CUSTOM_CODER" }
+            }
+            cfg.PIPELINE = { { stage = "TEST", agents = {"DEFAULT_AGENT"}, mode = "sequential" } }
+            return original_new(cfg)
+        end
+
+        local chunk = loadfile("agent.lua")
+        pcall(function() chunk("--agent", "CUSTOM_CODER", "dummy.txt", "test instruction") end)
+
+        assert.are.equal("CUSTOM_CODER", used_agent, "The overridden agent should have been called instead of DEFAULT_AGENT")
+
+        Context.new = original_new
+        io.read:revert()
+    end)
 end)
