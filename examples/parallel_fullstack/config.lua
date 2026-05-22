@@ -9,7 +9,6 @@ return {
             is_reasoning = true,
             params = { temperature = 0.2, stream = true },
             prompt_file = "prompts/backend.md",
-            -- Backend имеет доступ к БД и миграциям
             allowed_tools = { "patch", "create_file", "shell", "read_file", "search", "task_complete" }
         },
         FRONTEND_ENGINEER = {
