@@ -1,53 +1,68 @@
 local registry = require("tool_registry")
+local logger = require("logger")
 
 local function init()
-    local explore_tree = require("tools.explore_tree")
-    explore_tree.register(registry)
+    require("tools.explore_tree").register(registry)
+    require("tools.read_file").register(registry)
+    require("tools.read_chunk").register(registry)
+    require("tools.search").register(registry)
+    require("tools.rollback").register(registry)
+    require("tools.cleanup_baks").register(registry)
+    require("tools.patch").register(registry)
+    require("tools.create_file").register(registry)
+    require("tools.shell").register(registry)
+    require("tools.delegate_plan").register(registry)
+    require("tools.task_complete").register(registry)
+    require("tools.ask_user").register(registry)
+    require("tools.outline").register(registry)
+    require("tools.pin").register(registry)
+    require("tools.unpin").register(registry)
+    require("tools.trace_execution").register(registry)
 
-    local read_file = require("tools.read_file")
-    read_file.register(registry)
-
-    local read_chunk = require("tools.read_chunk")
-    read_chunk.register(registry)
-
-    local search = require("tools.search")
-    search.register(registry)
-
-    local rollback = require("tools.rollback")
-    rollback.register(registry)
-
-    local cleanup_baks = require("tools.cleanup_baks")
-    cleanup_baks.register(registry)
-
-    local patch = require("tools.patch")
-    patch.register(registry)
-
-    local create_file = require("tools.create_file")
-    create_file.register(registry)
-
-    local shell = require("tools.shell")
-    shell.register(registry)
-
-    local delegate_plan = require("tools.delegate_plan")
-    delegate_plan.register(registry)
-
-    local task_complete = require("tools.task_complete")
-    task_complete.register(registry)
-
-    local ask_user = require("tools.ask_user")
-    ask_user.register(registry)
-
-    local outline = require("tools.outline")
-    outline.register(registry)
-
-    local pin = require("tools.pin")
-    pin.register(registry)
-
-    local unpin = require("tools.unpin")
-    unpin.register(registry)
-
-    local trace_execution = require("tools.trace_execution")
-    trace_execution.register(registry)
+    local ok, config_module = pcall(require, "config")
+    if not ok then return end
+    
+    local config = config_module.get()
+    
+    if config.MCP_SERVERS then
+        local mcp = require("tools.mcp_client")
+        local cjson = require("cjson.safe")
+        
+        for srv_name, srv_cmd in pairs(config.MCP_SERVERS) do
+            local status, proc = pcall(mcp.init_server, srv_name, srv_cmd)
+            
+            if status and proc then
+                logger.info(string.format("[MCP] Connected to '%s'. Requesting tool schema...", srv_name))
+                local mcp_tools = mcp.discover_tools(proc)
+                
+                for _, tool in ipairs(mcp_tools) do
+                    local eva_tool_name = "mcp_" .. srv_name .. "_" .. tool.name
+                    print("[DEBUG MCP TOOL DISCOVERY] -> " .. eva_tool_name)
+                    local usage_example = string.format("<cmd>%s:{\"param\": \"value\"}</cmd>", eva_tool_name)
+                    
+                    local schema_str = cjson.encode(tool.inputSchema or {})
+                    
+                    -- ЗАЩИТА: Отсекаем гигантские схемы от браузерных MCP
+                    if schema_str and #schema_str > 2500 then
+                        schema_str = "{\"NOTE\": \"Schema truncated to protect token limit. Use standard intuitive params based on the tool description.\"}"
+                    end
+                    
+                    local description = string.format(
+                        "[%s Server] %s\nIMPORTANT: Arguments must be a valid JSON string conforming to this schema: %s", 
+                        srv_name, 
+                        tool.description or "No description", 
+                        schema_str
+                    )
+                    
+                    registry.register(eva_tool_name, description, usage_example, function(args_string, ctx, agent_name)
+                        return mcp.execute_tool(proc, tool.name, args_string)
+                    end)
+                end
+            else
+                logger.error(string.format("[MCP FATAL] Failed to initialize server '%s': %s", srv_name, tostring(proc)))
+            end
+        end
+    end
 end
 
 return { init = init }

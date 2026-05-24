@@ -2,10 +2,13 @@ CC = gcc
 CFLAGS = -O3 -Wall -Wextra -fPIC -I/usr/include/lua5.1
 LDFLAGS = -shared
 
-all: patcher_core.so
+all: patcher_core.so ipc_mcp.so
 
 patcher_core.so: patcher_core.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
+ipc_mcp.so: ipc_mcp.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
 clean:
-	rm -f patcher_core.so
+	rm -f patcher_core.so ipc_mcp.so

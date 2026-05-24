@@ -6,6 +6,10 @@ function M.get()
     local cfg = {}
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
+    cfg.MCP_SERVERS = {
+        browser = "npx -y chrome-devtools-mcp@latest"
+    }
+
     cfg.LIMITS = {
         MAX_CONTEXT = 150000,
         RESERVED_OUTPUT = 5000,
@@ -62,7 +66,8 @@ function M.get()
             -- model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
-            allowed_tools = { "read_file", "read_chunk", "search", "explore_tree", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
+            allowed_tools = { 
+              "read_file", "read_chunk", "search", "mcp_browser_*", "explore_tree", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
         },
         CODER = {
             name = "CODER",

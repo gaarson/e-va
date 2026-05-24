@@ -14,9 +14,18 @@ end
 
 local function is_tool_allowed(agent_cfg, tool_name)
     if not agent_cfg or not agent_cfg.allowed_tools then return false end
+    
     for _, allowed in ipairs(agent_cfg.allowed_tools) do
         if allowed == tool_name or allowed == "*" then return true end
+        
+        if allowed:sub(-1) == "*" then
+            local prefix = allowed:sub(1, -2)
+            if tool_name:sub(1, #prefix) == prefix then 
+                return true 
+            end
+        end
     end
+    
     return false
 end
 

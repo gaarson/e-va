@@ -44,6 +44,7 @@ WORKDIR /opt/e-va
 COPY --from=builder --chown=agent:agent /build/e-va ./e-va
 COPY --from=builder --chown=agent:agent /build/*.lua ./
 COPY --from=builder --chown=agent:agent /build/patcher_core.so ./
+COPY --from=builder --chown=agent:agent /build/ipc_mcp.so ./
 COPY --from=builder --chown=agent:agent /build/lua_modules ./lua_modules
 
 # Настраиваем переменные окружения для Lua
