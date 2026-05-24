@@ -83,6 +83,12 @@ describe("Configuration Subsystem (Pipeline & Agents Schema Validation)", functi
         
         assert.is_table(config.TASKS)
     end)
+
+    it('should include PICTURES_DIR configuration option', function()
+        local config = config_module.get()
+        assert.is_nil(config.PICTURES_DIR, 'PICTURES_DIR should be nil by default')
+        assert.is_true(config.CREATE_BACKUPS ~= nil, 'CREATE_BACKUPS should still exist')
+    end)
 end)
 
 require("utils").table_contains = function(tbl, val)

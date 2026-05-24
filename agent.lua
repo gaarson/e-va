@@ -229,6 +229,24 @@ Example: <cmd>read_file:src/main.c</cmd>
         total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(msg.content)
     end
 
+    -- Image injection logic
+    if config.PICTURES_DIR then
+        ctx:load_images(config.PROJECT_ROOT .. "/" .. config.PICTURES_DIR)
+    end
+    local image_parts = ctx:get_image_content_parts()
+    if #image_parts > 0 then
+        for i = 1, #messages do
+            if messages[i].role == "user" then
+                local original_content = messages[i].content
+                messages[i].content = {
+                    { type = "text", text = original_content },
+                    unpack(image_parts)
+                }
+                break
+            end
+        end
+    end
+
     local json = require("JSON")
     local trace_dump = json:encode({
         turn = turn,

@@ -343,4 +343,133 @@ describe("Context class", function()
             assert.truthy(digest:match("Merged x3"))
         end)
     end)
+
+    describe("Image Management", function()
+        it("should initialize with empty images state", function()
+            assert.same({}, ctx.images)
+            assert.is_false(ctx.images_loaded)
+        end)
+
+        it("should load images from a valid directory", function()
+            local utils = require("utils")
+            local test_dir = "/tmp/e_va_img_test_" .. os.time()
+            os.execute("mkdir -p " .. test_dir)
+            local png_header = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+            utils.write_file(test_dir .. "/photo.png", png_header)
+
+            ctx:load_images(test_dir)
+
+            assert.is_true(ctx.images_loaded)
+            assert.are.equal(1, #ctx.images)
+            assert.truthy(ctx.images[1].path:match("photo%.png$"))
+            assert.are.equal("image/png", ctx.images[1].mime_type)
+            assert.truthy(ctx.images[1].base64_data:len() > 0)
+
+            utils.write_file(test_dir .. "/photo.png", "") -- cleanup file
+            os.execute("rmdir " .. test_dir .. " 2>/dev/null")
+        end)
+
+        it("should clear images when given nil/empty path", function()
+            ctx.images = { { path = "mock.png", mime_type = "image/png", base64_data = "abc" } }
+            ctx.images_loaded = true
+
+            ctx:load_images(nil)
+            assert.same({}, ctx.images)
+            assert.is_false(ctx.images_loaded)
+
+            ctx.images = { { path = "mock.png", mime_type = "image/png", base64_data = "abc" } }
+            ctx.images_loaded = true
+
+            ctx:load_images("")
+            assert.same({}, ctx.images)
+            assert.is_false(ctx.images_loaded)
+        end)
+
+        it("should generate correct image content parts for LLM", function()
+            ctx.images = { { path = "test.png", mime_type = "image/png", base64_data = "dGVzdA==" } }
+            ctx.images_loaded = true
+
+            local parts = ctx:get_image_content_parts()
+            assert.are.equal(1, #parts)
+            assert.are.equal("image_url", parts[1].type)
+            assert.are.equal("data:image/png;base64,dGVzdA==", parts[1].image_url.url)
+        end)
+
+        it("should return empty table when no images loaded", function()
+            ctx.images = {}
+            ctx.images_loaded = false
+
+            local parts = ctx:get_image_content_parts()
+            assert.same({}, parts)
+        end)
+
+        it("should handle multiple images", function()
+            ctx.images = {
+                { path = "img1.png", mime_type = "image/png", base64_data = "ZGF0YTE=" },
+                { path = "img2.jpg", mime_type = "image/jpeg", base64_data = "ZGF0YTI=" }
+            }
+            ctx.images_loaded = true
+
+            local parts = ctx:get_image_content_parts()
+            assert.are.equal(2, #parts)
+            assert.are.equal("image_url", parts[1].type)
+            assert.are.equal("data:image/png;base64,ZGF0YTE=", parts[1].image_url.url)
+            assert.are.equal("image_url", parts[2].type)
+            assert.are.equal("data:image/jpeg;base64,ZGF0YTI=", parts[2].image_url.url)
+        end)
+    end)
+
+    describe("Image Serialization in Snapshot", function()
+        it("should snapshot images metadata without base64 data", function()
+            local json = require("JSON")
+            ctx.images = {
+                { path = "secret.png", mime_type = "image/png", base64_data = "c2VjcmV0X2RhdGE=" }
+            }
+            ctx.images_loaded = true
+
+            local state_json = ctx:snapshot()
+            local decoded = json:decode(state_json)
+
+            assert.is_table(decoded.images_metadata)
+            assert.are.equal(1, #decoded.images_metadata)
+            assert.are.equal("secret.png", decoded.images_metadata[1].path)
+            assert.are.equal("image/png", decoded.images_metadata[1].mime_type)
+            assert.is_nil(decoded.images_metadata[1].base64_data, "base64_data must NOT be serialized")
+        end)
+
+        it("should restore images metadata from snapshot", function()
+            local json = require("JSON")
+            ctx.images = {
+                { path = "restored.png", mime_type = "image/png", base64_data = "cmVzdG9yZWQ=" }
+            }
+            ctx.images_loaded = true
+
+            local state_json = ctx:snapshot()
+            local new_ctx = Context.new(mock_config)
+            local ok, err = new_ctx:load_from_snapshot(state_json)
+
+            assert.is_true(ok)
+            assert.is_nil(err)
+            assert.is_true(new_ctx.images_loaded)
+            assert.is_table(new_ctx.images)
+            assert.are.equal(1, #new_ctx.images)
+            assert.are.equal("restored.png", new_ctx.images[1].path)
+            assert.are.equal("image/png", new_ctx.images[1].mime_type)
+            assert.is_nil(new_ctx.images[1].base64_data, "base64_data should be nil after restore (reload from disk)")
+        end)
+
+        it("should handle snapshot with no images", function()
+            ctx.images = {}
+            ctx.images_loaded = false
+
+            local state_json = ctx:snapshot()
+            local new_ctx = Context.new(mock_config)
+            local ok, err = new_ctx:load_from_snapshot(state_json)
+
+            assert.is_true(ok)
+            assert.is_nil(err)
+            assert.same({}, new_ctx.images)
+            assert.is_false(new_ctx.images_loaded)
+        end)
+    end)
 end)

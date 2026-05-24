@@ -21,6 +21,8 @@ function M.reset(self)
     self.identity = nil
     self.file_tree = nil
     self.pinned_files = {}
+    self.images = {}
+    self.images_loaded = false
 end
 
 function M.get_history(self, agent_name)
@@ -163,6 +165,31 @@ function M.unpin_file(self, path)
     return false
 end
 
+function M.load_images(self, dir_path)
+    if not dir_path or dir_path == "" then
+        self.images = {}
+        self.images_loaded = false
+        return
+    end
+    local utils = require("utils")
+    self.images = utils.load_images_from_dir(dir_path)
+    self.images_loaded = (#self.images > 0)
+end
+
+function M.get_image_content_parts(self)
+    if not self.images or #self.images == 0 then return {} end
+    local parts = {}
+    for _, img in ipairs(self.images) do
+        table.insert(parts, {
+            type = "image_url",
+            image_url = {
+                url = "data:" .. img.mime_type .. ";base64," .. img.base64_data
+            }
+        })
+    end
+    return parts
+end
+
 function M.snapshot(self)
     local state = {
         knowledge_base = self.knowledge_base,
@@ -176,8 +203,19 @@ function M.snapshot(self)
         current_task_index = self.current_task_index,
         identity = self.identity,
         file_tree = self.file_tree,
-        pinned_files = self.pinned_files
+        pinned_files = self.pinned_files,
+        images_loaded = self.images_loaded,
+        images_metadata = nil
     }
+    if self.images and #self.images > 0 then
+        state.images_metadata = {}
+        for _, img in ipairs(self.images) do
+            table.insert(state.images_metadata, {
+                path = img.path,
+                mime_type = img.mime_type
+            })
+        end
+    end
     return json:encode(state)
 end
 
@@ -196,6 +234,17 @@ function M.load_from_snapshot(self, json_str)
     self.identity = state.identity
     self.file_tree = state.file_tree
     self.pinned_files = state.pinned_files or {}
+    self.images_loaded = state.images_loaded or false
+    self.images = {}
+    if state.images_metadata and type(state.images_metadata) == "table" then
+        for _, meta in ipairs(state.images_metadata) do
+            table.insert(self.images, {
+                path = meta.path,
+                mime_type = meta.mime_type,
+                base64_data = nil
+            })
+        end
+    end
     return true
 end
 

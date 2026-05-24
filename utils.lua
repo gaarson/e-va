@@ -302,4 +302,91 @@ function M.explore_directory(root_path, target_subpath, max_depth)
     return string.format("Directory: /%s\n%s", full_target, table.concat(files, "\n"))
 end
 
+function M.base64_encode(str)
+    local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local out = {}
+    local len = #str
+    local i = 1
+    while i <= len do
+        local b1 = str:byte(i, i) or 0
+        local b2 = str:byte(i + 1, i + 1) or 0
+        local b3 = str:byte(i + 2, i + 2) or 0
+
+        local s1 = math.floor(b1 / 4)
+        local s2 = ((b1 % 4) * 16) + math.floor(b2 / 16)
+        local s3 = ((b2 % 16) * 4) + math.floor(b3 / 64)
+        local s4 = b3 % 64
+
+        table.insert(out, chars:sub(s1 + 1, s1 + 1))
+        table.insert(out, chars:sub(s2 + 1, s2 + 1))
+        table.insert(out, chars:sub(s3 + 1, s3 + 1))
+        table.insert(out, chars:sub(s4 + 1, s4 + 1))
+
+        i = i + 3
+    end
+
+    local remainder = len % 3
+    if remainder == 1 then
+        out[#out] = "="
+        out[#out - 1] = "="
+    elseif remainder == 2 then
+        out[#out] = "="
+    end
+
+    return table.concat(out)
+end
+
+function M.load_images_from_dir(dir_path)
+    if not dir_path then return {} end
+
+    local safe_dir = M.shell_quote(dir_path)
+    local exists = os.execute(string.format("test -d %s", safe_dir))
+    if not exists then return {} end
+
+    local exts = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
+    local patterns = {}
+    for _, ext in ipairs(exts) do
+        table.insert(patterns, "-iname '*." .. ext .. "'")
+    end
+    local find_cmd = string.format("find %s -maxdepth 1 -type f %s 2>/dev/null", safe_dir, table.concat(patterns, " -o "))
+
+    local p = io.popen(find_cmd)
+    if not p then return {} end
+    local output = p:read("*a")
+    p:close()
+
+    local mime_map = {
+        ["png"] = "image/png",
+        ["jpg"] = "image/jpeg",
+        ["jpeg"] = "image/jpeg",
+        ["gif"] = "image/gif",
+        ["webp"] = "image/webp",
+        ["bmp"] = "image/bmp"
+    }
+
+    local images = {}
+    for line in output:gmatch("[^\r\n]+") do
+        if line == "" then break end
+        local fname = line:match("^.*/(.+)$") or line
+        local ext = fname:match("%.([^%.]+)$"):lower()
+        local mime = mime_map[ext]
+        if mime then
+            local f = io.open(line, "rb")
+            if f then
+                local data = f:read("*a")
+                f:close()
+                if data and #data > 0 then
+                    table.insert(images, {
+                        path = line,
+                        mime_type = mime,
+                        base64_data = M.base64_encode(data)
+                    })
+                end
+            end
+        end
+    end
+
+    return images
+end
+
 return M

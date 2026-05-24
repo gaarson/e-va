@@ -22,6 +22,7 @@ function M.get()
     cfg.TASKS = {}
 
     cfg.CREATE_BACKUPS = false
+    cfg.PICTURES_DIR = nil -- e.g., '.e-va-conf/pictures'
 
     local BASE_PARAMS = {
         stream = true,
