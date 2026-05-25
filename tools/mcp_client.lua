@@ -19,13 +19,13 @@ local function rpc_call(proc, method, params)
     ipc.mcp_write(proc, json.encode(req))
 
     while true do
-        logger.info(string.format("[LUA-DEBUG] Waiting for IPC read on method '%s'...", method))
+        -- logger.info(string.format("[LUA-DEBUG] Waiting for IPC read on method '%s'...", method))
         local raw_res = ipc.mcp_read(proc)
-        logger.info(string.format("[LUA-DEBUG] IPC read returned type: %s", type(raw_res)), raw_res)
+        -- logger.info(string.format("[LUA-DEBUG] IPC read returned type: %s", type(raw_res)), raw_res)
 
         if not raw_res then return nil, "Pipe closed or server crashed" end
 
-        logger.info(string.format("[LUA-DEBUG] Processing string of length: %d bytes", #raw_res))
+        -- logger.info(string.format("[LUA-DEBUG] Processing string of length: %d bytes", #raw_res))
 
         local first_char = ""
         local snippet_limit = math.min(100, #raw_res)
@@ -37,12 +37,12 @@ local function rpc_call(proc, method, params)
             end
         end
 
-        logger.info("[LUA-DEBUG] First valid char identified as: '" .. tostring(first_char) .. "'")
+        -- logger.info("[LUA-DEBUG] First valid char identified as: '" .. tostring(first_char) .. "'")
 
         if first_char == "{" then
-            logger.info("[LUA-DEBUG] Attempting cjson.decode...")
+            -- logger.info("[LUA-DEBUG] Attempting cjson.decode...")
             local res, err = json.decode(raw_res)
-            logger.info("[LUA-DEBUG] cjson.decode finished. Success: " .. tostring(res ~= nil))
+            -- logger.info("[LUA-DEBUG] cjson.decode finished. Success: " .. tostring(res ~= nil))
 
             if res and type(res) == "table" then
                 if res.id == msg_id then

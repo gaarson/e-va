@@ -8,6 +8,7 @@ local local_config = utils.load_config(project_root .. "/.e-va-conf/config.lua")
 if local_config then
     config = utils.deep_merge(config, local_config)
     print("\n\27[36m[SYSTEM INFO]: Applied local overrides from .e-va-conf/config.lua\27[0m")
+    config = utils.apply_agent_defaults(config)
 end
 
 if type(config.PIPELINE) ~= "table" or #config.PIPELINE == 0 then
@@ -18,6 +19,7 @@ if type(config.PIPELINE) ~= "table" or #config.PIPELINE == 0 then
         { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
     }
 end
+config = utils.apply_agent_defaults(config)
 
 local llm = require("llm_handler")
 local logger = require("logger")
@@ -51,7 +53,7 @@ if utils.read_file_range(STATE_FILE) then
     if ctx:load_from_snapshot(content) then restored = true end
 end
 
-tools.init()
+tools.init(config)
 
 local patcher_core = require("patcher_core")
 if type(patcher_core.setup_sigint) == "function" then
@@ -397,9 +399,9 @@ Example: <cmd>read_file:src/main.c</cmd>
 
     local final_history_content = ""
 
-    if thought ~= "" then
-        final_history_content = "[SYSTEM MEMORY: Internal cognitive process abstracted and saved to memory digest]\n"
-    end
+    -- if thought ~= "" then
+    --     final_history_content = "[SYSTEM MEMORY: Internal cognitive process abstracted and saved to memory digest]\n"
+    -- end
 
     if spammed then
         final_history_content = final_history_content .. safe_assistant_content

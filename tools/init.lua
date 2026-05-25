@@ -1,7 +1,7 @@
 local registry = require("tool_registry")
 local logger = require("logger")
 
-local function init()
+local function init(provided_config)
     require("tools.explore_tree").register(registry)
     require("tools.read_file").register(registry)
     require("tools.read_chunk").register(registry)
@@ -19,10 +19,20 @@ local function init()
     require("tools.unpin").register(registry)
     require("tools.trace_execution").register(registry)
 
-    local ok, config_module = pcall(require, "config")
-    if not ok then return end
+    local config = provided_config
     
-    local config = config_module.get()
+    if not config then
+        local ok, config_module = pcall(require, "config")
+        if ok then
+            if type(config_module.get) == "function" then
+                config = config_module.get()
+            elseif type(config_module) == "table" then
+                config = config_module
+            end
+        end
+    end
+    
+    if not config then return end
     
     if config.MCP_SERVERS then
         local mcp = require("tools.mcp_client")

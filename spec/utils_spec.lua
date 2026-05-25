@@ -205,4 +205,109 @@ describe("utils module", function()
     end)
   end)
 
+  describe("apply_agent_defaults()", function()
+    it("should fill missing url/model/params from AGENT_DEFAULTS", function()
+      local config = {
+        AGENT_DEFAULTS = {
+          url = "http://defaults:8000/v1/chat/completions",
+          model = "default-model",
+          is_reasoning = false,
+          params = { stream = true, temperature = 0.1 }
+        },
+        AGENTS = {
+          AGENT_A = {
+            name = "AGENT_A",
+            prompt_file = "prompts/a.md",
+            allowed_tools = { "read_file" }
+          }
+        }
+      }
+
+      local result = utils.apply_agent_defaults(config)
+
+      assert.are.equal("http://defaults:8000/v1/chat/completions", result.AGENTS.AGENT_A.url)
+      assert.are.equal("default-model", result.AGENTS.AGENT_A.model)
+      assert.are.equal(false, result.AGENTS.AGENT_A.is_reasoning)
+      assert.is_table(result.AGENTS.AGENT_A.params)
+      assert.are.equal(true, result.AGENTS.AGENT_A.params.stream)
+      assert.are.equal(0.1, result.AGENTS.AGENT_A.params.temperature)
+    end)
+
+    it("should NOT overwrite existing fields", function()
+      local config = {
+        AGENT_DEFAULTS = {
+          url = "http://defaults:8000/v1/chat/completions",
+          model = "default-model",
+          is_reasoning = false,
+          params = { stream = true, temperature = 0.1 }
+        },
+        AGENTS = {
+          AGENT_B = {
+            name = "AGENT_B",
+            url = "http://custom:9999/v1/chat/completions",
+            model = "custom-model",
+            is_reasoning = true,
+            params = { temperature = 0.9, max_tokens = 4096 },
+            prompt_file = "prompts/b.md",
+            allowed_tools = { "shell" }
+          }
+        }
+      }
+
+      local result = utils.apply_agent_defaults(config)
+
+      assert.are.equal("http://custom:9999/v1/chat/completions", result.AGENTS.AGENT_B.url)
+      assert.are.equal("custom-model", result.AGENTS.AGENT_B.model)
+      assert.are.equal(true, result.AGENTS.AGENT_B.is_reasoning)
+      assert.are.equal(0.9, result.AGENTS.AGENT_B.params.temperature)
+      assert.are.equal(4096, result.AGENTS.AGENT_B.params.max_tokens)
+      assert.are.equal(true, result.AGENTS.AGENT_B.params.stream) -- inherited from defaults
+    end)
+
+    it("should deep-merge params correctly (agent overrides defaults)", function()
+      local config = {
+        AGENT_DEFAULTS = {
+          url = "http://defaults:8000/v1/chat/completions",
+          model = "default-model",
+          params = { stream = true, temperature = 0.1, top_p = 0.5, stop = { "STOP" } }
+        },
+        AGENTS = {
+          AGENT_C = {
+            name = "AGENT_C",
+            params = { temperature = 0.8, max_tokens = 8192 }
+          }
+        }
+      }
+
+      local result = utils.apply_agent_defaults(config)
+
+      -- Agent-specific values should win
+      assert.are.equal(0.8, result.AGENTS.AGENT_C.params.temperature)
+      assert.are.equal(8192, result.AGENTS.AGENT_C.params.max_tokens)
+      -- Default values should be present
+      assert.are.equal(true, result.AGENTS.AGENT_C.params.stream)
+      assert.are.equal(0.5, result.AGENTS.AGENT_C.params.top_p)
+      assert.is_table(result.AGENTS.AGENT_C.params.stop)
+    end)
+
+    it("should handle gracefully when AGENT_DEFAULTS is nil", function()
+      local config = {
+        AGENTS = {
+          AGENT_D = {
+            name = "AGENT_D",
+            url = "http://existing:8000/v1/chat/completions",
+            model = "existing-model"
+          }
+        }
+      }
+
+      local result = utils.apply_agent_defaults(config)
+
+      -- Should remain unchanged
+      assert.are.equal("http://existing:8000/v1/chat/completions", result.AGENTS.AGENT_D.url)
+      assert.are.equal("existing-model", result.AGENTS.AGENT_D.model)
+      assert.is_nil(result.AGENTS.AGENT_D.params)
+    end)
+  end)
+
 end)

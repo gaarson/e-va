@@ -89,6 +89,97 @@ describe("Configuration Subsystem (Pipeline & Agents Schema Validation)", functi
         assert.is_nil(config.PICTURES_DIR, 'PICTURES_DIR should be nil by default')
         assert.is_true(config.CREATE_BACKUPS ~= nil, 'CREATE_BACKUPS should still exist')
     end)
+
+    it("should export AGENT_DEFAULTS with url, model, is_reasoning, and params", function()
+        local config = config_module.get()
+        assert.is_table(config.AGENT_DEFAULTS, "AGENT_DEFAULTS must be a table")
+        assert.is_string(config.AGENT_DEFAULTS.url, "AGENT_DEFAULTS.url must be a string")
+        assert.is_string(config.AGENT_DEFAULTS.model, "AGENT_DEFAULTS.model must be a string")
+        assert.is_boolean(config.AGENT_DEFAULTS.is_reasoning, "AGENT_DEFAULTS.is_reasoning must be a boolean")
+        assert.is_table(config.AGENT_DEFAULTS.params, "AGENT_DEFAULTS.params must be a table")
+    end)
+
+    it("should allow minimal side-project agents to inherit defaults via apply_agent_defaults", function()
+        local utils = require("utils")
+        local config = config_module.get()
+
+        config.AGENTS.MINIMAL_AGENT = {
+            name = "MINIMAL_AGENT",
+            prompt_file = "prompts/minimal.md",
+            allowed_tools = { "read_file", "task_complete" }
+        }
+
+        config = utils.apply_agent_defaults(config)
+
+        assert.are.equal(config.AGENT_DEFAULTS.url, config.AGENTS.MINIMAL_AGENT.url, "Minimal agent should inherit url")
+        assert.are.equal(config.AGENT_DEFAULTS.model, config.AGENTS.MINIMAL_AGENT.model, "Minimal agent should inherit model")
+        assert.are.equal(config.AGENT_DEFAULTS.is_reasoning, config.AGENTS.MINIMAL_AGENT.is_reasoning, "Minimal agent should inherit is_reasoning")
+        assert.is_table(config.AGENTS.MINIMAL_AGENT.params, "Minimal agent should inherit params")
+        assert.are.equal(true, config.AGENTS.MINIMAL_AGENT.params.stream, "Inherited params should include stream=true")
+
+        config.AGENTS.MINIMAL_AGENT = nil
+    end)
+
+    it("should NOT overwrite explicit agent fields with defaults (no regression)", function()
+        local utils = require("utils")
+        local config = config_module.get()
+
+        config.AGENTS.EXPLICIT_AGENT = {
+            name = "EXPLICIT_AGENT",
+            url = "http://custom-server:9999/v1/chat/completions",
+            model = "custom-model-v2",
+            is_reasoning = true,
+            params = { temperature = 0.9, max_tokens = 4096 },
+            prompt_file = "prompts/explicit.md",
+            allowed_tools = { "shell", "task_complete" }
+        }
+
+        config = utils.apply_agent_defaults(config)
+
+        assert.are.equal("http://custom-server:9999/v1/chat/completions", config.AGENTS.EXPLICIT_AGENT.url, "Explicit url should NOT be overwritten")
+        assert.are.equal("custom-model-v2", config.AGENTS.EXPLICIT_AGENT.model, "Explicit model should NOT be overwritten")
+        assert.are.equal(true, config.AGENTS.EXPLICIT_AGENT.is_reasoning, "Explicit is_reasoning should NOT be overwritten")
+        assert.are.equal(0.9, config.AGENTS.EXPLICIT_AGENT.params.temperature, "Explicit params.temperature should NOT be overwritten")
+        assert.are.equal(4096, config.AGENTS.EXPLICIT_AGENT.params.max_tokens, "Explicit params.max_tokens should NOT be overwritten")
+
+        config.AGENTS.EXPLICIT_AGENT = nil
+    end)
+
+    it("should provide a config object compatible with tools/init (has MCP_SERVERS)", function()
+        local config = config_module.get()
+        assert.is_table(config.MCP_SERVERS, "Config must have MCP_SERVERS table for tools/init compatibility")
+    end)
+
+    it("should handle plain table config in tools/init without crashing", function()
+        -- Save original package.loaded state
+        local original_config_module = package.loaded["config"]
+        local original_tools_init = package.loaded["tools"]
+        
+        -- Clear tools cache to force reload during test if necessary
+        package.loaded["tools"] = nil
+        
+        -- Mock a plain table config module
+        local plain_table_config = {
+            PROJECT_ROOT = "/tmp/test_plain",
+            MCP_SERVERS = {},
+            LIMITS = { MAX_CONTEXT = 1000 }
+        }
+        
+        -- Inject the mock into package.loaded
+        package.loaded["config"] = plain_table_config
+        
+        -- Load tools/init.lua manually to test the init function behavior
+        local tools_mod = require("tools")
+        
+        -- Call init with nil to trigger the fallback logic
+        local ok, err = pcall(tools_mod.init, nil)
+        
+        -- Revert mocks
+        package.loaded["config"] = original_config_module
+        package.loaded["tools"] = original_tools_init
+        
+        assert.is_true(ok, "tools.init should not crash when config is a plain table. Error: " .. tostring(err))
+    end)
 end)
 
 require("utils").table_contains = function(tbl, val)

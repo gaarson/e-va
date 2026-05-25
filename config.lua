@@ -55,13 +55,19 @@ function M.get()
         }
     }
 
+    cfg.AGENT_DEFAULTS = {
+        url = os.getenv("LLM_URL") or "http://localhost:8000/v1/chat/completions",
+        model = os.getenv("LLM_MODEL") or "default-model",
+        is_reasoning = false,
+        params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL)
+    }
+
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
             url = "http://192.168.0.102:8000/v1/chat/completions",
             is_reasoning = true,
             model = "Qwen3.5-27B-exl3-4.0bpw",
-            -- model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = {
@@ -72,8 +78,6 @@ function M.get()
             url = "http://192.168.0.102:8000/v1/chat/completions",
             is_reasoning = true,
             model = "Qwen3.5-27B-exl3-4.0bpw",
-            -- model = "Qwen3.5-35B-A3B-exl3-4.0bpw",
-            -- model = "gemma-4-31B-it-IQ4_XS",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }

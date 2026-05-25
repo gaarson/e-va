@@ -302,6 +302,31 @@ function M.explore_directory(root_path, target_subpath, max_depth)
     return string.format("Directory: /%s\n%s", full_target, table.concat(files, "\n"))
 end
 
+function M.apply_agent_defaults(config)
+    if not config or not config.AGENTS then return config end
+    local defaults = config.AGENT_DEFAULTS
+    if not defaults then return config end
+
+    local function apply_one(agent)
+        if type(agent) ~= "table" then return end
+
+        if agent.url == nil and defaults.url ~= nil then agent.url = defaults.url end
+        if agent.model == nil and defaults.model ~= nil then agent.model = defaults.model end
+        if agent.is_reasoning == nil and defaults.is_reasoning ~= nil then agent.is_reasoning = defaults.is_reasoning end
+        if agent.prompt_file == nil and defaults.prompt_file ~= nil then agent.prompt_file = defaults.prompt_file end
+        if agent.allowed_tools == nil and defaults.allowed_tools ~= nil then agent.allowed_tools = defaults.allowed_tools end
+
+        if defaults.params then
+            agent.params = M.deep_merge(defaults.params, agent.params or {})
+        end
+    end
+
+    for _, agent in pairs(config.AGENTS) do
+        apply_one(agent)
+    end
+    return config
+end
+
 function M.base64_encode(str)
     local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     local out = {}
