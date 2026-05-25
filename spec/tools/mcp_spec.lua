@@ -1,5 +1,6 @@
 local registry = require("tool_registry")
 local Context = require("context")
+local inspect = require('inspect')
 local json = require("JSON")
 
 local write_calls = {}
@@ -13,8 +14,8 @@ local mock_ipc = {
     mcp_write = function(proc, payload)
         table.insert(write_calls, payload)
     end,
-    mcp_read = function(proc) 
-        return nil 
+    mcp_read = function(proc)
+        return nil
     end
 }
 package.loaded["ipc_mcp"] = mock_ipc
@@ -31,10 +32,10 @@ describe("Tools: MCP Integration (JSON-RPC & IPC Bridge)", function()
     before_each(function()
         io.write = function() end
         registry.tools = {}
-        
+
         write_calls = {}
         spawn_calls = {}
-        
+
         mock_ipc.mcp_read = function(proc) return nil end
         mock_ipc.spawn_mcp = function(cmd)
             table.insert(spawn_calls, cmd)
@@ -42,6 +43,9 @@ describe("Tools: MCP Integration (JSON-RPC & IPC Bridge)", function()
         end
         mock_ipc.mcp_write = function(proc, payload)
             table.insert(write_calls, payload)
+        end
+        mock_ipc.mcp_read = function(proc)
+            return nil
         end
 
         ctx = Context.new({
@@ -76,9 +80,9 @@ describe("Tools: MCP Integration (JSON-RPC & IPC Bridge)", function()
                     result = { tools = { { name = "query", description = "Run SQL" } } }
                 })
             end
-            
+
             local tools_list = mcp_client.discover_tools({ pid = 9999 })
-            
+
             assert.are.equal(1, #tools_list)
             assert.are.equal("query", tools_list[1].name)
         end)
@@ -95,7 +99,7 @@ describe("Tools: MCP Integration (JSON-RPC & IPC Bridge)", function()
             local res = mcp_client.execute_tool({ pid = 9999 }, "query", args_json)
 
             assert.truthy(res.output:match("SELECT result: 42"))
-            
+
             local last_payload = write_calls[#write_calls]
             assert.truthy(last_payload:match('"sql":"SELECT %* FROM t"'), "Arguments were not passed to payload")
         end)
@@ -103,32 +107,37 @@ describe("Tools: MCP Integration (JSON-RPC & IPC Bridge)", function()
         it("should catch malformed JSON arguments gracefully", function()
             local res = mcp_client.execute_tool({ pid = 9999 }, "query", '{bad_json: true')
             assert.truthy(res.output:match("Invalid JSON arguments provided"))
-            assert.are.equal(0, #write_calls) 
+            assert.are.equal(0, #write_calls)
         end)
     end)
 
     describe("Dynamic Registry Injection (tools/init.lua)", function()
         it("should inject MCP tools into E-va tool registry dynamically", function()
             config_module.get = function()
-                return { MCP_SERVERS = { fake_sqlite = "dummy_command" } }
+                return { 
+                  MCP_SERVERS = { fake_sqlite = "dummy_command" },
+                  TEST_AGENT = { allowed_tools = {  } }
+                }
             end
 
-            local read_call_count = 0
-            mock_ipc.mcp_read = function()
+            local read_call_count = 3 -- cause of msg_id in mcp_client
+            mock_ipc.mcp_read = function(proc)
                 read_call_count = read_call_count + 1
-                if read_call_count == 1 then
-                    return json:encode({ jsonrpc = "2.0", id = 1, result = {} })
-                elseif read_call_count == 2 then
+
+                if read_call_count == 4 then
+                    return json:encode({ jsonrpc = "2.0", id = 4, result = {} })
+                elseif read_call_count == 5 then
                     return json:encode({
-                        jsonrpc = "2.0", id = 2,
+                        jsonrpc = "2.0", id = 5,
                         result = { tools = { { name = "read_query", description = "Mock tool" } } }
                     })
-                elseif read_call_count == 3 then
+                elseif read_call_count == 6 then
                     return json:encode({
-                        jsonrpc = "2.0", id = 3,
+                        jsonrpc = "2.0", id = 6,
                         result = { content = { { type = "text", text = "Mock execution success" } } }
                     })
                 end
+
                 return nil
             end
 
@@ -142,7 +151,10 @@ describe("Tools: MCP Integration (JSON-RPC & IPC Bridge)", function()
             assert.truthy(tool_def.usage:match('<cmd>mcp_fake_sqlite_read_query:'))
 
             local res = registry.execute(expected_tool_name .. ':{ "dummy": 1 }', ctx, "TEST_AGENT")
-            assert.truthy(res.output:match("Mock execution success"))
+
+            print(inspect(res.output))
+
+            assert.truthy(res.output:match("Mock execution success\n"))
         end)
     end)
 end)

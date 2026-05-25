@@ -15,19 +15,18 @@ local function rpc_call(proc, method, params)
         method = method,
         params = params or {}
     }
-    
+
     ipc.mcp_write(proc, json.encode(req))
-    
+
     while true do
         logger.info(string.format("[LUA-DEBUG] Waiting for IPC read on method '%s'...", method))
         local raw_res = ipc.mcp_read(proc)
-        logger.info(string.format("[LUA-DEBUG] IPC read returned type: %s", type(raw_res)))
-        
+        logger.info(string.format("[LUA-DEBUG] IPC read returned type: %s", type(raw_res)), raw_res)
+
         if not raw_res then return nil, "Pipe closed or server crashed" end
-        
+
         logger.info(string.format("[LUA-DEBUG] Processing string of length: %d bytes", #raw_res))
-        
-        -- 100% безопасное извлечение первого непробельного символа без REGEX
+
         local first_char = ""
         local snippet_limit = math.min(100, #raw_res)
         for i = 1, snippet_limit do
@@ -37,17 +36,17 @@ local function rpc_call(proc, method, params)
                 break
             end
         end
-        
+
         logger.info("[LUA-DEBUG] First valid char identified as: '" .. tostring(first_char) .. "'")
-        
+
         if first_char == "{" then
             logger.info("[LUA-DEBUG] Attempting cjson.decode...")
             local res, err = json.decode(raw_res)
             logger.info("[LUA-DEBUG] cjson.decode finished. Success: " .. tostring(res ~= nil))
-            
+
             if res and type(res) == "table" then
                 if res.id == msg_id then
-                    return res, nil 
+                    return res, nil
                 elseif res.method then
                     logger.info("[MCP Async Event]: " .. tostring(res.method))
                 end
@@ -65,18 +64,18 @@ function M.init_server(name, command)
     logger.info("Initializing MCP Server: " .. name)
     local proc = ipc.spawn_mcp(command)
     if not proc then error("Failed to spawn MCP server") end
-    
+
     local init_res, err = rpc_call(proc, "initialize", {
         protocolVersion = "2024-11-05",
         capabilities = {},
         clientInfo = { name = "e-va-agent", version = "1.0.0" }
     })
-    
+
     if not init_res then error("Failed handshake: " .. tostring(err)) end
-    
+
     local notif = { jsonrpc = "2.0", method = "notifications/initialized" }
     ipc.mcp_write(proc, json.encode(notif))
-    
+
     return proc
 end
 
@@ -99,20 +98,20 @@ function M.execute_tool(proc, tool_name, json_args_string)
             return { output = "[MCP ERROR] Invalid JSON arguments provided.", signal = nil }
         end
     end
-    
+
     local res, err = rpc_call(proc, "tools/call", {
         name = tool_name,
         arguments = args_table
     })
-    
+
     if not res then return { output = "[MCP IPC ERROR]: " .. tostring(err), signal = nil } end
     if res.error then return { output = "[MCP EXECUTION ERROR]: " .. json.encode(res.error), signal = nil } end
-    
+
     local output = ""
     for _, content_block in ipairs(res.result.content or {}) do
         if content_block.type == "text" then output = output .. content_block.text .. "\n" end
     end
-    
+
     return { output = output, signal = nil }
 end
 

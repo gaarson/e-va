@@ -84,8 +84,17 @@ function M.generate_tool_manifest(allowed_tools)
         table.insert(doc, "**(Admin privileges granted: ALL_TOOLS enabled)**\n")
         for name, tool in pairs(M.tools) do table.insert(tools_to_list, {name = name, tool = tool}) end
     else
-        for _, name in ipairs(allowed_tools) do
-            if M.tools[name] then table.insert(tools_to_list, {name = name, tool = M.tools[name]}) end
+        for _, pattern in ipairs(allowed_tools) do
+            if pattern:sub(-1) == "*" then
+                local prefix = pattern:sub(1, -2)
+                for tool_name, tool_def in pairs(M.tools) do
+                    if tool_name:sub(1, #prefix) == prefix then
+                        table.insert(tools_to_list, {name = tool_name, tool = tool_def})
+                    end
+                end
+            else
+                if M.tools[pattern] then table.insert(tools_to_list, {name = pattern, tool = M.tools[pattern]}) end
+            end
         end
     end
 
