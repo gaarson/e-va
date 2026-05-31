@@ -9,7 +9,7 @@ describe("Parser Module - Depth-Tracking State Machine", function()
             local iterator = parser.extract_commands(content)
             
             assert.are.equal("task_complete", iterator())
-            assert.is_nil(iterator()) -- Больше команд нет
+            assert.is_nil(iterator()) 
         end)
 
         it("should extract multiple sequential commands", function()
@@ -22,7 +22,6 @@ describe("Parser Module - Depth-Tracking State Machine", function()
         end)
 
         it("CRITICAL: should handle nested cmd tags correctly (The Bugfix)", function()
-            -- Имитируем полезную нагрузку, которая ломала старый regex-парсер
             local content = [[
 <cmd>create_file:test.lua
 local function do_something()
@@ -33,11 +32,10 @@ end
             local payload = iterator()
             
             assert.is_not_nil(payload)
-            -- Убеждаемся, что мы захватили ВЕСЬ блок, включая внутренние теги
+            
             assert.truthy(payload:match("create_file:test.lua"))
             assert.truthy(payload:match("<cmd>nested_fake_command</cmd>"))
             
-            -- Убеждаемся, что парсер не воспринял внутренний тег как вторую команду
             assert.is_nil(iterator())
         end)
 
@@ -46,7 +44,7 @@ end
             local iterator = parser.extract_commands(content)
             
             assert.are.equal("valid_command", iterator())
-            assert.is_nil(iterator()) -- Незакрытый тег игнорируется
+            assert.is_nil(iterator()) 
         end)
 
         it("should handle empty or nil content gracefully", function()
@@ -55,6 +53,54 @@ end
             
             local iter_nil = parser.extract_commands(nil)
             assert.is_nil(iter_nil())
+        end)
+
+        local B3 = string.char(96, 96, 96) -- Три обратные кавычки (многострочный код)
+        local B1 = string.char(96)         -- Одна обратная кавычка (инлайн код)
+        local C_START = "<" .. "!--"       -- Начало HTML комментария
+        local C_END = "--" .. ">"          -- Конец HTML комментария
+        local TAG_O = "<" .. "cmd" .. ">"  -- Открывающий тег агента
+        local TAG_C = "<" .. "/cmd" .. ">" -- Закрывающий тег агента
+
+        it("CRITICAL: should completely ignore cmd tags inside markdown block code", function()
+            local content = "Example:\n" .. B3 .. "xml\n" .. TAG_O .. "patch:main.c" .. TAG_C .. "\n" .. B3 .. "\nExec:\n" .. TAG_O .. "task_complete" .. TAG_C
+            local iterator = parser.extract_commands(content)
+            
+            assert.are.equal("task_complete", iterator())
+            assert.is_nil(iterator())
+        end)
+
+        it("should ignore cmd tags inside inline backticks", function()
+            local content = "Do not use " .. B1 .. TAG_O .. "fake_tool" .. TAG_C .. B1 .. ". Use: " .. TAG_O .. "real_tool" .. TAG_C
+            local iterator = parser.extract_commands(content)
+
+            assert.are.equal("real_tool", iterator())
+            assert.is_nil(iterator())
+        end)
+
+        it("should ignore cmd inside XML/HTML comments", function()
+            local content = C_START .. " " .. TAG_O .. "hidden" .. TAG_C .. " " .. C_END .. " " .. TAG_O .. "visible" .. TAG_C
+            local iterator = parser.extract_commands(content)
+
+            assert.are.equal("visible", iterator())
+            assert.is_nil(iterator())
+        end)
+
+        it("should parse correctly even if the payload itself contains markdown blocks", function()
+            local content = TAG_O .. "create_file:docs.md\n# Docs\nCode:\n" .. B3 .. "bash\necho 1\n" .. B3 .. "\n" .. TAG_C
+            local iterator = parser.extract_commands(content)
+            local payload = iterator()
+
+            assert.is_not_nil(payload)
+            assert.truthy(payload:match("echo 1"))
+        end)
+
+        it("should safely handle unclosed markdown blocks (preventing injection)", function()
+            local content = TAG_O .. "valid_command" .. TAG_C .. "\nBroken block:\n" .. B3 .. "\n" .. TAG_O .. "hacked_command" .. TAG_C
+            local iterator = parser.extract_commands(content)
+            
+            assert.are.equal("valid_command", iterator())
+            assert.is_nil(iterator())
         end)
 
     end)
