@@ -13,7 +13,8 @@ function M.get()
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
-        CHARS_PER_TOKEN = 3.5
+        CHARS_PER_TOKEN = 3.5,
+        MCP_MAX_OUTPUT_TOKENS = 12000
     }
 
     cfg.PIPELINE_SETTINGS = {
@@ -35,8 +36,8 @@ function M.get()
         ANALYTICAL = {
             max_tokens = 16384,
             temperature = 0.1,
-            top_p = 0.45,
-            min_p = 0.05,
+            top_p = 0.95,
+            -- min_p = 0.05,
             smoothing_factor = 0.2,
             repetition_penalty = 1.05,
             token_healing = true,
@@ -46,7 +47,7 @@ function M.get()
             max_tokens = 16384,
             temperature = 0.55,
             top_p = 0.95,
-            min_p = 0.1,
+            -- min_p = 0.1,
             smoothing_factor = 0.2,
             repetition_penalty = 1.1,
             presence_penalty = 0.1,
