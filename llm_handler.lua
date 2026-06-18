@@ -17,6 +17,7 @@ function M.send_request(profile, messages, options)
 
     local req = http.new_from_uri(profile.url)
     req.headers:upsert(":method", "POST")
+    if profile.token then req.headers:upsert("Authorization", "Bearer " .. profile.token) end
     req.headers:upsert("content-type", "application/json")
     req.headers:upsert("accept", "text/event-stream")
 
@@ -41,6 +42,16 @@ function M.send_request(profile, messages, options)
     if not payload.stream then
         local body_str = stream:get_body_as_string()
         local response = json:decode(body_str)
+
+        if response and response.usage then
+            local u = response.usage
+            local pt = u.prompt_tokens or 0
+            local ct = u.completion_tokens or 0
+            local ps = u.prompt_tokens_per_sec or 0
+            local cs = u.completion_tokens_per_sec or 0
+            logger.info(string.format('[USAGE] Prompt: %d tok, Completion: %d tok, P-Speed: %.1f t/s, C-Speed: %.1f t/s', pt, ct, ps, cs))
+        end
+
         return response
     end
 
@@ -49,6 +60,7 @@ function M.send_request(profile, messages, options)
     local buffer = ""
     local in_reasoning = false
     local was_interrupted = false
+    local last_part = nil
 
     for chunk in stream:each_chunk() do
         if patcher_core.consume_sigint and patcher_core.consume_sigint() then
@@ -74,7 +86,9 @@ function M.send_request(profile, messages, options)
             if line ~= "" and line:sub(1, 5) == "data:" then
                 local json_str = line:sub(6)
                 if not json_str:match("%[DONE%]") then
-                    -- Делегируем безопасный парсинг чанка провайдеру
+                    local ok, part = pcall(json.decode, json, json_str)
+                    if ok and part then last_part = part end
+
                     local c_text, c_reason = provider.extract_stream(json_str)
 
                     if c_reason and c_reason ~= "" then
@@ -101,6 +115,15 @@ function M.send_request(profile, messages, options)
                 end
             end
         end
+    end
+
+    if last_part and last_part.usage then
+        local u = last_part.usage
+        local pt = u.prompt_tokens or 0
+        local ct = u.completion_tokens or 0
+        local ps = u.prompt_tokens_per_sec or 0
+        local cs = u.completion_tokens_per_sec or 0
+        --logger.info(string.format('[USAGE] Prompt: %d tok, Completion: %d tok, P-Speed: %.1f t/s, C-Speed: %.1f t/s', pt, ct, ps, cs))
     end
 
     return {

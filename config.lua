@@ -9,7 +9,7 @@ function M.get()
     cfg.MCP_SERVERS = {}
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 150000,
+        MAX_CONTEXT = 250000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
@@ -29,28 +29,31 @@ function M.get()
 
     local BASE_PARAMS = {
         stream = true,
-        stop = { "<|im_end|>", "<|im_start|>" }
+        stop = nil,
+        speculative_ngram = true,
+        stream_options = { include_usage = true }
     }
 
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 16384,
-            temperature = 0.1,
+            temperature = 0.5,
             top_p = 0.95,
             -- min_p = 0.05,
-            smoothing_factor = 0.2,
+            smoothing_factor = 0.1,
             repetition_penalty = 1.05,
+            penalty_range = 2048,
             token_healing = true,
             temperature_last = true
         },
         ENGINEERING = {
-            max_tokens = 16384,
-            temperature = 0.55,
+            max_tokens = 32768,
+            temperature = 0.1,
             top_p = 0.95,
             -- min_p = 0.1,
             smoothing_factor = 0.2,
             repetition_penalty = 1.1,
-            presence_penalty = 0.1,
+            penalty_range = 4096,
             token_healing = true,
             temperature_last = true
         }
@@ -66,9 +69,11 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
+            -- url = "http://192.168.0.102:8000/v1/chat/completions",
+            url = "https://zo-diak.com/ai/v1/chat/completions",
+            token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             is_reasoning = true,
-            model = "Qwen3.5-27B-exl3-4.0bpw",
+            model = "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = {
@@ -76,9 +81,11 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
+            -- url = "http://192.168.0.102:8000/v1/chat/completions",
+            url = "https://zo-diak.com/ai/v1/chat/completions",
+            token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             is_reasoning = true,
-            model = "Qwen3.5-27B-exl3-4.0bpw",
+            model = "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }

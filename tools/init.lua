@@ -67,10 +67,10 @@ local function init(provided_config)
                     registry.register(eva_tool_name, description, usage_example, function(args_string, ctx, agent_name)
                         local res = mcp.execute_tool(proc, tool.name, args_string)
                         if res and res.output then
-                            local max_tokens = ctx.config.LIMITS.MCP_MAX_OUTPUT_TOKENS or 4000
+                            local max_tokens = (ctx.config.LIMITS and ctx.config.LIMITS.MCP_MAX_OUTPUT_TOKENS) or 4000
                             local token_count = ctx:estimate_tokens(res.output)
                             if token_count > max_tokens then
-                                local chars_per_token = ctx.config.LIMITS.CHARS_PER_TOKEN or 3.5
+                                local chars_per_token = (ctx.config.LIMITS and ctx.config.LIMITS.CHARS_PER_TOKEN) or 3.5
                                 local max_chars = math.floor(max_tokens * chars_per_token)
                                 local truncation_notice = "\n\n[MCP OUTPUT TRUNCATED: exceeded token limit of " .. max_tokens .. " tokens]"
                                 local available_chars = max_chars - #truncation_notice
