@@ -39,6 +39,7 @@ local function resolve_task_instruction(task, config, utils, logger)
         local file_content = utils.read_file_range(instr_path)
         if file_content then
             instruction = utils.trim(file_content)
+            task.instruction = instruction
         else
             logger.error("IO_ERROR: Could not read instruction_file at " .. instr_path)
             return nil, "Missing instruction_file mapping"
@@ -137,6 +138,41 @@ local function load_prompt(file_path)
     return content
 end
 
+local function parse_think_tags(text, is_reasoning)
+    if not text or text == "" then return "", "" end
+
+    local content = text
+    local thought = ""
+    local start_idx = content:find("<think>")
+
+    if start_idx then
+        local prefix = content:sub(1, start_idx - 1)
+        local end_idx = content:find("</think>", start_idx + 7)
+        if end_idx then
+            thought = content:sub(start_idx + 7, end_idx - 1)
+            content = prefix .. content:sub(end_idx + 8)
+        else
+            thought = content:sub(start_idx + 7)
+            content = prefix
+        end
+    elseif is_reasoning then
+        -- Неявный старт: текст является мыслью до закрывающего тега
+        local end_idx = content:find("</think>")
+        if end_idx then
+            thought = content:sub(1, end_idx - 1)
+            content = content:sub(end_idx + 8)
+        else
+            thought = content
+            content = ""
+        end
+    end
+
+    thought = utils.trim(thought)
+    if thought == "" then thought = nil end
+
+    return utils.trim(content), thought
+end
+
 local function run_agent_turn(agent_name, agent_cfg, turn)
     local synced_files = ctx:sync_files()
     if #synced_files > 0 then
@@ -182,7 +218,9 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 2. STRICT TOOL SYNTAX: You MUST wrap all tool executions STRICTLY in `<cmd>tool:args</cmd>` tags.
 WARNING: DO NOT use `<tool_call>`, `<function>`, or standard markdown blocks to execute tools. This will crash the system.
 Example: <cmd>read_file:src/main.c</cmd>
+3. EXECUTION ORDER: The system parses and executes commands from the END of your response. Place critical commands at the end.
 ==================================================]], pipeline_rule)
+
 
     local combined_system_prompt = sys_prompt_text .. "\n\n" ..
                                    toolchain_manifest .. "\n\n" ..
@@ -353,33 +391,37 @@ Example: <cmd>read_file:src/main.c</cmd>
     end
 
     local raw_content = llm.extract_content(response_data) or ""
-    local thought = ""
-    local content = raw_content
+    -- local thought = ""
+    -- local content = raw_content
+    local content, thought = parse_think_tags(raw_content, agent_cfg.is_reasoning)
 
-    local end_idx = content:find("</think>")
-    if end_idx then
-        local start_idx = content:find("<think>")
-        if start_idx and start_idx < end_idx then
-            thought = content:sub(start_idx + 7, end_idx - 1)
-            content = content:sub(1, start_idx - 1) .. content:sub(end_idx + 8)
-        else
-            thought = content:sub(1, end_idx - 1)
-            content = content:sub(end_idx + 8)
-        end
-    else
-        local start_idx = content:find("<think>")
-        if start_idx then
-            thought = content:sub(start_idx + 7)
-            content = content:sub(1, start_idx - 1)
-        end
-    end
+    -- local end_idx = content:find("</think>")
+    -- if end_idx then
+    --     local start_idx = content:find("<think>")
+    --     if start_idx and start_idx < end_idx then
+    --         thought = content:sub(start_idx + 7, end_idx - 1)
+    --         content = content:sub(1, start_idx - 1) .. content:sub(end_idx + 8)
+    --     else
+    --         thought = content:sub(1, end_idx - 1)
+    --         content = content:sub(end_idx + 8)
+    --     end
+    -- else
+    --     local start_idx = content:find("<think>")
+    --     if start_idx then
+    --         thought = content:sub(start_idx + 7)
+    --         content = content:sub(1, start_idx - 1)
+    --     end
+    -- end
 
-    thought = utils.trim(thought)
+    -- if response_data.full_text then
+    --     content = utils.trim(response_data.full_text)
+    -- else
+    --     content = utils.trim(response_data.choices and response_data.choices[1] and response_data.choices[1].message and response_data.choices[1].message.content or "")
+    -- end
+
     content = utils.trim(content)
 
     if thought ~= "" then ctx:add_thought(turn, thought) end
-
-    content = content:gsub(">>>>>>> REPLACE%s*\n?%s*</file_target>", ">>>>>>> REPLACE\n</cmd>")
 
     local signal = nil
     local cmds_executed = 0
@@ -398,10 +440,6 @@ Example: <cmd>read_file:src/main.c</cmd>
     end
 
     local final_history_content = ""
-
-    -- if thought ~= "" then
-    --     final_history_content = "[SYSTEM MEMORY: Internal cognitive process abstracted and saved to memory digest]\n"
-    -- end
 
     if spammed then
         final_history_content = final_history_content .. safe_assistant_content
@@ -434,10 +472,10 @@ Example: <cmd>read_file:src/main.c</cmd>
         if signal == "PIPELINE_NEXT_STAGE" then break end
     end
 
-    if cmds_executed == 0 then
-         local warn_msg = "\n[SYSTEM]: You did not execute any valid <cmd>. Remember your directive. You MUST use tools to act, delegate using <cmd>delegate_plan</cmd>, or finish the turn using <cmd>task_complete</cmd>."
-         ctx:add_message(agent_name, "user", warn_msg)
-    end
+    -- if cmds_executed == 0 then
+    --      local warn_msg = "\n[SYSTEM]: You did not execute any valid <cmd>. Remember your directive. You MUST use tools to act, delegate using <cmd>delegate_plan</cmd>, or finish the turn using <cmd>task_complete</cmd>."
+    --      ctx:add_message(agent_name, "user", warn_msg)
+    -- end
 
     utils.write_file(STATE_FILE, ctx:snapshot())
 
@@ -461,12 +499,12 @@ local function execute_pipeline()
             if stage.mode == "interactive" then
                 local target_agent = "ARCHITECT"
                 if type(stage.agent) == "string" then target_agent = stage.agent
-                elseif type(stage.agents) == "table" and type(stage.agents) == "string" then target_agent = stage.agents
+                elseif type(stage.agents) == "table" and type(stage.agents[1]) == "string" then target_agent = stage.agents[1]
                 elseif type(stage.agents) == "string" then target_agent = stage.agents end
 
                 logger.info(string.format("[INTERACTIVE MODE] Hooked to agent: %s", target_agent))
                 io.write("\n\27[36m=== HUMAN-IN-THE-LOOP (HITL) SESSION ===\27[0m\n")
-                io.write("Type your message. Commands: '/continue' (next stage), '/exit' (abort).\n")
+                io.write("Type your message. Commands: '/back' back to anaylis, '/go' (next stage), '/exit' (abort).\n")
 
                 while true do
                     io.write(string.format("\n\27[36m>>> USER -> %s:\27[0m ", target_agent))
@@ -475,7 +513,11 @@ local function execute_pipeline()
                     if not user_input or user_input == "/exit" then
                         print("\n\27[31m[SYSTEM] User aborted the execution.\27[0m")
                         os.exit(0)
-                    elseif user_input == "/continue" then
+                    elseif user_input == "/go" then
+                        print("\n\27[32m[SYSTEM] Moving to the next pipeline stage...\27[0m")
+                        stage_complete = true
+                        break
+                    elseif user_input == "/go" then
                         print("\n\27[32m[SYSTEM] Moving to the next pipeline stage...\27[0m")
                         stage_complete = true
                         break
@@ -611,6 +653,7 @@ if not restored then
             name = "BOOTSTRAPPER",
             url = fallback_agent.url or os.getenv("LLM_URL") or "http://127.0.0.1:8000/v1/chat/completions",
             model = fallback_agent.model or os.getenv("LLM_MODEL") or "default-model",
+            token = fallback_agent.token or nil,
             params = {
                 stream = true,
                 temperature = 0.7,
@@ -643,7 +686,7 @@ Use <cmd>task_complete</cmd> when the scaffold is ready.
         execute_pipeline()
         os.exit(0)
 
-    elseif instruction then
+    elseif instruction or target_agent then
         setup_and_run_task(start_file, instruction, nil)
     elseif ctx.config.TASKS and #ctx.config.TASKS > 0 then
         logger.info(string.format("Batch processing initiated. Found %d tasks.", #ctx.config.TASKS))
@@ -654,7 +697,7 @@ Use <cmd>task_complete</cmd> when the scaffold is ready.
                 instr = "FATAL_MISSING_FILE"
             end
 
-            print(string.format("\n\27[35m=== STARTING TASK [%d/%d]: %s ===\27[0m", i, #config.TASKS, task.file or "Global Context"))
+            print(string.format("\n\27[35m=== STARTING TASK [%d/%d]: %s ===\27[0m", i, #ctx.config.TASKS, task.file or "Global Context"))
 
             local status, err = pcall(setup_and_run_task, task.file, instr, task.max_turns)
 
@@ -666,7 +709,7 @@ Use <cmd>task_complete</cmd> when the scaffold is ready.
                 end
             end
 
-            print(string.format("\n\27[32m=== FINISHED TASK [%d/%d] ===\27[0m", i, #config.TASKS))
+            print(string.format("\n\27[32m=== FINISHED TASK [%d/%d] ===\27[0m", i, #ctx.config.TASKS))
         end
     else
         print("Usage: eva [file] \"<instruction>\" OR define TASKS in .e-va-conf/config.lua")

@@ -96,62 +96,81 @@ function M.extract_commands(content)
     local pos = 1
     local len = #content
 
-    return function()
-        while pos <= len do
-            local s, e
-            
-            
-            while true do
-                s, e = content:find(OPEN_TAG, pos, true)
-                if not s then return nil end
+    local found_commands = {}
 
-                local masked, mask_end = is_masked(s, intervals)
-                if not masked then break end
-                pos = mask_end + 1 
+    while pos <= len do
+        local s, e
+        
+        while true do
+            s, e = content:find(OPEN_TAG, pos, true)
+            if not s then break end
+
+            local masked, mask_end = is_masked(s, intervals)
+            if not masked then break end
+            pos = mask_end + 1 
+        end
+
+        if not s then break end
+
+        local payload_start = e + 1
+        local depth = 1
+        local scan_pos = payload_start
+
+        while scan_pos <= len and depth > 0 do
+            local next_open = scan_pos
+            while true do
+                local so, eo = content:find(OPEN_TAG, next_open, true)
+                if not so then next_open = nil; break end
+
+                local masked, m_end = is_masked(so, intervals)
+                if not masked then next_open = so; break end
+                next_open = m_end + 1
             end
 
-            local payload_start = e + 1
-            local depth = 1
-            local scan_pos = payload_start
+            local next_close = scan_pos
+            while true do
+                local sc, ec = content:find(CLOSE_TAG, next_close, true)
+                if not sc then next_close = nil; break end
 
-            while scan_pos <= len and depth > 0 do
-                local next_open = scan_pos
-                while true do
-                    local so, eo = content:find(OPEN_TAG, next_open, true)
-                    if not so then next_open = nil; break end
+                local masked, m_end = is_masked(sc, intervals)
+                if not masked then next_close = sc; break end
+                next_close = m_end + 1
+            end
 
-                    local masked, m_end = is_masked(so, intervals)
-                    if not masked then next_open = so; break end
-                    next_open = m_end + 1
-                end
-
-                local next_close = scan_pos
-                while true do
-                    local sc, ec = content:find(CLOSE_TAG, next_close, true)
-                    if not sc then next_close = nil; break end
-
-                    local masked, m_end = is_masked(sc, intervals)
-                    if not masked then next_close = sc; break end
-                    next_close = m_end + 1
-                end
-
-                if next_close and (not next_open or next_close < next_open) then
-                    depth = depth - 1
-                    if depth == 0 then
-                        local payload = content:sub(payload_start, next_close - 1)
-                        pos = next_close + close_len
-                        return payload
-                    end
-                    scan_pos = next_close + close_len
-                elseif next_open then
-                    depth = depth + 1
-                    scan_pos = next_open + open_len
-                else
+            if next_close and (not next_open or next_close < next_open) then
+                depth = depth - 1
+                if depth == 0 then
+                    local payload = content:sub(payload_start, next_close - 1)
+                    table.insert(found_commands, payload)
+                    pos = next_close + close_len
                     break
                 end
+                scan_pos = next_close + close_len
+            elseif next_open then
+                depth = depth + 1
+                scan_pos = next_open + open_len
+            else
+                break
             end
+        end
 
+        if depth > 0 then
             pos = e + 1
+        end
+    end
+
+    -- STRATEGY: END-FIRST PARSING (LIFO)
+    -- LLMs frequently append their most critical or final commands at the very end of the response.
+    -- By iterating backwards (Last-In-First-Out), we ensure that the most recently generated
+    -- commands are executed first. This aligns with the "Recency Bias" of attention heads and
+    -- ensures that if an LLM says "First do X, then do Y", the parser processes Y first,
+    -- which is often the intended final state or the most important action.
+    local idx = #found_commands
+    return function()
+        if idx > 0 then
+            local val = found_commands[idx]
+            idx = idx - 1
+            return val
         end
         return nil
     end

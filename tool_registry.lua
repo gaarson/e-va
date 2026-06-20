@@ -71,6 +71,8 @@ function M.generate_tool_manifest(allowed_tools)
     local doc = {
         "## SYSTEM DIRECTIVE: TOOLCHAIN INTERFACE",
         "You must interact with the environment using strict XML tags.",
+        "> **⚠️ PARSING ORDER**: Commands are executed from the **END** of your response. Always place your final/most important `<cmd>` tags at the very end of your text to ensure they are processed first.",
+        "",
         "CRITICAL: Do NOT invent tools. Only the following tools are available to your profile:\n"
     }
 

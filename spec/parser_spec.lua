@@ -12,12 +12,22 @@ describe("Parser Module - Depth-Tracking State Machine", function()
             assert.is_nil(iterator()) 
         end)
 
-        it("should extract multiple sequential commands", function()
+        it("should extract multiple sequential commands in LIFO (end-first) order", function()
             local content = "<cmd>read_file:main.c</cmd>\nSome text\n<cmd>search:malloc</cmd>"
             local iterator = parser.extract_commands(content)
             
-            assert.are.equal("read_file:main.c", iterator())
             assert.are.equal("search:malloc", iterator())
+            assert.are.equal("read_file:main.c", iterator())
+            assert.is_nil(iterator())
+        end)
+
+        it("should extract 3+ commands in strict LIFO order (third, second, first)", function()
+            local content = "<cmd>first:cmd</cmd>\n<cmd>second:cmd</cmd>\n<cmd>third:cmd</cmd>"
+            local iterator = parser.extract_commands(content)
+            
+            assert.are.equal("third:cmd", iterator())
+            assert.are.equal("second:cmd", iterator())
+            assert.are.equal("first:cmd", iterator())
             assert.is_nil(iterator())
         end)
 

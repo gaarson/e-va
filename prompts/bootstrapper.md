@@ -53,7 +53,7 @@ Do not give all tools to all agents. Implement Least Privilege:
 
 **Step 4: Handoff**
 
-* Once configuration and prompts are written to disk, execute `<cmd>task_complete</cmd>`.
+* Once configuration and prompts are written to disk, execute `<cmd>task_complete</cmd>.
 
 ## 3. CONFIGURATION SCHEMA REFERENCE (`config.lua`)
 
@@ -64,48 +64,86 @@ local os = require("os")
 local utils = require("utils")
 
 return {
-    LIMITS = {
-        MAX_CONTEXT = 120000, -- Tune based on the model's capacity
-        MEMORY_RATIO = 0.8,
+    -- Project root is auto-detected from $PROJECT_ROOT env var
+    PROJECT_ROOT = "/path/to/project",
+
+    -- MCP Server Definitions (optional)
+    MCP_SERVERS = {
+        browser = "npx @modelcontextprotocol/server-puppeteer",
+        filesystem = "node /path/to/mcp-fileserver.js"
     },
-    AGENTS = {
-        ARCHITECT = {
-            name = "ARCHITECT",
-            url = os.getenv("LLM_URL") or "[http://127.0.0.1:8000/v1/chat/completions](http://127.0.0.1:8000/v1/chat/completions)",
-            model = os.getenv("LLM_MODEL") or "default-model",
-            is_reasoning = true, -- Set to true if the model outputs <think> tags natively
-            params = { 
-                temperature = 0.1, 
-                stream = true,
-                max_tokens = 8192,
-                min_p = 0.05 -- Advanced samplers supported
-            },
-            prompt_file = "prompts/architect.md",
-            allowed_tools = { "explore_tree", "search", "read_file", "outline", "delegate_plan", "shell", "ask_user", "pin", "unpin" }
-        },
-        CODER = {
-            name = "CODER",
-            url = os.getenv("LLM_URL") or "[http://127.0.0.1:8000/v1/chat/completions](http://127.0.0.1:8000/v1/chat/completions)",
-            model = os.getenv("LLM_MODEL") or "default-model",
-            is_reasoning = true,
-            params = { temperature = 0.4, stream = true, max_tokens = 8192 },
-            prompt_file = "prompts/coder.md",
-            allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "task_complete" }
+
+    -- Resource Limits
+    LIMITS = {
+        MAX_CONTEXT = 250000,       -- Total context window size in tokens
+        RESERVED_OUTPUT = 5000,     -- Tokens reserved for LLM output
+        SYSTEM_PROMPT_ESTIMATE = 6000, -- Estimated system prompt overhead
+        MEMORY_RATIO = 0.8,         -- Fraction of budget for file contexts (vs chat history)
+        CHARS_PER_TOKEN = 3.5,      -- Token estimation divisor
+        MCP_MAX_OUTPUT_TOKENS = 12000 -- Max tokens for MCP tool responses
+    },
+
+    -- Pipeline Global Settings
+    PIPELINE_SETTINGS = {
+        MAX_TURNS = 150,            -- Hard cap on total turns across all stages
+        ABORT_ON_FATAL = true       -- Stop batch processing on first fatal error
+    },
+
+    -- Backup Behavior
+    CREATE_BACKUPS = false,         -- If true, creates .bak before every mutation
+    PICTURES_DIR = ".e-va-conf/pictures", -- Optional: inject images into context
+
+    -- Default Agent Parameters (inherited by all agents)
+    AGENT_DEFAULTS = {
+        url = "http://127.0.0.1:8000/v1/chat/completions",
+        model = "default-model",
+        is_reasoning = false,
+        params = {
+            stream = true,
+            stop = nil,
+            speculative_ngram = true,
+            stream_options = { include_usage = true },
+            max_tokens = 16384,
+            temperature = 0.5,
+            top_p = 0.95,
+            repetition_penalty = 1.05,
+            penalty_range = 2048,
+            token_healing = true,
+            temperature_last = true
         }
     },
-    PIPELINE = {
-        { stage = "ANALYSIS", agents = { "ARCHITECT" }, mode = "sequential" },
-        { stage = "USER_REVIEW", agents = { "ARCHITECT" }, mode = "interactive" }, -- HITL step
-        { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
+
+    -- Sampler Presets (merge with BASE_PARAMS)
+    -- ANALYTICAL: Best for Architects (temp=0.5, max_tokens=16384)
+    -- ENGINEERING: Best for Coders (temp=0.1, max_tokens=32768)
+
+    -- Agent Definitions
+    AGENTS = {
+        AGENT_NAME = {
+            name = "AGENT_NAME",
+            url = "http://...",           -- Overrides AGENT_DEFAULTS.url
+            model = "model-name",          -- Overrides AGENT_DEFAULTS.model
+            token = "Bearer xxx",          -- Auth token (optional)
+            is_reasoning = true,           -- Enables <think> parsing
+            params = { ... },              -- Deep-merged with defaults
+            prompt_file = "prompts/name.md", -- Path relative to project root
+            allowed_tools = { "tool1", "tool2", "prefix_*" }
+        }
     },
-    PIPELINE_SETTINGS = { MAX_TURNS = 150, ABORT_ON_FATAL = true },
+
+    -- Pipeline Definition
+    PIPELINE = {
+        { stage = "STAGE_NAME", agents = { "AGENT_A", "AGENT_B" }, mode = "sequential" },
+        { stage = "REVIEW", agents = { "AGENT_A" }, mode = "interactive" },
+        { stage = "CODE", agents = { "AGENT_C" }, mode = "parallel" }
+    },
+
+    -- Batch Tasks (used when no CLI args provided)
     TASKS = {
-        -- The instruction can be a string, or you can map an 'instruction_file' for heavy context
-        { file = "src/core.c", instruction = "Fix the segfault in buffer allocation.", max_turns = 15 },
-        { file = "src/utils.c", instruction_file = "prompts/utils_task.md", max_turns = 10 }
+        { file = "src/main.c", instruction = "Fix the bug", max_turns = 15 },
+        { file = "src/util.c", instruction_file = "prompts/util_task.md", max_turns = 10 }
     }
 }
-
 ```
 
 ## 4. PROMPT ENGINEERING DIRECTIVES (For Child Agents)
@@ -116,4 +154,4 @@ When you write prompts for the agents (e.g., `architect.md`), you MUST include:
 2. **Tool Formatting**: Remind them to wrap tools in `<cmd>...</cmd>`.
 3. **The MUC Rule (For Coders)**: Explicitly state: *"Your `<<<<<<< SEARCH` blocks MUST include 1-2 lines of unchanged surrounding code to ensure unique matches."*
 4. **Verification**: Tell implementation agents to ALWAYS run a `<cmd>shell:...</cmd>` (compiler/linter/test) immediately after a `<cmd>patch</cmd>` to verify their mutation in the same turn.
-5.  **Anti-Hallucination Mandate**: Tell agents explicitly: *"DO NOT use `<tool_call>` or `<function>` tags under any circumstances. You must use `<cmd>`."*
+5. **Anti-Hallucination Mandate**: Tell agents explicitly: *"DO NOT use `<tool_call>` or `<function>` tags under any circumstances. You must use `<cmd>`."*

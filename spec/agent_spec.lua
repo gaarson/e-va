@@ -1,4 +1,10 @@
 local utils = require("utils")
+local inspect = require("inspect")
+local logger = require("logger")
+
+local function mock_llm_response(content, reason)
+    return { choices = { { message = { content = content } } }, full_text = content, full_reason = reason or '' }
+end
 
 describe("Agent Bootstrapper Mode (--bootstrap)", function()
     local utils = require("utils")
@@ -11,7 +17,7 @@ describe("Agent Bootstrapper Mode (--bootstrap)", function()
     before_each(function()
         os.remove(test_state_file)
         stub(os, "exit").invokes(function(code) error("EXIT:" .. code) end)
-        _G.print = function() end
+        -- _G.print = function() end
     end)
 
     after_each(function()
@@ -61,13 +67,13 @@ describe("Agent Control Plane (Integration)", function()
     local original_send_request = llm_handler.send_request
 
     local test_state_file = ".e-va_state.json"
-    local logger = require("logger")
 
     before_each(function()
         stub(logger, "error")
-        stub(logger, "log_context") 
-        
+        stub(logger, "log_context")
+
         os.remove(test_state_file)
+        os.remove('.e-va-conf/.state.json')
 
         _G.print = function() end
         io.write = function() end
@@ -85,15 +91,16 @@ describe("Agent Control Plane (Integration)", function()
         llm_handler.send_request = original_send_request
 
         logger.error:revert()
-        logger.log_context:revert() -- [FIX]: Восстанавливаем оригинальный метод
-        
+        logger.log_context:revert()
+
         os.remove(test_state_file)
+        os.remove('.e-va-conf/.state.json')
 
         package.loaded["agent"] = nil
     end)
 
     it("should successfully bootstrap, execute pipeline, and exit cleanly", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         llm_handler.send_request = function(profile, messages)
             if profile.name == "ARCHITECT" then
@@ -123,7 +130,7 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should truncate chat history correctly to respect the chat_budget", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
         local llm_calls = 0
         llm_handler.send_request = function(profile, messages)
             llm_calls = llm_calls + 1
@@ -136,7 +143,11 @@ describe("Agent Control Plane (Integration)", function()
         end
 
         local Context = require("context")
-        local fake_ctx = Context.new({ PIPELINE = { {stage="TEST", agents={"ARCHITECT"}, mode="sequential"} }, AGENTS={ARCHITECT={}}, LIMITS = { MAX_CONTEXT = 100000 }})
+        local fake_ctx = Context.new({
+          PIPELINE = { {stage="TEST", agents={"ARCHITECT"}, mode="sequential"} },
+          AGENTS={ARCHITECT={}},
+          LIMITS = { MAX_CONTEXT = 100000 }
+        })
         fake_ctx.agent_histories = { ARCHITECT = heavy_history }
         utils.write_file(test_state_file, fake_ctx:snapshot())
 
@@ -154,7 +165,7 @@ describe("Agent Control Plane (Integration)", function()
         stub(io, "read").invokes(function()
             read_count = read_count + 1
             if read_count == 1 then return "Change the plan slightly" end
-            return "/continue"
+            return "/go"
         end)
         
         local llm_called_after_input = false
@@ -182,7 +193,7 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should stream thoughts and normal content with distinct ANSI formatting", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         local write_capture = ""
         local orig_write = io.write
@@ -221,13 +232,25 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should successfully execute batch processing when TASKS are defined", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         local utils = require("utils")
-        local original_read_file = utils.read_file_range
-        stub(utils, "read_file_range").invokes(function(path)
-            if path:match("task%.txt$") then return nil end
-            return original_read_file(path)
+        local original_load_config = utils.load_config
+        stub(utils, "load_config").invokes(function(path)
+            local cfg = original_load_config(path)
+            if cfg then
+                cfg.PROJECT_ROOT = "./AFIJQFIJQWFOJQWFQWL";
+                cfg.TASKS = {
+                    { file = "dummy1.txt", instruction = "DO TASK 1" },
+                    { file = "dummy2.txt", instruction = "DO TASK 2" }
+                }
+                cfg.PIPELINE_SETTINGS = {
+                    MAX_TURNS = 10,
+                    ABORT_ON_FATAL = true
+                }
+                cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
+            end
+            return cfg
         end)
 
         local Context = require("context")
@@ -241,18 +264,8 @@ describe("Agent Control Plane (Integration)", function()
             if prompt_text:match("TASK 1") then task1_called = true end
             if prompt_text:match("TASK 2") then task2_called = true end
 
+            logger.info('in chink',  tostring(inspect(prompt_text)))
             return { choices = { { message = { content = "<cmd>task_complete</cmd>" } } } }, nil
-        end
-
-        local original_new = Context.new
-
-        Context.new = function(cfg)
-            cfg.TASKS = {
-                { file = "dummy1.txt", instruction = "DO TASK 1" },
-                { file = "dummy2.txt", instruction = "DO TASK 2" }
-            }
-            cfg.PIPELINE = { { stage = "TEST", agents = {"ARCHITECT"}, mode = "sequential" } }
-            return original_new(cfg)
         end
 
         local chunk, compile_err = loadfile("agent.lua")
@@ -260,17 +273,16 @@ describe("Agent Control Plane (Integration)", function()
 
         local ok, err = pcall(function() chunk() end)
 
-        assert.is_true(ok)
+        assert.is_true(ok, "Agent execution failed: " .. tostring(err))
         assert.is_true(task1_called, "Task 1 was not executed in batch mode")
         assert.is_true(task2_called, "Task 2 was not executed in batch mode")
 
-        Context.new = original_new
+        utils.load_config = original_load_config
         io.read:revert()
-        utils.read_file_range:revert()
     end)
 
     it("should resolve instruction_file from local config during batch processing", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         local utils = require("utils")
         local original_read_file = utils.read_file_range
@@ -289,6 +301,7 @@ describe("Agent Control Plane (Integration)", function()
         end
 
         local Context = require("context")
+        stub(Context, "load_from_snapshot").returns(false)
         local original_new = Context.new
 
         Context.new = function(cfg)
@@ -309,7 +322,7 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should dynamically inject Tool-Aware Engine Directives based on allowed tools", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         local captured_system_prompt = ""
         llm_handler.send_request = function(profile, messages)
@@ -339,7 +352,7 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should initialize stream with ANSI gray if agent.is_reasoning is true (Implicit Start)", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         local write_capture = ""
         local orig_write = io.write
@@ -370,13 +383,13 @@ describe("Agent Control Plane (Integration)", function()
         io.read:revert()
         io.write = orig_write
 
-        assert.truthy(write_capture:match("AI %(ARCHITECT%):\27%[0m \27%[90m"), "Stream MUST inject ANSI gray right after the agent prefix if is_reasoning is true")
+        assert.truthy(write_capture:match(">>> AI %(ARCHITECT%):\27%[0m \27%[90m"), "Stream MUST inject ANSI gray right after the agent prefix if is_reasoning is true")
         assert.truthy(write_capture:match("Analyzing architecture"), "Thought content must be printed")
         assert.truthy(write_capture:match("</think>\27%[0m"), "Parser must inject ANSI reset after </think> tag")
     end)
 
     it("should extract CoT to Context and replace it with a safe SYSTEM MEMORY marker in agent_histories", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         local raw_thought = "This is a massive internal monologue evaluating the AST."
         local raw_llm_output = "<think>\n" .. raw_thought .. "\n</think>\n<cmd>task_complete</cmd>"
@@ -422,7 +435,7 @@ describe("Agent Control Plane (Integration)", function()
     end)
 
     it("should override pipeline when --agent is specified", function()
-        stub(io, "read").returns("/continue")
+        stub(io, "read").returns("/go")
 
         local used_agent = nil
         llm_handler.send_request = function(profile, messages)
@@ -431,6 +444,7 @@ describe("Agent Control Plane (Integration)", function()
         end
 
         local Context = require("context")
+        stub(Context, "load_from_snapshot").returns(false)
         local original_new = Context.new
         Context.new = function(cfg)
             cfg.AGENTS = {

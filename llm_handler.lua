@@ -58,6 +58,8 @@ function M.send_request(profile, messages, options)
     local patcher_core = require("patcher_core")
     local full_content = ""
     local buffer = ""
+    local full_reason = ""
+    local full_text = ""
     local in_reasoning = false
     local was_interrupted = false
     local last_part = nil
@@ -101,6 +103,7 @@ function M.send_request(profile, messages, options)
                             full_content = full_content .. c_reason
                             if on_token_cb then on_token_cb(c_reason) end
                         end
+                        full_reason = full_reason .. c_reason
                     elseif c_text and c_text ~= "" then
                         if in_reasoning then
                             in_reasoning = false
@@ -111,6 +114,7 @@ function M.send_request(profile, messages, options)
                             full_content = full_content .. c_text
                             if on_token_cb then on_token_cb(c_text) end
                         end
+                        full_text = full_text .. c_text
                     end
                 end
             end
@@ -135,6 +139,8 @@ function M.send_request(profile, messages, options)
                 }
             }
         },
+        full_reason = full_reason,
+        full_text = full_text,
         interrupted = was_interrupted
     }
 end

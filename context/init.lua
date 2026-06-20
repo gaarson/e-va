@@ -77,6 +77,37 @@ local function calculate_similarity(s1, s2)
     return intersect / union
 end
 
+-- ============================================================================
+-- MEMORY PRIORITIZATION & EVICTION STRATEGY
+-- ============================================================================
+--
+-- Positional Context Inversion is the core algorithm for combating the
+-- "Lost in the Middle" phenomenon in LLM attention mechanisms.
+--
+-- SORTING PRIORITY (highest -> lowest):
+--   1. is_target   — The active working file. Must always survive eviction.
+--   2. is_modified — Files recently mutated by the agent. High recency value.
+--   3. is_pinned   — Interfaces explicitly locked by the Architect via `pin`.
+--   4. rank        — LRU-style access counter (higher = more recently accessed).
+--   5. path        — Lexicographic tiebreaker for deterministic ordering.
+--
+-- OUTPUT ORDER (buffer assembly):
+--   Modified -> Pinned -> Context(READ_ONLY) -> Target
+--
+-- RATIONALE:
+--   - MODIFIED files come first so the agent sees the immediate aftermath of
+--     its own mutations (e.g., a patch just applied).
+--   - PINNED files follow as stable reference interfaces.
+--   - READ_ONLY context fills the remaining budget as background knowledge.
+--   - TARGET is placed LAST (Positional Inversion) so it sits closest to the
+--     model's attention heads during response generation, maximizing recall.
+--
+-- EVICTION:
+--   When the token budget is exceeded, lower-priority files are replaced with
+--   an <file_context status="OMITTED_OUT_OF_MEMORY" /> placeholder. The target
+--   file is always forced into the budget, even if it means evicting others.
+-- ============================================================================
+
 local function prioritize_memory_blocks(a, b)
     if a.is_target ~= b.is_target then return a.is_target end
     if a.is_modified ~= b.is_modified then return a.is_modified end
