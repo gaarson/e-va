@@ -71,7 +71,7 @@ function M.generate_tool_manifest(allowed_tools)
     local doc = {
         "## SYSTEM DIRECTIVE: TOOLCHAIN INTERFACE",
         "You must interact with the environment using strict XML tags.",
-        "> **⚠️ PARSING ORDER**: Commands are executed from the **END** of your response. Always place your final/most important `<cmd>` tags at the very end of your text to ensure they are processed first.",
+        "> **PARSING ORDER**: Commands are executed from the **END** of your response. Always place your final/most important `<cmd>` tags at the very end of your text to ensure they are processed first.",
         "",
         "CRITICAL: Do NOT invent tools. Only the following tools are available to your profile:\n"
     }
@@ -103,7 +103,7 @@ function M.generate_tool_manifest(allowed_tools)
     table.sort(tools_to_list, function(a, b) return a.name < b.name end)
 
     for _, item in ipairs(tools_to_list) do
-        table.insert(doc, string.format("### Tool: `<cmd>%s</cmd>`\n**Description**: %s\n**Usage Example**:\n```xml\n%s\n```\n", item.name, item.tool.desc, item.tool.usage))
+        table.insert(doc, string.format("### Tool: `<cmd>%s</cmd>`\n**Description**: %s\n**Usage Example**:\n%s\n", item.name, item.tool.desc, item.tool.usage))
     end
 
     -- table.insert(doc, "CRITICAL RULE: You MUST execute `<cmd>task_complete</cmd>` when your instructions are fulfilled to advance the pipeline.")

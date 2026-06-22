@@ -83,12 +83,55 @@ local function get_masked_intervals(content)
     return intervals
 end
 
-function M.extract_commands(content)
-    if type(content) ~= "string" or #content == 0 then
-        return function() return nil end
-    end
+	function M.extract_commands(content)
+	    if type(content) ~= "string" or #content == 0 then
+	        return function() return nil end
+	    end
 
-    local intervals = get_masked_intervals(content)
+	    local OPEN_TAG = "<cmd>"
+	    local CLOSE_TAG = "</cmd>"
+
+	    local function find_cmd_regions()
+	        local regions = {}
+	        local pos = 1
+	        while true do
+	            local s, e = content:find(OPEN_TAG, pos, true)
+	            if not s then break end
+	            local cs, ce = content:find(CLOSE_TAG, e + 1, true)
+	            if cs then
+	                regions[#regions + 1] = s
+	                regions[#regions + 1] = ce + #CLOSE_TAG - 1
+	                pos = ce + 1
+	            else
+                break
+            end
+	        end
+	        return regions
+	    end
+
+	    local protected_regions = find_cmd_regions()
+
+	    local intervals = get_masked_intervals(content)
+
+	    if #protected_regions > 0 and #intervals > 0 then
+	        local filtered = {}
+	        for i = 1, #intervals, 2 do
+	            local m_start, m_end = intervals[i], intervals[i + 1]
+	            local overlaps = false
+	            for j = 1, #protected_regions, 2 do
+	                local p_start, p_end = protected_regions[j], protected_regions[j + 1]
+	                if m_start <= p_end and m_end >= p_start then
+	                    overlaps = true
+	                    break
+	                end
+	            end
+	            if not overlaps then
+                filtered[#filtered + 1] = m_start
+                filtered[#filtered + 1] = m_end
+            end
+	        end
+	        intervals = filtered
+	    end
     local OPEN_TAG = "<cmd>"
     local CLOSE_TAG = "</cmd>"
     local open_len = #OPEN_TAG

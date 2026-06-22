@@ -1,5 +1,6 @@
 local M = {}
 local json = require("JSON")
+local utils = require("utils")
 
 function M.new(config)
     local self = setmetatable({}, { __index = M })
@@ -9,6 +10,8 @@ function M.new(config)
 end
 
 function M.reset(self)
+    self.recent_tool_outputs = {}
+    self.max_recent_tools = 10  -- Добавлено: лимит для recent_tool_outputs
     self.knowledge_base = {}
     self.file_access_rank = {}
     self.global_access_counter = 0
@@ -23,6 +26,445 @@ function M.reset(self)
     self.pinned_files = {}
     self.images = {}
     self.images_loaded = false
+    self.handoff_memo = nil
+    self.test_failures = 0
+    self.last_actions = {} -- Новые: последние N действий
+    self.max_last_actions = 100
+    self.task_summary = "" 
+end
+
+function M.update_summary(self, new_summary)
+    self.task_summary = utils.trim(new_summary)
+    -- Добавляем действие в историю для прозрачности
+    self:add_action("SUMMARY_UPDATE", "Updated task summary")
+end
+
+function M.optimize_context(self, instructions)
+    -- instructions может быть таблицей с командами, например:
+    -- { remove_file = "path/to/file", pin_file = "path/to/core.h", update_summary = "New summary text" }
+    if type(instructions) ~= "table" then return end
+
+    if instructions.remove_file then
+        self.knowledge_base[instructions.remove_file] = nil
+        self.file_states[instructions.remove_file] = nil
+        self.file_access_rank[instructions.remove_file] = nil
+        self:add_action("CONTEXT_OPTIMIZATION", "Removed file from memory: " .. instructions.remove_file)
+    end
+
+    if instructions.pin_file then
+        self:pin_file(instructions.pin_file)
+    end
+
+    if instructions.unpin_file then
+        self:unpin_file(instructions.unpin_file)
+    end
+
+    if instructions.update_summary then
+        self:update_summary(instructions.update_summary)
+    end
+end
+-- ============================================================================
+-- НОВЫЙ: Распределенный контекст
+-- ============================================================================
+
+function M.get_system_prompt(self, agent_name, agent_cfg)
+    local sys_prompt_text = self:load_prompt(self, agent_cfg.prompt_file)
+    local toolchain_manifest = self:generate_tool_manifest(self, agent_cfg.allowed_tools)
+    local engine_directives = self:get_engine_directives(self, agent_cfg)
+    
+    return sys_prompt_text .. "\n" ..
+           toolchain_manifest .. "\n\n" ..
+           engine_directives
+end
+
+function M.add_tool_output(self, tool_name, output)
+    if not output or output == "" then return end
+    -- Обрезаем гигантские выводы, чтобы не сожрать токен-бюджет динамического контекста
+    local max_len = 1500
+    local truncated_output = output
+    if #output > max_len then
+        truncated_output = output:sub(1, max_len) .. "\n...[TRUNCATED FOR RECENCY INJECTION]..."
+    end
+    
+    table.insert(self.recent_tool_outputs, { 
+        tool = tool_name, 
+        output = truncated_output 
+    })
+    
+    if #self.recent_tool_outputs > self.max_recent_tools then
+        table.remove(self.recent_tool_outputs, 1)
+    end
+end
+
+function M.calculate_max_commands(self, agent_name, available_tokens)
+    local agent_cfg = self.config.AGENTS[agent_name]
+    if not agent_cfg then return 5 end
+    
+    -- Базовый лимит зависит от типа агента
+    local base_limit = 5
+    if agent_cfg.name == "ARCHITECT" then
+        base_limit = 8  
+    elseif agent_cfg.name == "CODER" then
+        base_limit = 3  -- Кодер должен быть более точным
+    end
+    
+    -- Корректировка в зависимости от доступных токенов
+    local token_ratio = available_tokens / (self.config.LIMITS.MAX_CONTEXT or 250000)
+    if token_ratio < 0.2 then
+        base_limit = math.max(1, math.floor(base_limit * 0.5))  -- Мало токенов — меньше команд
+    elseif token_ratio > 0.8 then
+        base_limit = math.min(15, base_limit * 2)  -- Много токенов — больше команд
+    end
+    
+    return base_limit
+end
+
+function M.get_command_limit_info(self, agent_name, available_tokens)
+    local max_cmds = self:calculate_max_commands(agent_name, available_tokens)
+    return string.format(
+        "COMMAND LIMIT: You can execute up to %d commands per turn. " ..
+        "Use batch operations (e.g., read_files, search_and_read) to maximize efficiency. " ..
+        "If you need to read multiple files, use <cmd>read_files:file1,file2,file3</cmd> instead of individual read_file commands.",
+        max_cmds
+    )
+end
+
+function M.get_dynamic_context(self, agent_name, max_tokens)
+    max_tokens = max_tokens or 500000
+    local current_tokens = 0
+    local context_parts = {}
+    
+    -- 1. Системное состояние (всегда в начале)
+    local system_state_xml = "<system_state>"
+    
+    -- 1.1. Саммари задачи
+    if self.task_summary ~= "" then
+        system_state_xml = system_state_xml .. "\n  <task_summary>" .. self.task_summary .. "</task_summary>"
+    end
+
+    -- 1.2. План выполнения
+    if self.execution_plan and #self.execution_plan > 0 then
+        local plan_text = self:get_execution_plan_text(self)
+        system_state_xml = system_state_xml .. "\n  <execution_plan>" .. plan_text .. "</execution_plan>"
+    end
+
+    -- 1.3. Последние мысли (только последние 5-10, чтобы не засорять)
+    if self.thoughts and #self.thoughts > 0 then
+        local recent_thoughts = {}
+        local start_idx = math.max(1, #self.thoughts - 5)
+        for i = start_idx, #self.thoughts do
+            table.insert(recent_thoughts, self.thoughts[i].content)
+        end
+        if #recent_thoughts > 0 then
+            system_state_xml = system_state_xml .. "\n  <recent_thoughts>" .. table.concat(recent_thoughts, "\n") .. "</recent_thoughts>"
+        end
+    end
+
+    -- 1.4. Последние действия
+    if #self.last_actions > 0 then
+        local actions_text = self:get_last_actions_text(self)
+        system_state_xml = system_state_xml .. "\n  <last_actions>" .. actions_text .. "</last_actions>"
+    end
+
+    system_state_xml = system_state_xml .. "\n</system_state>"
+    
+    local cost = self:estimate_tokens(system_state_xml)
+    table.insert(context_parts, system_state_xml)
+    current_tokens = current_tokens + cost
+
+    -- 2. Активные файлы
+    local active_files = self:get_active_files(self)
+    for _, file_info in ipairs(active_files) do
+        local file_text = self:get_file_context(self, file_info)
+        local cost = self:estimate_tokens(file_text)
+        if current_tokens + cost < max_tokens then
+            table.insert(context_parts, file_text)
+            current_tokens = current_tokens + cost
+        else
+            -- Если не влезает, добавляем только заголовок с статусом OMITTED
+            table.insert(context_parts, string.format(
+                "\n<file_context path=\"%s\" status=\"OMITTED_OUT_OF_MEMORY\" />\n",
+                file_info.path
+            ))
+        end
+    end
+
+    if #self.recent_tool_outputs > 0 then
+        local tools_xml = "\n<recent_tool_outputs>\n"
+        for _, t in ipairs(self.recent_tool_outputs) do
+            -- Экранируем XML, чтобы выводы кода не сломали разметку
+            local safe_out = t.output:gsub("<", "&lt;"):gsub(">", "&gt;")
+            tools_xml = tools_xml .. string.format("<tool_result name=\"%s\">\n%s\n</tool_result>\n", t.tool, safe_out)
+        end
+        tools_xml = tools_xml .. "</recent_tool_outputs>\n"
+        table.insert(context_parts, tools_xml)
+    end
+
+
+    return table.concat(context_parts, "\n")
+end
+function M.get_memory_block(self, max_tokens)
+    max_tokens = max_tokens or 10000
+    local current_tokens = 0
+    local memory_parts = {}
+    
+    -- 1. Пин-файлы (только имена и статусы)
+    if next(self.pinned_files) then
+        local pinned_text = "\n=== PINNED FILES ===\n"
+        for path, _ in pairs(self.pinned_files) do
+            pinned_text = pinned_text .. string.format("- %s\n", path)
+        end
+        local cost = self:estimate_tokens(pinned_text)
+        if current_tokens + cost < max_tokens then
+            table.insert(memory_parts, pinned_text)
+            current_tokens = current_tokens + cost
+        end
+    end
+    
+    -- 2. Сжатая история изменений
+    local changes_text = self:get_changes_summary(self)
+    local cost = self:estimate_tokens(changes_text)
+    if current_tokens + cost < max_tokens then
+        table.insert(memory_parts, changes_text)
+        current_tokens = current_tokens + cost
+    end
+    
+    -- 3. Ключевые выводы
+    local insights_text = self:get_insights_summary(self)
+    cost = self:estimate_tokens(insights_text)
+    if current_tokens + cost < max_tokens then
+        table.insert(memory_parts, insights_text)
+        current_tokens = current_tokens + cost
+    end
+    
+    return table.concat(memory_parts, "\n")
+end
+
+-- ============================================================================
+-- Вспомогательные функции для распределенного контекста
+-- ============================================================================
+
+function M:get_execution_plan_text(self)
+    if not self.execution_plan or #self.execution_plan == 0 then
+        return ""
+    end
+    
+    local text = "\n=== EXECUTION PLAN ===\n"
+    for i, task in ipairs(self.execution_plan) do
+        local status_marker = (i < self.current_task_index) and "[x]" or
+                             (i == self.current_task_index) and "[>]" or "[ ]"
+        text = text .. string.format(
+            "%s Step %d: %s -> %s\n",
+            status_marker, i, tostring(task.file), tostring(task.instruction)
+        )
+    end
+    return text
+end
+
+function M:get_active_files(self)
+    local active_files = {}
+    local current_task = self.execution_plan[self.current_task_index]
+    local active_target = current_task and current_task.file
+    
+    -- 1. Целевой файл
+    if active_target and self.knowledge_base[active_target] then
+        table.insert(active_files, {
+            path = active_target,
+            is_target = true,
+            is_pinned = self.pinned_files[active_target] == true,
+            is_modified = self.file_states[active_target] == "RECENTLY_MODIFIED"
+        })
+    end
+    
+    -- 2. Пин-файлы
+    for path, _ in pairs(self.pinned_files) do
+        if self.knowledge_base[path] and path ~= active_target then
+            table.insert(active_files, {
+                path = path,
+                is_target = false,
+                is_pinned = true,
+                is_modified = self.file_states[path] == "RECENTLY_MODIFIED"
+            })
+        end
+    end
+    
+    -- 3. Недавно измененные файлы
+    for path, state in pairs(self.file_states) do
+        if state == "RECENTLY_MODIFIED" and not self.pinned_files[path] and path ~= active_target then
+            table.insert(active_files, {
+                path = path,
+                is_target = false,
+                is_pinned = false,
+                is_modified = true
+            })
+        end
+    end
+    
+    -- 4. MRU файлы (только если есть место)
+    local files_list = {}
+    for path, content in pairs(self.knowledge_base) do
+        if not self.pinned_files[path] and path ~= active_target and
+           self.file_states[path] ~= "RECENTLY_MODIFIED" then
+            table.insert(files_list, {
+                path = path,
+                rank = self.file_access_rank[path] or 0
+            })
+        end
+    end
+    
+    table.sort(files_list, function(a, b) return a.rank > b.rank end)
+    
+    for _, f in ipairs(files_list) do
+        if #active_files < 300 then -- Ограничиваем количество MRU файлов
+            table.insert(active_files, {
+                path = f.path,
+                is_target = false,
+                is_pinned = false,
+                is_modified = false
+            })
+        end
+    end
+    
+    return active_files
+end
+
+function M:get_file_context(self, file_info)
+    local content = self.knowledge_base[file_info.path]
+    if not content then return "" end
+    
+    local raw_lines = utils.read_lines_raw(content)
+    local content_display = table.concat(raw_lines, "\n")
+    local indented_content = "\t" .. content_display:gsub("\n", "\n\t")
+    
+    local status = "READ_ONLY"
+    if file_info.is_target then
+        status = "TARGET"
+    elseif file_info.is_pinned then
+        status = "PINNED"
+    elseif file_info.is_modified then
+        status = "RECENTLY_MODIFIED"
+    end
+    
+    return string.format(
+        "\n<file_context path=\"%s\" status=\"%s\">\n\n%s\n\n</file_context>\n",
+        file_info.path, status, indented_content
+    )
+end
+
+function M:get_last_actions_text(self)
+    if #self.last_actions == 0 then return "" end
+    
+    local text = "\n=== LAST ACTIONS ===\n"
+    for _, action in ipairs(self.last_actions) do
+        text = text .. string.format("- %s: %s\n", action.type, action.summary)
+    end
+    return text
+end
+
+function M:get_recent_thoughts_text(self)
+    if not self.thoughts or #self.thoughts == 0 then return "" end
+    
+    local text = "\n=== RECENT THOUGHTS ===\n"
+    local start_idx = math.max(1, #self.thoughts - 140) -- Только последние 140 мысли
+    for i = start_idx, #self.thoughts do
+        local th = self.thoughts[i]
+        text = text .. string.format("-----\n%s\n", th.content)
+    end
+    return text
+end
+
+function M:get_changes_summary(self)
+    local text = "\n=== CHANGES SUMMARY ===\n"
+    for path, state in pairs(self.file_states) do
+        if state == "RECENTLY_MODIFIED" then
+            text = text .. string.format("- %s: modified\n", path)
+        end
+    end
+    return text
+end
+
+function M:get_insights_summary(self)
+    if not next(self.search_history) then return "" end
+    
+    local text = "\n=== SEARCH INSIGHTS ===\n"
+    for query, result in pairs(self.search_history) do
+        local lines = {}
+        for line in result:gmatch("[^\r\n]+") do
+            local pure_code = line:match("[:-]%d+[:-]%s*(.+)$") or line
+            local compressed_line = pure_code:gsub("^%s+", ""):gsub("%s+", " ")
+            if compressed_line ~= "" then
+                table.insert(lines, compressed_line)
+            end
+        end
+        text = text .. string.format("- %s: %s\n", query, table.concat(lines, "; "))
+    end
+    return text
+end
+
+function M:get_engine_directives(self, agent_cfg)
+    local has_delegate = false
+    local has_complete = false
+    for _, t in ipairs(agent_cfg.allowed_tools or {}) do
+        if t == "delegate_plan" or t == "*" then has_delegate = true end
+        if t == "task_complete" or t == "*" then has_complete = true end
+    end
+    
+    local pipeline_rule = "1. PIPELINE CONTROL: "
+    if has_delegate and has_complete then
+        pipeline_rule = pipeline_rule .. "To advance the pipeline, use `<cmd>delegate_plan</cmd>` to assign work to the next stage, OR use `<cmd>task_complete</cmd>` if no code changes are needed."
+    elseif has_delegate then
+        pipeline_rule = pipeline_rule .. "To advance the pipeline, you MUST use `<cmd>delegate_plan</cmd>` to assign work."
+    elseif has_complete then
+        pipeline_rule = pipeline_rule .. "To advance or finish your stage, you MUST execute `<cmd>task_complete</cmd>`."
+    else
+        pipeline_rule = pipeline_rule .. "Analyze the context and answer the user."
+    end
+    
+    return string.format([[
+==================================================
+⚙️ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
+%s
+2. STRICT TOOL SYNTAX: You MUST wrap all tool executions STRICTLY in `<cmd>tool:args</cmd>` tags.
+Example: <cmd>read_file:src/main.c</cmd>
+3. EXECUTION ORDER: The system parses and executes commands from the END of your response. Place critical commands at the end.
+==================================================]], pipeline_rule)
+end
+
+function M:load_prompt(self, file_path)
+    if not file_path then return "You are an AI assistant. Follow the user's instructions." end
+    local local_path = self.config.PROJECT_ROOT .. "/.e-va-conf/" .. file_path
+    local content = utils.read_file_range(local_path)
+    if not content then
+        local proj_path = self.config.PROJECT_ROOT .. "/" .. file_path
+        content = utils.read_file_range(proj_path)
+    end
+    if not content then
+        local global_path = os.getenv("AGENT_HOME") .. "/" .. file_path
+        content = utils.read_file_range(global_path)
+    end
+    if not content then
+        return "You are an AI assistant. Follow the user's instructions."
+    end
+    return content
+end
+
+function M:generate_tool_manifest(self, allowed_tools)
+    local registry = require("tool_registry")
+    return registry.generate_tool_manifest(allowed_tools)
+end
+
+-- ============================================================================
+-- Обновленные методы для работы с распределенным контекстом
+-- ============================================================================
+
+function M.add_action(self, action_type, summary)
+    table.insert(self.last_actions, {
+        type = action_type,
+        summary = summary
+    })
+    if #self.last_actions > self.max_last_actions then
+        table.remove(self.last_actions, 1)
+    end
 end
 
 function M.get_history(self, agent_name)
@@ -55,107 +497,18 @@ function M.replace_last_assistant_message(self, agent_name, new_content)
     return false
 end
 
-local function calculate_similarity(s1, s2)
-    local w1, w2 = {}, {}
-    local set_size1, set_size2 = 0, 0
-    
-    for w in s1:gmatch("%a+") do 
-        local lw = w:lower()
-        if not w1[lw] then w1[lw] = true; set_size1 = set_size1 + 1 end
-    end
-    for w in s2:gmatch("%a+") do 
-        local lw = w:lower()
-        if not w2[lw] then w2[lw] = true; set_size2 = set_size2 + 1 end
-    end
-    
-    if set_size1 == 0 or set_size2 == 0 then return 0 end
-    
-    local intersect = 0
-    for w in pairs(w1) do if w2[w] then intersect = intersect + 1 end end
-    
-    local union = set_size1 + set_size2 - intersect
-    return intersect / union
-end
-
--- ============================================================================
--- MEMORY PRIORITIZATION & EVICTION STRATEGY
--- ============================================================================
---
--- Positional Context Inversion is the core algorithm for combating the
--- "Lost in the Middle" phenomenon in LLM attention mechanisms.
---
--- SORTING PRIORITY (highest -> lowest):
---   1. is_target   — The active working file. Must always survive eviction.
---   2. is_modified — Files recently mutated by the agent. High recency value.
---   3. is_pinned   — Interfaces explicitly locked by the Architect via `pin`.
---   4. rank        — LRU-style access counter (higher = more recently accessed).
---   5. path        — Lexicographic tiebreaker for deterministic ordering.
---
--- OUTPUT ORDER (buffer assembly):
---   Modified -> Pinned -> Context(READ_ONLY) -> Target
---
--- RATIONALE:
---   - MODIFIED files come first so the agent sees the immediate aftermath of
---     its own mutations (e.g., a patch just applied).
---   - PINNED files follow as stable reference interfaces.
---   - READ_ONLY context fills the remaining budget as background knowledge.
---   - TARGET is placed LAST (Positional Inversion) so it sits closest to the
---     model's attention heads during response generation, maximizing recall.
---
--- EVICTION:
---   When the token budget is exceeded, lower-priority files are replaced with
---   an <file_context status="OMITTED_OUT_OF_MEMORY" /> placeholder. The target
---   file is always forced into the budget, even if it means evicting others.
--- ============================================================================
-
-local function prioritize_memory_blocks(a, b)
-    if a.is_target ~= b.is_target then return a.is_target end
-    if a.is_modified ~= b.is_modified then return a.is_modified end
-    if a.is_pinned ~= b.is_pinned then return a.is_pinned end
-    if a.rank ~= b.rank then return a.rank > b.rank end
-    return a.path < b.path
-end
-
 function M.add_thought(self, turn, thought_text)
     self.thoughts = self.thoughts or {}
-    local clean_thought = require("utils").trim(thought_text)
+    local clean_thought = utils.trim(thought_text)
     if clean_thought == "" then return end
-
-    local MERGE_THRESHOLD = 0.65
-
-    if #self.thoughts > 0 then
-        local last_thought = self.thoughts[#self.thoughts]
-        local current_merge_count = last_thought.merged or 1
-        
-        if clean_thought:find(last_thought.content, 1, true) then
-            last_thought.turn = turn
-            last_thought.content = clean_thought
-            last_thought.merged = current_merge_count + 1
-            return
-        end
-
-        local sim = calculate_similarity(last_thought.content, clean_thought)
-        if sim > MERGE_THRESHOLD then
-            last_thought.turn = turn
-            last_thought.content = clean_thought
-            last_thought.merged = current_merge_count + 1
-            return
-        end
-    end
-
-    table.insert(self.thoughts, { turn = turn, content = clean_thought, merged = 1 })
-    if #self.thoughts > 5 then table.remove(self.thoughts, 1) end
+    table.insert(self.thoughts, { turn = turn, content = clean_thought })
 end
 
 function M.get_thoughts_digest(self)
     if not self.thoughts or #self.thoughts == 0 then return "" end
-    local out = {"\n=== AGENT RECENT THOUGHTS (Continuity) ==="}
+    local out = {"\n!=== AGENT RECENT THOUGHTS ===!"}
     for _, th in ipairs(self.thoughts) do
-        local header = string.format("--- Turn %d Thought ---", th.turn)
-        if th.merged and th.merged > 1 then
-            header = string.format("--- Turn %d Thought (Merged x%d) ---", th.turn, th.merged)
-        end
-        table.insert(out, header .. "\n" .. th.content)
+        table.insert(out, th.content)
     end
     return table.concat(out, "\n")
 end
@@ -202,7 +555,6 @@ function M.load_images(self, dir_path)
         self.images_loaded = false
         return
     end
-    local utils = require("utils")
     self.images = utils.load_images_from_dir(dir_path)
     self.images_loaded = (#self.images > 0)
 end
@@ -236,7 +588,10 @@ function M.snapshot(self)
         file_tree = self.file_tree,
         pinned_files = self.pinned_files,
         images_loaded = self.images_loaded,
-        images_metadata = nil
+        images_metadata = nil,
+        last_actions = self.last_actions,
+        handoff_memo = self.handoff_memo,
+        test_failures = self.test_failures
     }
     if self.images and #self.images > 0 then
         state.images_metadata = {}
@@ -276,6 +631,9 @@ function M.load_from_snapshot(self, json_str)
             })
         end
     end
+    self.last_actions = state.last_actions or {}
+    self.handoff_memo = state.handoff_memo
+    self.test_failures = state.test_failures or 0
     return true
 end
 
@@ -285,128 +643,22 @@ function M.estimate_tokens(self, text)
     return math.ceil(#text / divisor)
 end
 
-function M.get_memory_block(self, max_tokens)
-    max_tokens = max_tokens or 100000
-    local current_tokens = 0
-
-    local pinned_buffer = {}
-    local modified_buffer = {} -- [NEW] Отдельный буфер для наглядности
-    local ctx_buffer = {}
-    local target_buffer = ""
-
-    local current_task = self.execution_plan[self.current_task_index]
-    local active_target = current_task and current_task.file
-    local target_instruction = current_task and current_task.instruction or "N/A"
-
-    local files_list = {}
-    for path, content in pairs(self.knowledge_base) do
-        table.insert(files_list, {
-            path = path,
-            content = content,
-            rank = self.file_access_rank[path] or 0,
-            is_target = (path == active_target),
-            is_pinned = self.pinned_files[path] == true,
-            is_modified = (self.file_states[path] == "RECENTLY_MODIFIED") -- [NEW]
-        })
-    end
-
-    table.sort(files_list, prioritize_memory_blocks)
-
-    for _, f in ipairs(files_list) do
-        local raw_lines = require("utils").read_lines_raw(f.content)
-        local content_display = table.concat(raw_lines, "\n")
-
-        local total_str = ""
-        local cost = 0
-
-        if f.is_target then
-            total_str = string.format("\n<file_target path=\"%s\" instruction=\"%s\">\n%s\n</file_target>\n", f.path, target_instruction, content_display)
-        elseif f.is_modified then
-            total_str = string.format("\n<file_context path=\"%s\" status=\"RECENTLY_MODIFIED\">\n%s\n</file_context>\n", f.path, content_display)
-        elseif f.is_pinned then
-            total_str = string.format("\n<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>\n", f.path, content_display)
-        else
-            total_str = string.format("\n<file_context path=\"%s\" status=\"READ_ONLY\">\n%s\n</file_context>\n", f.path, content_display)
-        end
-
-        cost = self:estimate_tokens(total_str)
-
-        if (current_tokens + cost) < max_tokens then
-            current_tokens = current_tokens + cost
-            if f.is_target then
-                target_buffer = total_str
-            elseif f.is_modified then
-                table.insert(modified_buffer, total_str)
-            elseif f.is_pinned then
-                table.insert(pinned_buffer, total_str)
-            else
-                table.insert(ctx_buffer, total_str)
-            end
-        else
-            if f.is_target then
-                target_buffer = total_str
-                current_tokens = current_tokens + cost
-            else
-                table.insert(ctx_buffer, string.format("\n<file_context path=\"%s\" status=\"OMITTED_OUT_OF_MEMORY\" />\n", f.path))
-            end
-        end
-    end
-
-    local final_output = {"\n=== MEMORY (XML FRAMED CONTEXT) ===\n"}
-
-    if self.execution_plan and #self.execution_plan > 0 then
-        table.insert(final_output, "=== EXECUTION PLAN STATUS ===\n")
-        for i, task in ipairs(self.execution_plan) do
-            local status_marker = (i < self.current_task_index) and "[x]" or (i == self.current_task_index and "[>]" or "[ ]")
-            table.insert(final_output, string.format("%s Step %d: %s -> %s\n", status_marker, i, tostring(task.file), tostring(task.instruction)))
-        end
-        table.insert(final_output, "\n")
-    end
-
-    if #modified_buffer > 0 then
-        table.insert(final_output, "\n")
-        table.insert(final_output, table.concat(modified_buffer, ""))
-    end
-    if #pinned_buffer > 0 then
-        table.insert(final_output, "\n")
-        table.insert(final_output, table.concat(pinned_buffer, ""))
-    end
-    if #ctx_buffer > 0 then
-        table.insert(final_output, "\n")
-        table.insert(final_output, table.concat(ctx_buffer, ""))
-    end
-    if target_buffer ~= "" then
-        table.insert(final_output, "\n")
-        table.insert(final_output, target_buffer)
-    end
-
-    if #files_list == 0 then
-        table.insert(final_output, "\n(No files loaded in memory)\n")
-    end
-
-    return table.concat(final_output, "")
-end
-
 function M.get_search_digest(self, max_tokens)
     if not next(self.search_history) then return "" end
-
     local digest_buffer = {"\n=== SEARCH DIGEST (Reference Snippets) ==="}
     local seen_hashes = {}
     local current_tokens = 0
     local divisor = (self.config.LIMITS and self.config.LIMITS.CHARS_PER_TOKEN) or 3.5
-
     for query, res in pairs(self.search_history) do
         table.insert(digest_buffer, "--- Query: " .. query .. " ---")
         for line in res:gmatch("[^\r\n]+") do
             local pure_code = line:match("[:-]%d+[:-]%s*(.+)$") or line
             local compressed_line = pure_code:gsub("^%s+", ""):gsub("%s+", " ")
             local hash = compressed_line:gsub("%s", "")
-
             if hash ~= "" and not seen_hashes[hash] then
                 seen_hashes[hash] = true
                 table.insert(digest_buffer, compressed_line)
                 current_tokens = current_tokens + math.ceil(#compressed_line / divisor)
-
                 if current_tokens >= max_tokens then
                     table.insert(digest_buffer, "... [TRUNCATED DUE TO TOKEN LIMIT] ...")
                     return table.concat(digest_buffer, "\n")
@@ -420,18 +672,15 @@ end
 function M.get_report(self, agent_name)
     local search_summary = ""
     local count = 0
-    for _, _ in pairs(self.search_history) do count = count + 1 end
+    for _,_ in pairs(self.search_history) do count = count + 1 end
     if count > 0 then
         search_summary = string.format("\n## SEARCH HISTORY\n(Cached %d queries)\n", count)
     end
-
     local tree_content = self.file_tree or "(empty)"
     if #tree_content > 30000 then
         tree_content = tree_content:sub(1, 30000) .. "\n... [TREE TRUNCATED - USE <cmd>explore_tree:path:depth</cmd> TO NAVIGATE]"
     end
-    
     local tree_block = string.format("## PROJECT STRUCTURE (Current View)\n```text\n%s\n```\n", tree_content)
-
     return string.format(
         "# PROJECT CONTEXT\nRoot: %s\n---\n%s%s",
         self.config.PROJECT_ROOT,
@@ -441,19 +690,15 @@ function M.get_report(self, agent_name)
 end
 
 function M.sync_files(self)
-    local utils = require("utils")
     local updated_files = {}
-
     for path, old_content in pairs(self.knowledge_base) do
         local full_path = self.config.PROJECT_ROOT .. "/" .. path
         local new_content = utils.read_file_range(full_path)
-
         if new_content and new_content ~= old_content then
             self.knowledge_base[path] = new_content
             table.insert(updated_files, path)
         end
     end
-
     return updated_files
 end
 
@@ -464,20 +709,22 @@ function M.squash_last_mutation(self, agent_name)
         if msg.role == "assistant" then
             local original = msg.content or ""
             local squashed = original
-
             squashed = squashed:gsub(
                 "<cmd>patch:([^%s\n]+)%s*\n<<<<<<< SEARCH.->>>>>>> REPLACE\n</cmd>",
-                "\n[SYSTEM MEMORY: You successfully executed a patch on '%1'. The heavy code block was squashed to save tokens.]\n"
+                function(match)
+                    local file_path = match:match("<cmd>patch:([^%s\n]+)")
+                    return string.format("\n[SYSTEM MEMORY: Patch applied to '%s'. Code updated.]\n", file_path)
+                end
             )
-
             squashed = squashed:gsub(
                 "<cmd>create_file:([^%s\n]+)%s*\n.-</cmd>",
-                "\n[SYSTEM MEMORY: You successfully created/overwrote file '%1'. The heavy code block was squashed.]\n"
+                function(match)
+                    local file_path = match:match("<cmd>create_file:([^%s\n]+)")
+                    return string.format("\n[SYSTEM MEMORY: File '%s' created/overwritten.]\n", file_path)
+                end
             )
-
             squashed = squashed:gsub("\n\n+", "\n\n")
-            squashed = require("utils").trim(squashed)
-
+            squashed = utils.trim(squashed)
             if original ~= squashed then
                 history[i].content = squashed
                 return true

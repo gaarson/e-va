@@ -17,7 +17,9 @@ function M.send_request(profile, messages, options)
 
     local req = http.new_from_uri(profile.url)
     req.headers:upsert(":method", "POST")
+
     if profile.token then req.headers:upsert("Authorization", "Bearer " .. profile.token) end
+
     req.headers:upsert("content-type", "application/json")
     req.headers:upsert("accept", "text/event-stream")
 

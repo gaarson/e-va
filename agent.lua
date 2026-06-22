@@ -1,4 +1,5 @@
 local utils = require("utils")
+local inspect = require('inspect')
 local agent_home = os.getenv("AGENT_HOME") or "."
 local project_root = os.getenv("PROJECT_ROOT") or "."
 
@@ -22,6 +23,8 @@ end
 config = utils.apply_agent_defaults(config)
 
 local llm = require("llm_handler")
+local optimizer = require("optimizer")
+
 local logger = require("logger")
 local Context = require("context")
 local registry = require("tool_registry")
@@ -152,18 +155,17 @@ local function parse_think_tags(text, is_reasoning)
             thought = content:sub(start_idx + 7, end_idx - 1)
             content = prefix .. content:sub(end_idx + 8)
         else
-            thought = content:sub(start_idx + 7)
-            content = prefix
+            content = prefix .. content:sub(start_idx)
+            thought = ""
         end
     elseif is_reasoning then
-        -- Неявный старт: текст является мыслью до закрывающего тега
         local end_idx = content:find("</think>")
         if end_idx then
             thought = content:sub(1, end_idx - 1)
             content = content:sub(end_idx + 8)
         else
-            thought = content
-            content = ""
+            content = content
+            thought = ""
         end
     end
 
@@ -185,6 +187,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local memory_budget = math.floor(available_tokens * limits.MEMORY_RATIO)
     local chat_budget = available_tokens - memory_budget
 
+    local max_commands = ctx:calculate_max_commands(agent_name, available_tokens)
+
     local memory_block = ctx:get_memory_block(memory_budget)
     local sys_prompt_text = load_prompt(agent_cfg.prompt_file)
 
@@ -192,6 +196,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ctx:get_search_digest(digest_budget)
+
+    local command_limit_info = ctx:get_command_limit_info(agent_name, available_tokens)
 
     local has_delegate = false
     local has_complete = false
@@ -213,29 +219,59 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 
     local engine_directives = string.format([[
 ==================================================
-⚙️ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
-%s
-2. STRICT TOOL SYNTAX: You MUST wrap all tool executions STRICTLY in `<cmd>tool:args</cmd>` tags.
-WARNING: DO NOT use `<tool_call>`, `<function>`, or standard markdown blocks to execute tools. This will crash the system.
-Example: <cmd>read_file:src/main.c</cmd>
-3. EXECUTION ORDER: The system parses and executes commands from the END of your response. Place critical commands at the end.
-==================================================]], pipeline_rule)
+ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
+  %s
+  2. STRICT TOOL SYNTAX: You MUST wrap all tool executions STRICTLY in `<cmd>tool:args</cmd>` tags.
+  Example: <cmd>read_file:src/main.c</cmd>
+  3. EXECUTION ORDER: The system parses and executes commands from the END of your response. Place critical commands at the end.
+  4. %s
+==================================================]], pipeline_rule, command_limit_info)
 
 
-    local combined_system_prompt = sys_prompt_text .. "\n\n" ..
-                                   toolchain_manifest .. "\n\n" ..
-                                   ctx:get_report(agent_name) .. "\n\n" ..
-                                   memory_block .. "\n\n" ..
-                                   search_digest .. "\n\n" ..
-                                   ctx:get_thoughts_digest() .. "\n\n" ..
-                                   engine_directives
+    local system_prompt = ctx:get_system_prompt(agent_name, agent_cfg)
+    local dynamic_context = ctx:get_dynamic_context(agent_name, memory_budget)
 
-    local messages = { { role = "system", content = combined_system_prompt } }
+    -- print(system_prompt)
+    -- print('\n\n !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! \n\n')
+    -- print(dynamic_context)
+
+    if ctx.task_summary == "" and ctx.execution_plan and #ctx.execution_plan > 0 then
+        local current_task = ctx.execution_plan[ctx.current_task_index]
+        if current_task then
+            ctx:update_summary(string.format("Task: %s. File: %s. Status: Started.", current_task.instruction, current_task.file))
+            -- Пересобираем контекст с новым саммари
+            dynamic_context = ctx:get_dynamic_context(agent_name, memory_budget)
+        end
+    end
+
+    local messages = { { role = "system", content = system_prompt } }
+    if dynamic_context ~= "" then
+        table.insert(messages, { role = "user", content = dynamic_context })
+    end
 
     local chat_buffer = {}
     local current_chat_cost = 0
     local history = ctx:get_history(agent_name)
     local history_len = #history
+
+    local REINFORCEMENT_INTERVAL = 5
+    if turn > 1 and turn % REINFORCEMENT_INTERVAL == 0 then
+        local current_task = ctx.execution_plan[ctx.current_task_index]
+        if current_task then
+            local reminder = string.format(
+                "\n[SYSTEM REMINDER]: You are currently working on Step %d/%d.\n" ..
+                "Task: %s\n" ..
+                "File: %s\n" ..
+                "Please ensure you are still following the plan.",
+                ctx.current_task_index,
+                #ctx.execution_plan,
+                current_task.instruction,
+                current_task.file
+            )
+            table.insert(chat_buffer, { role = "user", content = reminder })
+            current_chat_cost = current_chat_cost + ctx:estimate_tokens(reminder)
+        end
+    end
 
     if history_len > 0 then
         for i = history_len, 1, -1 do
@@ -248,7 +284,7 @@ Example: <cmd>read_file:src/main.c</cmd>
         end
     end
 
-    local total_ctx_tokens = ctx:estimate_tokens(combined_system_prompt)
+    local total_ctx_tokens = ctx:estimate_tokens(system_prompt .. dynamic_context)
 
     if history_len == 0 then
         if ctx.handoff_memo and ctx.handoff_memo ~= "" then
@@ -295,6 +331,8 @@ Example: <cmd>read_file:src/main.c</cmd>
         payload = messages
     })
     logger.log_context(turn, agent_name .. "_PROMPT", trace_dump)
+
+    -- logger.info(inspect(messages))
 
     logger.info(string.format("[TURN %d] Agent: %s | Active Context Tokens: ~%d / %d", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
 
@@ -461,11 +499,15 @@ Example: <cmd>read_file:src/main.c</cmd>
         end
 
         local res = registry.execute(cmd_block, ctx, agent_name)
+
+        local tool_name = cmd_block:match("^([^:]+)") or cmd_block
+
         if res.output and res.output ~= "" then
             local display_out = res.output
             if #display_out > 500 then display_out = display_out:sub(1, 500) .. "\n...[TRUNCATED IN UI]" end
             print("\27[36m" .. display_out .. "\27[0m")
             ctx:add_message(agent_name, "user", res.output)
+            ctx:add_tool_output(tool_name, res.output) 
         end
         if res.signal then signal = res.signal end
 
@@ -476,6 +518,13 @@ Example: <cmd>read_file:src/main.c</cmd>
     --      local warn_msg = "\n[SYSTEM]: You did not execute any valid <cmd>. Remember your directive. You MUST use tools to act, delegate using <cmd>delegate_plan</cmd>, or finish the turn using <cmd>task_complete</cmd>."
     --      ctx:add_message(agent_name, "user", warn_msg)
     -- end
+
+    local OPTIMIZER_INTERVAL = 3
+    local context_usage_ratio = total_ctx_tokens / (config.LIMITS.MAX_CONTEXT or 250000)
+    
+    if turn % OPTIMIZER_INTERVAL == 0 or context_usage_ratio > 0.7 then
+        pcall(optimizer.analyze_and_optimize, ctx, config)
+    end
 
     utils.write_file(STATE_FILE, ctx:snapshot())
 
@@ -513,10 +562,6 @@ local function execute_pipeline()
                     if not user_input or user_input == "/exit" then
                         print("\n\27[31m[SYSTEM] User aborted the execution.\27[0m")
                         os.exit(0)
-                    elseif user_input == "/go" then
-                        print("\n\27[32m[SYSTEM] Moving to the next pipeline stage...\27[0m")
-                        stage_complete = true
-                        break
                     elseif user_input == "/go" then
                         print("\n\27[32m[SYSTEM] Moving to the next pipeline stage...\27[0m")
                         stage_complete = true

@@ -14,7 +14,7 @@ function M.get()
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
         CHARS_PER_TOKEN = 3.5,
-        MCP_MAX_OUTPUT_TOKENS = 12000
+        MCP_MAX_OUTPUT_TOKENS = 32000
     }
 
     cfg.PIPELINE_SETTINGS = {
@@ -29,33 +29,34 @@ function M.get()
 
     local BASE_PARAMS = {
         stream = true,
-        stop = nil,
+        -- stop={ "<|im_end|>", "<|endoftext|>", "</tool_call>" },
+        stop_token_ids = { 248046, 248044 },
         -- peculative_ngram = true,
         stream_options = { include_usage = true }
     }
 
     local SAMPLERS = {
         ANALYTICAL = {
-            max_tokens = 1024,
-            temperature = 0.5,
+            max_tokens = 8192,
+            temperature = 0.3,
             -- top_p = 0.95,
             -- top_k = 40,
             -- min_p = 0.02,
-            repetition_penalty = 1.05,
-            chat_template_kwargs = {enable_thinking = false},
-            frequency_penalty = 0.3,
-            presence_penalty = 0.3
+            -- repetition_penalty = 1.02,
+            chat_template_kwargs = {enable_thinking = true},
+            -- frequency_penalty = 1.1,
+            -- presence_penalty = 0.0
         },
         ENGINEERING = {
-            max_tokens = 1024,
+            max_tokens = 8192,
             temperature = 0.1,
             -- top_p = 0.95,
             -- top_k = 40,
             -- min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
-            repetition_penalty = 1.05,
-            frequency_penalty = 0.3,
-            presence_penalty = 0.3
+            -- repetition_penalty = 1.02,
+            -- frequency_penalty = 1.1,
+            -- presence_penalty = 0.0
         }
     }
 
@@ -63,21 +64,40 @@ function M.get()
         url = os.getenv("LLM_URL") or "http://localhost:8000/v1/chat/completions",
         model = os.getenv("LLM_MODEL") or "default-model",
         is_reasoning = false,
-        params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL)
+        params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
+        reasoning_config = {
+            auto_toggle = true, -- Разрешить агенту самому включать/выключать мысли
+            complexity_threshold = 0.7, -- Если оценка сложности > 0.7, включаем мысли
+            max_thought_tokens = 2048 -- Лимит токенов на один блок мыслей
+        }
     }
 
+    -- Добавь в возвращаемую таблицу cfg:
+    cfg.OPTIMIZER_AGENT = {
+        name = "OPTIMIZER",
+        url = "https://zo-diak.com/ai/v1/chat/completions",
+        model = "Qwen3.5-27B-AWQ",
+        token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+        is_reasoning = true,
+        params = {
+            stream = true,
+            temperature = 0.1,
+            max_tokens = 1024
+        }
+    }
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
             -- url = "http://192.168.0.102:8000/v1/chat/completions",
             url = "https://zo-diak.com/ai/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-            -- is_reasoning = true,
-            model = "Qwopus3.6-27B",
+            is_reasoning = true,
+            model = "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = {
-              "read_file", "read_chunk", "search", "mcp_browser_*",  "task_complete", "explore_tree", "shell", "delegate_plan", "ask_user", "outline", "pin", "unpin"
+              "read_file", "read_files", "read_chunk", "search", "mcp_browser_*",  "task_complete", "explore_tree", "shell", "delegate_plan", "ask_user", "outline", "pin", "unpin",
+              "optimize_context"
             }
         },
         CODER = {
@@ -86,11 +106,12 @@ function M.get()
             url = "https://zo-diak.com/ai/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
-            model = "Qwopus3.6-27B",
+            model = "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = {
-              "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin"
+              "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin",
+              "optimize_context"
             }
         }
     }

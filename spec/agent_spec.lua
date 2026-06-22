@@ -18,7 +18,24 @@ describe("Agent Bootstrapper Mode (--bootstrap)", function()
         os.remove(test_state_file)
         stub(os, "exit").invokes(function(code) error("EXIT:" .. code) end)
         -- _G.print = function() end
+        
+        local utils = require("utils")
+        local original_load_config = utils.load_config
+        stub(utils, "load_config").invokes(function(path)
+            local cfg = original_load_config(path)
+            if cfg and cfg.PIPELINE_SETTINGS then
+                cfg.PIPELINE_SETTINGS.MAX_TURNS = 10
+            end
+            return cfg
+        end)
     end)
+
+    after_each(function()
+        local utils = require("utils")
+        if utils.load_config and utils.load_config.revert then utils.load_config:revert() end
+    end)
+
+    -- Reverted after_each below is handled separately; this block closes the describe scope properly.
 
     after_each(function()
         os.exit:revert()
