@@ -203,7 +203,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local search_digest = ctx:get_search_digest(digest_budget)
 
     -- System prompt is now assembled centrally in context/init.lua:get_system_prompt()
-    local system_prompt = ctx:get_system_prompt(agent_name, agent_cfg)
+    local system_prompt = ctx:get_system_prompt(agent_cfg)
     -- dynamic_context removed: replaced by recency block injection in last user message
 
     local messages = { { role = "system", content = system_prompt } }
@@ -244,10 +244,13 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     end
 
     -- Recency block injection: APPEND to the LAST user message in chat_buffer
-    local recency_block = ctx:get_recency_block(ctx)
+    local recency_block = ctx:get_recency_block()
     for i = #chat_buffer, 1, -1 do
         if chat_buffer[i].role == "user" then
             chat_buffer[i].content = chat_buffer[i].content .. "\n\n" .. recency_block
+            if search_digest and search_digest ~= "" then
+                chat_buffer[i].content = chat_buffer[i].content .. "\n\n" .. search_digest
+            end
             break
         end
     end
@@ -415,7 +418,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             content = summarized
             logger.info("[AGENT] Successfully recovered from unclosed reasoning.")
 
-            ctx:add_message(agent_name, "user", "[SYSTEM RECOVERY: Your previous generation was interrupted. I have reconstructed your intent from the unclosed reasoning block. IMPORTANT: You MUST output at least one <cmd> command tag in your response. Do NOT output only reasoning text. Proceed with the next steps based on this summary.]\n")
+            ctx:add_message(agent_name, "user", "[SYSTEM RECOVERY: Your previous generation was interrupted. I have reconstructed your intent from the unclosed reasoning block. Proceed with the next steps based on this summary.]\n")
         else
             logger.error("[AGENT] Failed to recover from unclosed reasoning. Discarding thought.")
             thought = nil
@@ -468,6 +471,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         ctx.consecutive_recoveries = 0
 
         local tool_name = cmd_block:match("^([^:]+)") or cmd_block
+
+        ctx:add_tool_output(tool_name, res.output or "")
 
         if res.output and res.output ~= "" then
             local display_out = res.output
@@ -657,6 +662,22 @@ if not restored then
         config.AGENTS = config.AGENTS or {}
         local fallback_agent = config.AGENTS.ARCHITECT or {}
 
+        -- Validate bootstrap prerequisites
+        local has_url = fallback_agent.url or os.getenv("LLM_URL")
+        local has_model = fallback_agent.model or os.getenv("LLM_MODEL")
+        
+        if not has_url then
+            logger.error("[BOOTSTRAP] FATAL: No LLM URL found in config.AGENTS.ARCHITECT or env var LLM_URL.")
+            print("\n\27[31m[FATAL] Cannot bootstrap: Missing LLM URL. Set config.AGENTS.ARCHITECT.url or export LLM_URL.\27[0m")
+            os.exit(1)
+        end
+        
+        if not has_model then
+            logger.error("[BOOTSTRAP] FATAL: No LLM Model found in config.AGENTS.ARCHITECT or env var LLM_MODEL.")
+            print("\n\27[31m[FATAL] Cannot bootstrap: Missing LLM Model. Set config.AGENTS.ARCHITECT.model or export LLM_MODEL.\27[0m")
+            os.exit(1)
+        end
+
         config.AGENTS.BOOTSTRAPPER = {
             name = "BOOTSTRAPPER",
             url = fallback_agent.url or os.getenv("LLM_URL") or "http://127.0.0.1:8000/v1/chat/completions",
@@ -677,14 +698,42 @@ if not restored then
 
         ctx = Context.new(config)
 
-        local trigger_msg = [[
+        local function detect_lint_command()
+            local root = config.PROJECT_ROOT
+
+            -- Check for Node.js project
+            if utils.read_file_range(root .. "/package.json") then
+                return "npm run lint || npm test || echo 'No lint/test script in package.json'"
+            end
+
+            -- Check for Rust project
+            if utils.read_file_range(root .. "/Cargo.toml") then
+                return "cargo clippy -- -D warnings || cargo test || echo 'No lint/test configured'"
+            end
+
+            -- Check for Go project
+            if utils.read_file_range(root .. "/go.mod") then
+                return "go vet ./... || go test ./... || echo 'No lint/test configured'"
+            end
+
+            -- Check for Makefile-based project
+            if utils.read_file_range(root .. "/Makefile") then
+                return "make lint || make test || echo 'No lint/test target in Makefile'"
+            end
+
+            -- Fallback
+            return "echo 'No standard project manifest found (package.json/Cargo.toml/go.mod/Makefile)'"
+        end
+
+        local lint_cmd = detect_lint_command()
+        local trigger_msg = string.format([[
 1. Explore the project.
-2. Run 'npm run lint:write' (piped through head) to see current errors.
-3. Generate .e-va-conf/config.lua. 
+2. Run '%s' (piped through head) to see current errors.
+3. Generate .e-va-conf/config.lua.
 4. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
 5. Generate MD prompts for your agents.
 Use <cmd>task_complete</cmd> when the scaffold is ready.
-]]
+]], lint_cmd)
 
         if instruction and instruction ~= "" then
             trigger_msg = trigger_msg .. "\n\n[USER CONTEXT]: " .. instruction

@@ -10,8 +10,8 @@ function M.new(config)
     return self
 end
 
-function M.reset(self)
-    self.recent_tool_outputs = {}
+	function M:reset()
+	    self.recent_tool_outputs = {}
     self.max_recent_tools = 10  -- Добавлено: лимит для recent_tool_outputs
     self.knowledge_base = {}
     self.file_access_rank = {}
@@ -36,23 +36,23 @@ function M.reset(self)
     self.consecutive_recoveries = 0 -- Track consecutive unclosed-thought recovery attempts
 end
 
-function M.track_requested_file(self, path)
-    if not path then return end
-    self.turn_requested_files[path] = true
-end
+	function M:track_requested_file(path)
+	    if not path then return end
+	    self.turn_requested_files[path] = true
+	end
 
-function M.clear_turn_requested_files(self)
-    self.turn_requested_files = {}
-end
-
-function M.update_summary(self, new_summary)
+	function M:clear_turn_requested_files()
+	    self.turn_requested_files = {}
+	end
+	
+	function M:update_summary(new_summary)
     self.task_summary = utils.trim(new_summary)
     -- Добавляем действие в историю для прозрачности
     self:add_action("SUMMARY_UPDATE", "Updated task summary")
 end
 
-function M:get_file_context(self, file_info)
-    local content = self.knowledge_base[file_info.path]
+	function M:get_file_context(file_info)
+	    local content = self.knowledge_base[file_info.path]
     if not content then return "" end
     
     local raw_lines = utils.read_lines_raw(content)
@@ -74,7 +74,7 @@ function M:get_file_context(self, file_info)
     )
 end
  
-function M.optimize_context(self, instructions)
+	function M:optimize_context(instructions)
     -- instructions может быть таблицей с командами, например:
     -- { remove_file = "path/to/file", pin_file = "path/to/core.h", update_summary = "New summary text" }
     -- Поддерживает батч-операции: remove_files, pin_files, unpin_files (массивы)
@@ -125,18 +125,18 @@ end
 -- НОВЫЙ: Распределенный контекст
 -- ============================================================================
 
-function M.get_system_prompt(self, agent_name, agent_cfg)
-    local sys_prompt_text = self:load_prompt(self, agent_cfg.prompt_file)
-    local toolchain_manifest = self:generate_tool_manifest(self, agent_cfg.allowed_tools)
-    local engine_directives = self:get_engine_directives(self, agent_cfg)
-    
+		function M:get_system_prompt(agent_cfg)
+		    local sys_prompt_text = self:load_prompt(agent_cfg.prompt_file)
+	    local toolchain_manifest = self:generate_tool_manifest(agent_cfg.allowed_tools)
+	    local engine_directives = self:get_engine_directives(agent_cfg)
+
     return sys_prompt_text .. "\n" ..
            toolchain_manifest .. "\n\n" ..
            engine_directives
 end
 
-function M.add_tool_output(self, tool_name, output)
-    if not output or output == "" then return end
+	function M:add_tool_output(tool_name, output)
+	    if not output or output == "" then return end
     -- Обрезаем гигантские выводы, чтобы не сожрать токен-бюджет динамического контекста
     local max_len = 1500
     local truncated_output = output
@@ -154,7 +154,7 @@ function M.add_tool_output(self, tool_name, output)
     end
 end
 
-function M.calculate_max_commands(self, agent_name, available_tokens)
+	function M:calculate_max_commands(agent_name, available_tokens)
     local agent_cfg = self.config.AGENTS[agent_name]
     if not agent_cfg then return 5 end
     
@@ -177,8 +177,8 @@ function M.calculate_max_commands(self, agent_name, available_tokens)
     return base_limit
 end
 
-function M.get_command_limit_info(self, agent_name, available_tokens)
-    local max_cmds = self:calculate_max_commands(agent_name, available_tokens)
+	function M:get_command_limit_info(agent_name, available_tokens)
+	    local max_cmds = self:calculate_max_commands(agent_name, available_tokens)
     return string.format(
         "COMMAND LIMIT: You can execute up to %d commands per turn. " ..
         "Use batch operations (e.g., read_files, search_and_read) to maximize efficiency. " ..
@@ -195,14 +195,14 @@ function M:build_system_state_xml()
         xml = xml .. "\n  <task_summary>" .. indented_summary .. "\n  </task_summary>"
     end
 
-    if self.execution_plan and #self.execution_plan > 0 then
-        local plan_text = self:get_execution_plan_text(self)
+	    if self.execution_plan and #self.execution_plan > 0 then
+	        local plan_text = self:get_execution_plan_text()
         local indented_plan = "\t" .. plan_text:gsub("\n", "\n\t")
         xml = xml .. "\n  <execution_plan>" .. indented_plan .. "\n  </execution_plan>"
     end
 
-    if #self.last_actions > 0 then
-        local actions_text = self:get_last_actions_text(self)
+	    if #self.last_actions > 0 then
+	        local actions_text = self:get_last_actions_text()
         local indented_actions = "\t" .. actions_text:gsub("\n", "\n\t")
         xml = xml .. "\n  <last_actions>" .. indented_actions .. "\n  </last_actions>"
     end
@@ -224,7 +224,7 @@ function M:compress_search_line(line)
     return pure_code:gsub("^%s+", ""):gsub("%s+", " ")
 end
 
-	function M.get_recency_block(self)
+		function M:get_recency_block()
 	    local parts = {}
 
 	    -- 1. Build <system_state> block using shared helper
@@ -257,15 +257,21 @@ end
 	                    table.insert(parts, file_context)
 	                end
 	            end
-	        end
-	    end
+        end
+    end
 
-	    -- 4. Return concatenated string
-	    return table.concat(parts, "\n")
+    -- 4. Inject recent tool outputs for recency awareness
+    local tool_outputs = self:get_recency_tool_outputs()
+    if tool_outputs ~= "" then
+        table.insert(parts, tool_outputs)
+    end
+
+    -- 5. Return concatenated string
+    return table.concat(parts, "\n")
 	end
 
-function M.get_memory_block(self, max_tokens)
-    max_tokens = max_tokens or 10000
+	function M:get_memory_block(max_tokens)
+	    max_tokens = max_tokens or 10000
     local current_tokens = 0
     local memory_parts = {}
     
@@ -282,16 +288,16 @@ function M.get_memory_block(self, max_tokens)
         end
     end
     
-    -- 2. Сжатая история изменений
-    local changes_text = self:get_changes_summary(self)
+	    -- 2. Сжатая история изменений
+	    local changes_text = self:get_changes_summary()
     local cost = self:estimate_tokens(changes_text)
     if current_tokens + cost < max_tokens then
         table.insert(memory_parts, changes_text)
         current_tokens = current_tokens + cost
     end
     
-    -- 3. Ключевые выводы
-    local insights_text = self:get_insights_summary(self)
+	    -- 3. Ключевые выводы
+	    local insights_text = self:get_insights_summary()
     cost = self:estimate_tokens(insights_text)
     if current_tokens + cost < max_tokens then
         table.insert(memory_parts, insights_text)
@@ -305,8 +311,8 @@ end
 -- Вспомогательные функции для распределенного контекста
 -- ============================================================================
 
-function M:get_execution_plan_text(self)
-    if not self.execution_plan or #self.execution_plan == 0 then
+	function M:get_execution_plan_text()
+	    if not self.execution_plan or #self.execution_plan == 0 then
         return ""
     end
     
@@ -322,8 +328,8 @@ function M:get_execution_plan_text(self)
     return text
 end
 
-function M:get_last_actions_text(self)
-    if #self.last_actions == 0 then return "" end
+	function M:get_last_actions_text()
+	    if #self.last_actions == 0 then return "" end
     
     local text = "\n=== LAST ACTIONS ===\n"
     for _, action in ipairs(self.last_actions) do
@@ -332,8 +338,8 @@ function M:get_last_actions_text(self)
     return text
 end
 
-function M:get_recent_thoughts_text(self)
-    if not self.thoughts or #self.thoughts == 0 then return "" end
+	function M:get_recent_thoughts_text()
+	    if not self.thoughts or #self.thoughts == 0 then return "" end
     
     local text = "\n=== RECENT THOUGHTS ===\n"
     local start_idx = math.max(1, #self.thoughts - 140) -- Только последние 140 мысли
@@ -344,8 +350,8 @@ function M:get_recent_thoughts_text(self)
     return text
 end
 
-function M:get_changes_summary(self)
-    local text = "\n=== CHANGES SUMMARY ===\n"
+	function M:get_changes_summary()
+	    local text = "\n=== CHANGES SUMMARY ===\n"
     for path, state in pairs(self.file_states) do
         if state == "RECENTLY_MODIFIED" then
             text = text .. string.format("- %s: modified\n", path)
@@ -354,8 +360,8 @@ function M:get_changes_summary(self)
     return text
 end
 
-function M:get_insights_summary(self)
-    if not next(self.search_history) then return "" end
+	function M:get_insights_summary()
+	    if not next(self.search_history) then return "" end
     
     local text = "\n=== SEARCH INSIGHTS ===\n"
     for query, result in pairs(self.search_history) do
@@ -372,7 +378,7 @@ function M:get_insights_summary(self)
     return text
 end
 
-function M:get_engine_directives(self, agent_cfg)
+function M:get_engine_directives(agent_cfg)
     local has_delegate = false
     local has_complete = false
     for _, t in ipairs(agent_cfg.allowed_tools or {}) do
@@ -401,8 +407,8 @@ Example: <cmd>read_file:src/main.c</cmd>
 ==================================================]], pipeline_rule)
 end
 
-function M:load_prompt(self, file_path)
-    if not file_path then return "You are an AI assistant. Follow the user's instructions." end
+	function M:load_prompt(file_path)
+	    if not file_path then return "You are an AI assistant. Follow the user's instructions." end
     local local_path = self.config.PROJECT_ROOT .. "/.e-va-conf/" .. file_path
     local content = utils.read_file_range(local_path)
     if not content then
@@ -419,7 +425,7 @@ function M:load_prompt(self, file_path)
     return content
 end
 
-function M:generate_tool_manifest(self, allowed_tools)
+function M:generate_tool_manifest(allowed_tools)
     local registry = require("tool_registry")
     return registry.generate_tool_manifest(allowed_tools)
 end
@@ -428,8 +434,8 @@ end
 -- Обновленные методы для работы с распределенным контекстом
 -- ============================================================================
 
-function M.add_action(self, action_type, summary)
-    table.insert(self.last_actions, {
+	function M:add_action(action_type, summary)
+	    table.insert(self.last_actions, {
         type = action_type,
         summary = summary
     })
@@ -438,10 +444,10 @@ function M.add_action(self, action_type, summary)
     end
 end
 
-function M.get_history(self, agent_name)
-    self.agent_histories[agent_name] = self.agent_histories[agent_name] or {}
-    return self.agent_histories[agent_name]
-end
+	function M:get_history(agent_name)
+	    self.agent_histories[agent_name] = self.agent_histories[agent_name] or {}
+	    return self.agent_histories[agent_name]
+	end
 
 function M:should_squash(agent_name)
     local history = self:get_history(agent_name)
@@ -522,8 +528,8 @@ function M:get_recency_tool_outputs()
     return table.concat(parts)
 end
 
-function M.add_message(self, agent_name, role, content)
-    local history = self:get_history(agent_name)
+	function M:add_message(agent_name, role, content)
+	    local history = self:get_history(agent_name)
     if #history > 0 and history[#history].role == role then
         logger.warn("Replacing consecutive " .. role .. " message")
         history[#history] = { role = role, content = content }
@@ -534,17 +540,17 @@ function M.add_message(self, agent_name, role, content)
     self:prune_history(agent_name)
 end
 
-function M.drop_last_message(self, agent_name)
-    local history = self:get_history(agent_name)
-    if #history > 0 then
-        table.remove(history)
-        return true
-    end
-    return false
-end
+	function M:drop_last_message(agent_name)
+	    local history = self:get_history(agent_name)
+	    if #history > 0 then
+	        table.remove(history)
+	        return true
+	    end
+	    return false
+	end
 
-function M.replace_last_assistant_message(self, agent_name, new_content)
-    local history = self:get_history(agent_name)
+	function M:replace_last_assistant_message(agent_name, new_content)
+	    local history = self:get_history(agent_name)
     for i = #history, 1, -1 do
         if history[i].role == "assistant" then
             history[i].content = new_content
@@ -554,43 +560,43 @@ function M.replace_last_assistant_message(self, agent_name, new_content)
     return false
 end
 
-function M.add_thought(self, turn, thought_text)
-    self.thoughts = self.thoughts or {}
+	function M:add_thought(turn, thought_text)
+	    self.thoughts = self.thoughts or {}
     local clean_thought = utils.trim(thought_text)
     if clean_thought == "" then return end
     table.insert(self.thoughts, { turn = turn, content = clean_thought })
 end
 
-function M.get_thoughts_digest(self)
-    if not self.thoughts or #self.thoughts == 0 then return "" end
-    local out = {"\n!=== AGENT RECENT THOUGHTS ===!"}
-    for _, th in ipairs(self.thoughts) do
-        table.insert(out, th.content)
-    end
-    return table.concat(out, "\n")
-end
+	function M:get_thoughts_digest()
+	    if not self.thoughts or #self.thoughts == 0 then return "" end
+	    local out = {"\n!=== AGENT RECENT THOUGHTS ===!"}
+	    for _, th in ipairs(self.thoughts) do
+	        table.insert(out, th.content)
+	    end
+	    return table.concat(out, "\n")
+	end
 
-function M.touch_file(self, path)
-    if not path or not self.knowledge_base[path] then return end
+	function M:touch_file(path)
+	    if not path or not self.knowledge_base[path] then return end
     self.global_access_counter = self.global_access_counter + 1
     self.file_access_rank[path] = self.global_access_counter
 end
 
-function M.add_file(self, path, content)
-    self.knowledge_base[path] = content
+	function M:add_file(path, content)
+	    self.knowledge_base[path] = content
     self.file_states[path] = "READ"
     self:touch_file(path)
 end
 
-function M.has_searched(self, query)
+	function M:has_searched(query)
     return self.search_history[query] ~= nil
 end
 
-function M.add_search_result(self, query, result)
-    self.search_history[query] = result
+	function M:add_search_result(query, result)
+	    self.search_history[query] = result
 end
 
-function M.pin_file(self, path)
+	function M:pin_file(path)
     if self.knowledge_base[path] then
         self.pinned_files[path] = true
         return true
@@ -598,15 +604,15 @@ function M.pin_file(self, path)
     return false
 end
 
-function M.unpin_file(self, path)
-    if self.pinned_files[path] then
-        self.pinned_files[path] = nil
-        return true
-    end
-    return false
-end
+	function M:unpin_file(path)
+	    if self.pinned_files[path] then
+	        self.pinned_files[path] = nil
+	        return true
+	    end
+	    return false
+	end
 
-function M.load_images(self, dir_path)
+	function M:load_images(dir_path)
     if not dir_path or dir_path == "" then
         self.images = {}
         self.images_loaded = false
@@ -616,7 +622,7 @@ function M.load_images(self, dir_path)
     self.images_loaded = (#self.images > 0)
 end
 
-function M.get_image_content_parts(self)
+	function M:get_image_content_parts()
     if not self.images or #self.images == 0 then return {} end
     local parts = {}
     for _, img in ipairs(self.images) do
@@ -630,7 +636,7 @@ function M.get_image_content_parts(self)
     return parts
 end
 
-function M.snapshot(self)
+	function M:snapshot()
     local state = {
         knowledge_base = self.knowledge_base,
         file_access_rank = self.file_access_rank,
@@ -663,8 +669,8 @@ function M.snapshot(self)
     return json:encode(state)
 end
 
-function M.load_from_snapshot(self, json_str)
-    local status, state = pcall(function() return json:decode(json_str) end)
+	function M:load_from_snapshot(json_str)
+	    local status, state = pcall(function() return json:decode(json_str) end)
     if not status or not state then return false, "Corrupted JSON" end
     self.knowledge_base = state.knowledge_base or {}
     self.file_access_rank = state.file_access_rank or {}
@@ -695,13 +701,13 @@ function M.load_from_snapshot(self, json_str)
     return true
 end
 
-function M.estimate_tokens(self, text)
+	function M:estimate_tokens(text)
     if not text then return 0 end
     local divisor = (self.config.LIMITS and self.config.LIMITS.CHARS_PER_TOKEN) or 3.5
     return math.ceil(#text / divisor)
 end
 
-function M.get_search_digest(self, max_tokens)
+	function M:get_search_digest(max_tokens)
     if not next(self.search_history) then return "" end
     local digest_buffer = {"\n=== SEARCH DIGEST (Reference Snippets) ==="}
     local seen_hashes = {}
@@ -727,7 +733,7 @@ function M.get_search_digest(self, max_tokens)
     return table.concat(digest_buffer, "\n")
 end
 
-function M.get_report(self, agent_name)
+	function M:get_report(agent_name)
     local search_summary = ""
     local count = 0
     for _,_ in pairs(self.search_history) do count = count + 1 end
@@ -747,8 +753,8 @@ function M.get_report(self, agent_name)
     )
 end
 
-function M.sync_files(self)
-    local updated_files = {}
+	function M:sync_files()
+	    local updated_files = {}
     for path, old_content in pairs(self.knowledge_base) do
         local full_path = self.config.PROJECT_ROOT .. "/" .. path
         local new_content = utils.read_file_range(full_path)
@@ -760,7 +766,7 @@ function M.sync_files(self)
     return updated_files
 end
 
-function M.squash_last_mutation(self, agent_name)
+	function M:squash_last_mutation(agent_name)
     local history = self:get_history(agent_name)
     for i = #history, 1, -1 do
         local msg = history[i]

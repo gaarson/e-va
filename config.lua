@@ -17,9 +17,9 @@ function M.get()
         MCP_MAX_OUTPUT_TOKENS = 32000,
         -- History management limits
         MAX_HISTORY_MESSAGES = 200,  -- hard cap per agent history
-        MAX_HISTORY_TOKENS = 50000,  -- token cap per agent history
+        MAX_HISTORY_TOKENS = 160000,  -- token cap per agent history
         SQUASH_THRESHOLD_MESSAGES = 150,  -- trigger squash when history exceeds this
-        SQUASH_THRESHOLD_TOKENS = 40000,  -- trigger squash when history tokens exceed this
+        SQUASH_THRESHOLD_TOKENS = 120000,  -- trigger squash when history tokens exceed this
         INCLUDE_PINNED_IN_RECENCY = true,  -- auto-include pinned files in recency block
         DEDUP_TOOL_OUTPUTS = true  -- if true, do NOT add tool output as separate user message
     }
@@ -60,7 +60,7 @@ function M.get()
             top_p = 0.95,
             top_k = 40,
             min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = false},
+            chat_template_kwargs = {enable_thinking = true},
             frequency_penalty = 0.5
             -- presence_penalty = 0.0
         }
@@ -112,7 +112,7 @@ function M.get()
             -- url = "http://192.168.0.102:8000/v1/chat/completions",
             url = "https://zo-diak.com/ai/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-            -- is_reasoning = true,
+            is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
