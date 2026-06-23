@@ -23,6 +23,7 @@ local function register(registry)
                 local content, err = utils.read_file_range(full_path)
                 if content then
                     ctx:add_file(rel_path, content)
+                    ctx:track_requested_file(rel_path)
                     table.insert(results, string.format("- %s: Loaded successfully", rel_path))
                     loaded = loaded + 1
                 else

@@ -9,6 +9,7 @@ local function register(registry)
             local content, err = utils.read_file_range(full_path)
             if content then
                 ctx:add_file(rel_path, content)
+                ctx:track_requested_file(rel_path)
                 local file_context_xml = ctx:get_file_context(ctx, { path = rel_path, is_target = false, is_pinned = false, is_modified = false })
                 return { output = "\n[SYSTEM]: Successfully loaded '" .. rel_path .. "' into memory.\n\n" .. file_context_xml .. "\n\nProceed with your next step." }
             else

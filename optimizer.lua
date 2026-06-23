@@ -6,7 +6,10 @@ local utils = require("utils")
 
 function M.analyze_and_optimize(ctx, config)
     local opt_agent = config.OPTIMIZER_AGENT
-    if not opt_agent then return end
+    if not opt_agent then 
+        logger.warn("[OPTIMIZER] SKIPPED: config.OPTIMIZER_AGENT is not defined.")
+        return 
+    end
 
     logger.info("[OPTIMIZER] Starting background context analysis...")
     
@@ -22,15 +25,18 @@ function M.analyze_and_optimize(ctx, config)
     
     local pinned_list = {}
     for k, _ in pairs(ctx.pinned_files or {}) do table.insert(pinned_list, k) end
+
+    local thoughts_text = ctx:get_recent_thoughts_text(ctx)
     
     local context_brief = string.format(
-        "TASK SUMMARY: %s\nCURRENT STEP: %d/%d\nLOADED FILES: %s\nRECENT ACTIONS: %s\nPINNED: %s",
+        "TASK SUMMARY: %s\nCURRENT STEP: %d/%d\nLOADED FILES: %s\nRECENT ACTIONS: %s\nPINNED: %s\n",
         ctx.task_summary or "None",
         ctx.current_task_index,
         ctx.execution_plan and #ctx.execution_plan or 0,
         table.concat(loaded_files, ", "),
         table.concat(recent_actions, " | "),
-        table.concat(pinned_list, ", ")
+        table.concat(pinned_list, ", "),
+        thoughts_text
     )
     
     -- 2. Формируем промпт для Оптимизатора
@@ -103,6 +109,124 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
     else
         local debug_snip = json_match:sub(1, 100) .. "..."
         logger.warn("[OPTIMIZER] Failed to parse JSON response. Engine saw: " .. debug_snip)
+    end
+end
+
+function M.extract_and_optimize_prompt(ctx, config)
+    local opt_agent = config.OPTIMIZER_AGENT
+    if not opt_agent then 
+        logger.warn("[OPTIMIZER] SKIPPED: config.OPTIMIZER_AGENT is not defined.")
+        return nil 
+    end
+
+    -- 1. Extract the current prompt from prompt_history
+    local current_prompt = nil
+    if ctx.prompt_history and #ctx.prompt_history > 0 then
+        current_prompt = ctx.prompt_history[#ctx.prompt_history]
+    end
+    
+    if not current_prompt then
+        logger.warn("[OPTIMIZER] No prompt found in prompt_history.")
+        return nil
+    end
+
+    logger.info("[OPTIMIZER] Starting prompt optimization...")
+
+    -- 2. Form the optimization request
+    local prompt = string.format([[
+You are an expert Prompt Optimization Agent. Your job is to analyze and improve the given prompt for clarity, conciseness, and effectiveness.
+
+CURRENT PROMPT:
+%s
+
+INSTRUCTIONS:
+1. Improve the prompt's clarity and structure
+2. Remove any redundant or unnecessary information
+3. Ensure the prompt is concise while maintaining all critical instructions
+4. Return ONLY the optimized prompt text, nothing else
+
+Return the optimized prompt as plain text without any markdown formatting or extra text.
+]], current_prompt)
+
+    local messages = {
+        { role = "system", content = "You are a Prompt Optimization AI. Output ONLY the optimized prompt text." },
+        { role = "user", content = prompt }
+    }
+
+    -- 3. Send to LLM for optimization (non-streaming)
+    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1 } })
+    if not res then
+        logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
+        return nil
+    end
+
+    local content = llm_handler.extract_content(res)
+    if not content then 
+        logger.warn("[OPTIMIZER] No content in response.")
+        return nil 
+    end
+
+    -- 4. Clean up the response (remove markdown code blocks if present)
+    local optimized_prompt = utils.trim(content:gsub("`+", ""))
+    
+    logger.info("[OPTIMIZER] Prompt optimization complete.")
+    return optimized_prompt
+end
+
+function M.summarize_unclosed_thought(unclosed_text, config)
+    local opt_agent = config.OPTIMIZER_AGENT
+    if not opt_agent then 
+        logger.warn("[OPTIMIZER] SKIPPED: config.OPTIMIZER_AGENT is not defined.")
+        return nil 
+    end
+
+    if not unclosed_text or #utils.trim(unclosed_text) == 0 then
+        logger.warn("[OPTIMIZER] No unclosed text provided.")
+        return nil
+    end
+
+    logger.info("[OPTIMIZER] Summarizing unclosed thought...")
+
+    -- Form the summarization request
+    local prompt = string.format([[
+You are an expert Thought Summarization Agent. Your job is to analyze incomplete or unclosed thinking text and summarize it into a concise, actionable output.
+
+UNCLOSED THOUGHT:
+%s
+
+INSTRUCTIONS:
+1. Identify the core intent and key points of the incomplete thought
+2. Summarize the thought in 1-3 concise sentences
+3. Focus on actionable insights or next steps
+4. Return ONLY the summarized text, nothing else
+
+Return the summary as plain text without any markdown formatting or extra text.
+]], unclosed_text)
+
+    local messages = {
+        { role = "system", content = "You are a Thought Summarization AI. Output ONLY the concise summary." },
+        { role = "user", content = prompt }
+    }
+    
+    -- Non-streaming call to the optimizer model
+    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1 } })
+    if not res then
+        logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
+        return nil
+    end
+    
+    local content = llm_handler.extract_content(res)
+    if not content then return nil end
+    
+    -- Clean up the response
+    local summary = utils.trim(content:gsub("`+", ""))
+    
+    if #summary > 0 then
+        logger.info("[OPTIMIZER] Summarized unclosed thought.")
+        return summary
+    else
+        logger.warn("[OPTIMIZER] Empty summary returned.")
+        return nil
     end
 end
 

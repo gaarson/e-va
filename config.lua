@@ -19,7 +19,8 @@ function M.get()
 
     cfg.PIPELINE_SETTINGS = {
         MAX_TURNS = 150,
-        ABORT_ON_FATAL = true
+        ABORT_ON_FATAL = true,
+        CONTEXT_INJECTION_MODE = "separate_message" -- "separate_message" or "append_to_last_user"
     }
 
     cfg.TASKS = {}
@@ -37,25 +38,23 @@ function M.get()
 
     local SAMPLERS = {
         ANALYTICAL = {
-            max_tokens = 8192,
+            max_tokens = 2048,
             temperature = 0.3,
-            -- top_p = 0.95,
-            -- top_k = 40,
-            -- min_p = 0.02,
-            -- repetition_penalty = 1.02,
+            top_p = 0.95,
+            top_k = 40,
+            min_p = 0.02,
             chat_template_kwargs = {enable_thinking = true},
-            -- frequency_penalty = 1.1,
+            frequency_penalty = 0.5
             -- presence_penalty = 0.0
         },
         ENGINEERING = {
             max_tokens = 8192,
             temperature = 0.1,
-            -- top_p = 0.95,
-            -- top_k = 40,
-            -- min_p = 0.02,
+            top_p = 0.95,
+            top_k = 40,
+            min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
-            -- repetition_penalty = 1.02,
-            -- frequency_penalty = 1.1,
+            frequency_penalty = 0.5
             -- presence_penalty = 0.0
         }
     }
@@ -65,11 +64,11 @@ function M.get()
         model = os.getenv("LLM_MODEL") or "default-model",
         is_reasoning = false,
         params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
-        reasoning_config = {
-            auto_toggle = true, -- Разрешить агенту самому включать/выключать мысли
-            complexity_threshold = 0.7, -- Если оценка сложности > 0.7, включаем мысли
-            max_thought_tokens = 2048 -- Лимит токенов на один блок мыслей
-        }
+        -- reasoning_config = {
+        --     auto_toggle = true, -- Разрешить агенту самому включать/выключать мысли
+        --     complexity_threshold = 0.7, -- Если оценка сложности > 0.7, включаем мысли
+        --     max_thought_tokens = 2048 -- Лимит токенов на один блок мыслей
+        -- }
     }
 
     -- Добавь в возвращаемую таблицу cfg:
@@ -78,11 +77,12 @@ function M.get()
         url = "https://zo-diak.com/ai/v1/chat/completions",
         model = "Qwen3.5-27B-AWQ",
         token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-        is_reasoning = true,
+        -- is_reasoning = true,
         params = {
             stream = true,
             temperature = 0.1,
-            max_tokens = 1024
+            chat_template_kwargs = {enable_thinking = false},
+            max_tokens = 2048
         }
     }
     cfg.AGENTS = {
@@ -96,8 +96,8 @@ function M.get()
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = {
-              "read_file", "read_files", "read_chunk", "search", "mcp_browser_*",  "task_complete", "explore_tree", "shell", "delegate_plan", "ask_user", "outline", "pin", "unpin",
-              "optimize_context"
+              "read_file", "read_files", "read_chunk", "search", "mcp_browser_*", "explore_tree", "shell", "delegate_plan", "ask_user", "outline", "pin", "unpin",
+              "optimize_context", -- "task_complete"
             }
         },
         CODER = {
@@ -110,8 +110,7 @@ function M.get()
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = {
-              "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin",
-              "optimize_context"
+              "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin", "optimize_context"
             }
         }
     }

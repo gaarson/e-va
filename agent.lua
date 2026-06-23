@@ -155,8 +155,13 @@ local function parse_think_tags(text, is_reasoning)
             thought = content:sub(start_idx + 7, end_idx - 1)
             content = prefix .. content:sub(end_idx + 8)
         else
-            content = prefix .. content:sub(start_idx)
-            thought = ""
+            if is_reasoning then
+                thought = content:sub(start_idx + 7)
+                content = prefix
+            else
+                content = prefix .. content:sub(start_idx)
+                thought = ""
+            end
         end
     elseif is_reasoning then
         local end_idx = content:find("</think>")
@@ -164,8 +169,8 @@ local function parse_think_tags(text, is_reasoning)
             thought = content:sub(1, end_idx - 1)
             content = content:sub(end_idx + 8)
         else
-            content = content
-            thought = ""
+            thought = content
+            content = ""
         end
     end
 
@@ -180,6 +185,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     if #synced_files > 0 then
         logger.info(string.format("[FS WATCHER] Auto-synced %d changed file(s): %s", #synced_files, table.concat(synced_files, ", ")))
     end
+
+    ctx:clear_turn_requested_files()
 
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
@@ -229,25 +236,9 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
 
 
     local system_prompt = ctx:get_system_prompt(agent_name, agent_cfg)
-    local dynamic_context = ctx:get_dynamic_context(agent_name, memory_budget)
-
-    -- print(system_prompt)
-    -- print('\n\n !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! \n\n')
-    -- print(dynamic_context)
-
-    if ctx.task_summary == "" and ctx.execution_plan and #ctx.execution_plan > 0 then
-        local current_task = ctx.execution_plan[ctx.current_task_index]
-        if current_task then
-            ctx:update_summary(string.format("Task: %s. File: %s. Status: Started.", current_task.instruction, current_task.file))
-            -- Пересобираем контекст с новым саммари
-            dynamic_context = ctx:get_dynamic_context(agent_name, memory_budget)
-        end
-    end
+    -- dynamic_context removed: replaced by recency block injection in last user message
 
     local messages = { { role = "system", content = system_prompt } }
-    if dynamic_context ~= "" then
-        table.insert(messages, { role = "user", content = dynamic_context })
-    end
 
     local chat_buffer = {}
     local current_chat_cost = 0
@@ -284,7 +275,16 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
         end
     end
 
-    local total_ctx_tokens = ctx:estimate_tokens(system_prompt .. dynamic_context)
+    -- Recency block injection: APPEND to the LAST user message in chat_buffer
+    local recency_block = ctx:get_recency_block(ctx)
+    for i = #chat_buffer, 1, -1 do
+        if chat_buffer[i].role == "user" then
+            chat_buffer[i].content = chat_buffer[i].content .. "\n\n" .. recency_block
+            break
+        end
+    end
+
+    local total_ctx_tokens = ctx:estimate_tokens(system_prompt)
 
     if history_len == 0 then
         if ctx.handoff_memo and ctx.handoff_memo ~= "" then
@@ -332,7 +332,7 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
     })
     logger.log_context(turn, agent_name .. "_PROMPT", trace_dump)
 
-    -- logger.info(inspect(messages))
+    logger.log_messages_pretty(messages, turn, agent_name, ctx)
 
     logger.info(string.format("[TURN %d] Agent: %s | Active Context Tokens: ~%d / %d", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
 
@@ -429,35 +429,22 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
     end
 
     local raw_content = llm.extract_content(response_data) or ""
-    -- local thought = ""
-    -- local content = raw_content
     local content, thought = parse_think_tags(raw_content, agent_cfg.is_reasoning)
 
-    -- local end_idx = content:find("</think>")
-    -- if end_idx then
-    --     local start_idx = content:find("<think>")
-    --     if start_idx and start_idx < end_idx then
-    --         thought = content:sub(start_idx + 7, end_idx - 1)
-    --         content = content:sub(1, start_idx - 1) .. content:sub(end_idx + 8)
-    --     else
-    --         thought = content:sub(1, end_idx - 1)
-    --         content = content:sub(end_idx + 8)
-    --     end
-    -- else
-    --     local start_idx = content:find("<think>")
-    --     if start_idx then
-    --         thought = content:sub(start_idx + 7)
-    --         content = content:sub(1, start_idx - 1)
-    --     end
-    -- end
-
-    -- if response_data.full_text then
-    --     content = utils.trim(response_data.full_text)
-    -- else
-    --     content = utils.trim(response_data.choices and response_data.choices[1] and response_data.choices[1].message and response_data.choices[1].message.content or "")
-    -- end
-
     content = utils.trim(content)
+
+    -- Unclosed reasoning detection and recovery
+    if thought and #thought > 0 and (#content == 0 or content == "") then
+        logger.warn("[AGENT] Detected unclosed reasoning block. Attempting recovery...")
+        local summarized = optimizer.summarize_unclosed_thought(thought, config)
+        if summarized then
+            content = summarized
+            logger.info("[AGENT] Successfully recovered from unclosed reasoning.")
+        else
+            logger.error("[AGENT] Failed to recover from unclosed reasoning. Discarding thought.")
+            thought = nil
+        end
+    end
 
     if thought ~= "" then ctx:add_thought(turn, thought) end
 
@@ -514,16 +501,13 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
         if signal == "PIPELINE_NEXT_STAGE" then break end
     end
 
-    -- if cmds_executed == 0 then
-    --      local warn_msg = "\n[SYSTEM]: You did not execute any valid <cmd>. Remember your directive. You MUST use tools to act, delegate using <cmd>delegate_plan</cmd>, or finish the turn using <cmd>task_complete</cmd>."
-    --      ctx:add_message(agent_name, "user", warn_msg)
-    -- end
-
-    local OPTIMIZER_INTERVAL = 3
+    local OPTIMIZER_INTERVAL = 5
     local context_usage_ratio = total_ctx_tokens / (config.LIMITS.MAX_CONTEXT or 250000)
     
     if turn % OPTIMIZER_INTERVAL == 0 or context_usage_ratio > 0.7 then
-        pcall(optimizer.analyze_and_optimize, ctx, config)
+        logger.info(string.format("[OPTIMIZER TRIGGER] turn=%d | ratio=%.2f", turn, context_usage_ratio))
+        local ok, err = pcall(optimizer.analyze_and_optimize, ctx, config)
+        if not ok then logger.error("[OPTIMIZER] pcall failed: " .. tostring(err)) end
     end
 
     utils.write_file(STATE_FILE, ctx:snapshot())

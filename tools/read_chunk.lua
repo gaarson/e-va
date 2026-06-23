@@ -12,6 +12,7 @@ local function register(registry)
 
             if ctx.knowledge_base[rel] then
                 ctx:touch_file(rel)
+                ctx:track_requested_file(rel)
 
                 local lines = utils.read_lines_raw(ctx.knowledge_base[rel])
                 local total_lines = #lines
@@ -36,6 +37,8 @@ local function register(registry)
 
             local content, total = utils.read_file_numbered(full, s_idx, e_idx)
             if content then
+                ctx:add_file(rel, content)
+                ctx:track_requested_file(rel)
                 return { output = string.format("\n[SYSTEM] Chunk of '%s' (Lines %d-%d):\n```\n%s\n```", rel, s_idx, e_idx, content) }
             else
                 return { output = "[ERROR] Could not read chunk: " .. rel }

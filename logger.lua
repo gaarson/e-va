@@ -65,4 +65,57 @@ function M.log_context(turn, phase, content)
     end
 end
 
+function M.log_messages_pretty(messages, turn, agent_name, ctx)
+    local colors = {
+        system    = "\27[35m",  -- magenta
+        user      = "\27[32m",  -- green
+        assistant = "\27[36m",  -- cyan
+        end_c     = "\27[0m"
+    }
+
+    print("\n" .. string.rep("─", 72))
+    print(string.format("\27[1m[MESSAGES] Turn %d | Agent: %s | Total: %d msg(s)\27[0m", turn, agent_name, #messages))
+    print(string.rep("─", 72))
+
+    for i, msg in ipairs(messages) do
+        local role = msg.role or "unknown"
+        local color = colors[role] or "\27[37m"
+
+        local content = msg.content
+        if type(content) == "table" then
+            local json = require("JSON")
+            content = json:encode(content, 2)
+        end
+        content = tostring(content)
+
+        -- Truncate long content for display
+        local max_display = 5000
+        local display_content = content
+        local truncated = false
+        if #content > max_display then
+            display_content = content:sub(1, max_display) .. "..."
+            truncated = true
+        end
+
+        -- Replace newlines for single-line preview
+        local one_line = display_content:gsub("\n", "\\n")
+
+        print(string.format(
+            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)\27[0m\n" ..
+            "  %s%q\27[0m",
+            i,
+            color .. role .. "\27[0m",
+            ctx:estimate_tokens(content),
+            color,
+            one_line
+        ))
+
+        if truncated then
+            print(string.format("  \27[33m[...truncated from %d chars]\27[0m", #content))
+        end
+    end
+
+    print(string.rep("─", 72) .. "\n")
+end
+
 return M

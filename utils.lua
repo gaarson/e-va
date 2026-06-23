@@ -2,7 +2,7 @@ local M = {}
 local io = require("io")
 
 local CHUNK_SIZE = 65536
-local MAX_FILE_SIZE = 1024 * 1024
+local MAX_FILE_SIZE = 8192 * 8192
 
 function M.trim(s)
     if not s then return "" end

@@ -1,6 +1,7 @@
 local M = {}
 local json = require("JSON")
 local utils = require("utils")
+local logger = require("logger")
 
 function M.new(config)
     local self = setmetatable({}, { __index = M })
@@ -31,6 +32,16 @@ function M.reset(self)
     self.last_actions = {} -- Новые: последние N действий
     self.max_last_actions = 100
     self.task_summary = "" 
+    self.turn_requested_files = {} -- Track files requested in the current turn for recency block
+end
+
+function M.track_requested_file(self, path)
+    if not path then return end
+    self.turn_requested_files[path] = true
+end
+
+function M.clear_turn_requested_files(self)
+    self.turn_requested_files = {}
 end
 
 function M.update_summary(self, new_summary)
@@ -42,6 +53,7 @@ end
 function M.optimize_context(self, instructions)
     -- instructions может быть таблицей с командами, например:
     -- { remove_file = "path/to/file", pin_file = "path/to/core.h", update_summary = "New summary text" }
+    -- Поддерживает батч-операции: remove_files, pin_files, unpin_files (массивы)
     if type(instructions) ~= "table" then return end
 
     if instructions.remove_file then
@@ -61,6 +73,28 @@ function M.optimize_context(self, instructions)
 
     if instructions.update_summary then
         self:update_summary(instructions.update_summary)
+    end
+
+    -- Batch operations (plural keys)
+    if type(instructions.remove_files) == "table" then
+        for _, path in ipairs(instructions.remove_files) do
+            self.knowledge_base[path] = nil
+            self.file_states[path] = nil
+            self.file_access_rank[path] = nil
+            self:add_action("CONTEXT_OPTIMIZATION", "Removed file from memory: " .. path)
+        end
+    end
+
+    if type(instructions.pin_files) == "table" then
+        for _, path in ipairs(instructions.pin_files) do
+            self:pin_file(path)
+        end
+    end
+
+    if type(instructions.unpin_files) == "table" then
+        for _, path in ipairs(instructions.unpin_files) do
+            self:unpin_file(path)
+        end
     end
 end
 -- ============================================================================
@@ -129,80 +163,65 @@ function M.get_command_limit_info(self, agent_name, available_tokens)
     )
 end
 
-function M.get_dynamic_context(self, agent_name, max_tokens)
-    max_tokens = max_tokens or 500000
-    local current_tokens = 0
-    local context_parts = {}
-    
-    -- 1. Системное состояние (всегда в начале)
-    local system_state_xml = "<system_state>"
-    
-    -- 1.1. Саммари задачи
-    if self.task_summary ~= "" then
-        system_state_xml = system_state_xml .. "\n  <task_summary>" .. self.task_summary .. "</task_summary>"
+function M:build_system_state_xml()
+    local xml = "<system_state>"
+
+    if self.task_summary and self.task_summary ~= "" then
+        local indented_summary = "\t" .. self.task_summary:gsub("\n", "\n\t")
+        xml = xml .. "\n  <task_summary>" .. indented_summary .. "\n  </task_summary>"
     end
 
-    -- 1.2. План выполнения
     if self.execution_plan and #self.execution_plan > 0 then
         local plan_text = self:get_execution_plan_text(self)
-        system_state_xml = system_state_xml .. "\n  <execution_plan>" .. plan_text .. "</execution_plan>"
+        local indented_plan = "\t" .. plan_text:gsub("\n", "\n\t")
+        xml = xml .. "\n  <execution_plan>" .. indented_plan .. "\n  </execution_plan>"
     end
 
-    -- 1.3. Последние мысли (только последние 5-10, чтобы не засорять)
-    if self.thoughts and #self.thoughts > 0 then
-        local recent_thoughts = {}
-        local start_idx = math.max(1, #self.thoughts - 5)
-        for i = start_idx, #self.thoughts do
-            table.insert(recent_thoughts, self.thoughts[i].content)
-        end
-        if #recent_thoughts > 0 then
-            system_state_xml = system_state_xml .. "\n  <recent_thoughts>" .. table.concat(recent_thoughts, "\n") .. "</recent_thoughts>"
-        end
-    end
-
-    -- 1.4. Последние действия
     if #self.last_actions > 0 then
         local actions_text = self:get_last_actions_text(self)
-        system_state_xml = system_state_xml .. "\n  <last_actions>" .. actions_text .. "</last_actions>"
+        local indented_actions = "\t" .. actions_text:gsub("\n", "\n\t")
+        xml = xml .. "\n  <last_actions>" .. indented_actions .. "\n  </last_actions>"
     end
 
-    system_state_xml = system_state_xml .. "\n</system_state>"
-    
-    local cost = self:estimate_tokens(system_state_xml)
-    table.insert(context_parts, system_state_xml)
-    current_tokens = current_tokens + cost
-
-    -- 2. Активные файлы
-    local active_files = self:get_active_files(self)
-    for _, file_info in ipairs(active_files) do
-        local file_text = self:get_file_context(self, file_info)
-        local cost = self:estimate_tokens(file_text)
-        if current_tokens + cost < max_tokens then
-            table.insert(context_parts, file_text)
-            current_tokens = current_tokens + cost
-        else
-            -- Если не влезает, добавляем только заголовок с статусом OMITTED
-            table.insert(context_parts, string.format(
-                "\n<file_context path=\"%s\" status=\"OMITTED_OUT_OF_MEMORY\" />\n",
-                file_info.path
-            ))
-        end
-    end
-
-    if #self.recent_tool_outputs > 0 then
-        local tools_xml = "\n<recent_tool_outputs>\n"
-        for _, t in ipairs(self.recent_tool_outputs) do
-            -- Экранируем XML, чтобы выводы кода не сломали разметку
-            local safe_out = t.output:gsub("<", "&lt;"):gsub(">", "&gt;")
-            tools_xml = tools_xml .. string.format("<tool_result name=\"%s\">\n%s\n</tool_result>\n", t.tool, safe_out)
-        end
-        tools_xml = tools_xml .. "</recent_tool_outputs>\n"
-        table.insert(context_parts, tools_xml)
-    end
-
-
-    return table.concat(context_parts, "\n")
+    return xml .. "\n</system_state>"
 end
+
+function M:format_file_content(path)
+    local content = self.knowledge_base[path]
+    if not content then return nil end
+
+    local raw_lines = utils.read_lines_raw(content)
+    local content_display = table.concat(raw_lines, "\n")
+    return "\t" .. content_display:gsub("\n", "\n\t")
+end
+
+function M:compress_search_line(line)
+    local pure_code = line:match("[:-]%d+[:-]%s*(.+)$") or line
+    return pure_code:gsub("^%s+", ""):gsub("%s+", " ")
+end
+
+function M.get_recency_block(self)
+    local parts = {}
+
+    -- 1. Build <system_state> block using shared helper
+    table.insert(parts, self:build_system_state_xml())
+
+    -- 2. Iterate only turn-requested files and generate <file_context> blocks
+    for path, _ in pairs(self.turn_requested_files) do
+        local indented_content = self:format_file_content(path)
+        if indented_content then
+            local file_context = string.format(
+                "\n<file_context path=\"%s\" status=\"READ_ONLY\">\n\n%s\n\n</file_context>",
+                path, indented_content
+            )
+            table.insert(parts, file_context)
+        end
+    end
+
+    -- 3. Return concatenated string
+    return table.concat(parts, "\n")
+end
+
 function M.get_memory_block(self, max_tokens)
     max_tokens = max_tokens or 10000
     local current_tokens = 0
@@ -259,96 +278,6 @@ function M:get_execution_plan_text(self)
         )
     end
     return text
-end
-
-function M:get_active_files(self)
-    local active_files = {}
-    local current_task = self.execution_plan[self.current_task_index]
-    local active_target = current_task and current_task.file
-    
-    -- 1. Целевой файл
-    if active_target and self.knowledge_base[active_target] then
-        table.insert(active_files, {
-            path = active_target,
-            is_target = true,
-            is_pinned = self.pinned_files[active_target] == true,
-            is_modified = self.file_states[active_target] == "RECENTLY_MODIFIED"
-        })
-    end
-    
-    -- 2. Пин-файлы
-    for path, _ in pairs(self.pinned_files) do
-        if self.knowledge_base[path] and path ~= active_target then
-            table.insert(active_files, {
-                path = path,
-                is_target = false,
-                is_pinned = true,
-                is_modified = self.file_states[path] == "RECENTLY_MODIFIED"
-            })
-        end
-    end
-    
-    -- 3. Недавно измененные файлы
-    for path, state in pairs(self.file_states) do
-        if state == "RECENTLY_MODIFIED" and not self.pinned_files[path] and path ~= active_target then
-            table.insert(active_files, {
-                path = path,
-                is_target = false,
-                is_pinned = false,
-                is_modified = true
-            })
-        end
-    end
-    
-    -- 4. MRU файлы (только если есть место)
-    local files_list = {}
-    for path, content in pairs(self.knowledge_base) do
-        if not self.pinned_files[path] and path ~= active_target and
-           self.file_states[path] ~= "RECENTLY_MODIFIED" then
-            table.insert(files_list, {
-                path = path,
-                rank = self.file_access_rank[path] or 0
-            })
-        end
-    end
-    
-    table.sort(files_list, function(a, b) return a.rank > b.rank end)
-    
-    for _, f in ipairs(files_list) do
-        if #active_files < 300 then -- Ограничиваем количество MRU файлов
-            table.insert(active_files, {
-                path = f.path,
-                is_target = false,
-                is_pinned = false,
-                is_modified = false
-            })
-        end
-    end
-    
-    return active_files
-end
-
-function M:get_file_context(self, file_info)
-    local content = self.knowledge_base[file_info.path]
-    if not content then return "" end
-    
-    local raw_lines = utils.read_lines_raw(content)
-    local content_display = table.concat(raw_lines, "\n")
-    local indented_content = "\t" .. content_display:gsub("\n", "\n\t")
-    
-    local status = "READ_ONLY"
-    if file_info.is_target then
-        status = "TARGET"
-    elseif file_info.is_pinned then
-        status = "PINNED"
-    elseif file_info.is_modified then
-        status = "RECENTLY_MODIFIED"
-    end
-    
-    return string.format(
-        "\n<file_context path=\"%s\" status=\"%s\">\n\n%s\n\n</file_context>\n",
-        file_info.path, status, indented_content
-    )
 end
 
 function M:get_last_actions_text(self)
@@ -474,7 +403,12 @@ end
 
 function M.add_message(self, agent_name, role, content)
     local history = self:get_history(agent_name)
-    table.insert(history, { role = role, content = content })
+    if #history > 0 and history[#history].role == role then
+        logger.warn("Replacing consecutive " .. role .. " message")
+        history[#history] = { role = role, content = content }
+    else
+        table.insert(history, { role = role, content = content })
+    end
 end
 
 function M.drop_last_message(self, agent_name)
@@ -591,7 +525,8 @@ function M.snapshot(self)
         images_metadata = nil,
         last_actions = self.last_actions,
         handoff_memo = self.handoff_memo,
-        test_failures = self.test_failures
+        test_failures = self.test_failures,
+        turn_requested_files = self.turn_requested_files
     }
     if self.images and #self.images > 0 then
         state.images_metadata = {}
@@ -711,16 +646,14 @@ function M.squash_last_mutation(self, agent_name)
             local squashed = original
             squashed = squashed:gsub(
                 "<cmd>patch:([^%s\n]+)%s*\n<<<<<<< SEARCH.->>>>>>> REPLACE\n</cmd>",
-                function(match)
-                    local file_path = match:match("<cmd>patch:([^%s\n]+)")
-                    return string.format("\n[SYSTEM MEMORY: Patch applied to '%s'. Code updated.]\n", file_path)
+                function(file_path)
+                    return string.format("\n[SYSTEM MEMORY: Patch applied to '%s'. Code updated.]\n", file_path or "unknown file")
                 end
             )
             squashed = squashed:gsub(
                 "<cmd>create_file:([^%s\n]+)%s*\n.-</cmd>",
-                function(match)
-                    local file_path = match:match("<cmd>create_file:([^%s\n]+)")
-                    return string.format("\n[SYSTEM MEMORY: File '%s' created/overwritten.]\n", file_path)
+                function(file_path)
+                    return string.format("\n[SYSTEM MEMORY: File '%s' created/overwritten.]\n", file_path or "unknown file")
                 end
             )
             squashed = squashed:gsub("\n\n+", "\n\n")

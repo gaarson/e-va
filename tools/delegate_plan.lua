@@ -19,9 +19,10 @@ local function register(registry)
             end
         end
 
-        if type(plan) == "table" and #plan > 0 then
-            ctx.execution_plan = plan
-            if type(memo_text) == "string" and memo_text ~= "" then 
+	if type(plan) == "table" and #plan > 0 then
+	    ctx.execution_plan = plan
+	    ctx.current_task_index = 1
+	    if type(memo_text) == "string" and memo_text ~= "" then 
                 ctx.handoff_memo = utils.trim(memo_text) 
             end
 
