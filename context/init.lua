@@ -33,6 +33,7 @@ function M.reset(self)
     self.max_last_actions = 100
     self.task_summary = "" 
     self.turn_requested_files = {} -- Track files requested in the current turn for recency block
+    self.consecutive_recoveries = 0 -- Track consecutive unclosed-thought recovery attempts
 end
 
 function M.track_requested_file(self, path)
@@ -50,6 +51,29 @@ function M.update_summary(self, new_summary)
     self:add_action("SUMMARY_UPDATE", "Updated task summary")
 end
 
+function M:get_file_context(self, file_info)
+    local content = self.knowledge_base[file_info.path]
+    if not content then return "" end
+    
+    local raw_lines = utils.read_lines_raw(content)
+    local content_display = table.concat(raw_lines, "\n")
+    local indented_content = "\t" .. content_display:gsub("\n", "\n\t")
+    
+    local status = "READ_ONLY"
+    if file_info.is_target then
+        status = "TARGET"
+    elseif file_info.is_pinned then
+        status = "PINNED"
+    elseif file_info.is_modified then
+        status = "RECENTLY_MODIFIED"
+    end
+    
+    return string.format(
+        "\n<file_context path=\"%s\" status=\"%s\">\n\n%s\n\n</file_context>\n",
+        file_info.path, status, indented_content
+    )
+end
+ 
 function M.optimize_context(self, instructions)
     -- instructions может быть таблицей с командами, например:
     -- { remove_file = "path/to/file", pin_file = "path/to/core.h", update_summary = "New summary text" }
@@ -200,27 +224,45 @@ function M:compress_search_line(line)
     return pure_code:gsub("^%s+", ""):gsub("%s+", " ")
 end
 
-function M.get_recency_block(self)
-    local parts = {}
+	function M.get_recency_block(self)
+	    local parts = {}
 
-    -- 1. Build <system_state> block using shared helper
-    table.insert(parts, self:build_system_state_xml())
+	    -- 1. Build <system_state> block using shared helper
+	    table.insert(parts, self:build_system_state_xml())
 
-    -- 2. Iterate only turn-requested files and generate <file_context> blocks
-    for path, _ in pairs(self.turn_requested_files) do
-        local indented_content = self:format_file_content(path)
-        if indented_content then
-            local file_context = string.format(
-                "\n<file_context path=\"%s\" status=\"READ_ONLY\">\n\n%s\n\n</file_context>",
-                path, indented_content
-            )
-            table.insert(parts, file_context)
-        end
-    end
+	    -- 2. Iterate turn-requested files and generate <file_context> blocks
+	    for path, _ in pairs(self.turn_requested_files) do
+	        local indented_content = self:format_file_content(path)
+	        if indented_content then
+	            local file_context = string.format(
+	                "\n<file_context path=\"%s\" status=\"READ_ONLY\">\n\n%s\n\n</file_context>",
+	                path, indented_content
+	            )
+	            table.insert(parts, file_context)
+	        end
+	    end
 
-    -- 3. Return concatenated string
-    return table.concat(parts, "\n")
-end
+	    -- 3. If INCLUDE_PINNED_IN_RECENCY is enabled, add pinned files too
+	    local include_pinned = self.config.LIMITS and self.config.LIMITS.INCLUDE_PINNED_IN_RECENCY
+	    if include_pinned then
+	        for path, _ in pairs(self.pinned_files) do
+	            -- Skip if already in turn_requested_files
+	            if not self.turn_requested_files[path] then
+	                local indented_content = self:format_file_content(path)
+	                if indented_content then
+	                    local file_context = string.format(
+	                        "\n<file_context path=\"%s\" status=\"PINNED\">\n\n%s\n\n</file_context>",
+	                        path, indented_content
+	                    )
+	                    table.insert(parts, file_context)
+	                end
+	            end
+	        end
+	    end
+
+	    -- 4. Return concatenated string
+	    return table.concat(parts, "\n")
+	end
 
 function M.get_memory_block(self, max_tokens)
     max_tokens = max_tokens or 10000
@@ -401,6 +443,85 @@ function M.get_history(self, agent_name)
     return self.agent_histories[agent_name]
 end
 
+function M:should_squash(agent_name)
+    local history = self:get_history(agent_name)
+    local limits = self.config.LIMITS or {}
+    local msg_threshold = limits.SQUASH_THRESHOLD_MESSAGES or 150
+    local token_threshold = limits.SQUASH_THRESHOLD_TOKENS or 40000
+    
+    if #history > msg_threshold then return true end
+    
+    -- Estimate total tokens in history
+    local total_tokens = 0
+    for _, msg in ipairs(history) do
+        total_tokens = total_tokens + self:estimate_tokens(msg.content)
+    end
+    if total_tokens > token_threshold then return true end
+    
+    return false
+end
+
+function M:prune_history(agent_name)
+    local history = self:get_history(agent_name)
+    local limits = self.config.LIMITS or {}
+    local max_msgs = limits.MAX_HISTORY_MESSAGES or 200
+    local max_tokens = limits.MAX_HISTORY_TOKENS or 50000
+    local min_keep = 10 -- Never drop the last N messages
+    
+    -- Enforce message count limit
+    while #history > max_msgs do
+        local idx = math.max(1, #history - min_keep)
+        if idx <= 1 then break end -- Don't drop below minimum
+        table.remove(history, 1) -- Remove oldest message
+    end
+    
+    -- Enforce token limit by squashing oldest assistant messages
+    local total_tokens = 0
+    for _, msg in ipairs(history) do
+        total_tokens = total_tokens + self:estimate_tokens(msg.content)
+    end
+    
+    if total_tokens > max_tokens then
+        -- Squash oldest assistant messages that contain large patches/creates
+        for i = 1, #history - min_keep do
+            if history[i] and history[i].role == "assistant" then
+                local content = history[i].content or ""
+                if content:match("<cmd>patch:") or content:match("<cmd>create_file:") then
+                    history[i].content = "[SYSTEM MEMORY: Previous code mutation squashed to save context.]"
+                    total_tokens = total_tokens - self:estimate_tokens(content) + self:estimate_tokens(history[i].content)
+                    if total_tokens <= max_tokens then break end
+                end
+            end
+        end
+        
+        -- If still over limit, drop oldest user messages
+        while total_tokens > max_tokens and #history > min_keep do
+            local first_idx = 1
+            if history[first_idx] then
+                total_tokens = total_tokens - self:estimate_tokens(history[first_idx].content)
+                table.remove(history, first_idx)
+            else
+                break
+            end
+        end
+    end
+end
+
+function M:get_recency_tool_outputs()
+    if not self.recent_tool_outputs or #self.recent_tool_outputs == 0 then return "" end
+    
+    local parts = {"\n<recent_tool_outputs>"}
+    for _, tool_out in ipairs(self.recent_tool_outputs) do
+        table.insert(parts, string.format(
+            "\n  <tool_output name=\"%s\">\n%s\n  </tool_output>",
+            tool_out.tool,
+            (tool_out.output or ""):gsub("\n", "\n  ")
+        ))
+    end
+    table.insert(parts, "\n</recent_tool_outputs>")
+    return table.concat(parts)
+end
+
 function M.add_message(self, agent_name, role, content)
     local history = self:get_history(agent_name)
     if #history > 0 and history[#history].role == role then
@@ -409,6 +530,8 @@ function M.add_message(self, agent_name, role, content)
     else
         table.insert(history, { role = role, content = content })
     end
+    -- Enforce hard cap after adding message
+    self:prune_history(agent_name)
 end
 
 function M.drop_last_message(self, agent_name)

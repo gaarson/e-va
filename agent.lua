@@ -181,6 +181,7 @@ local function parse_think_tags(text, is_reasoning)
 end
 
 local function run_agent_turn(agent_name, agent_cfg, turn)
+    ctx.consecutive_recoveries = 0  -- Reset recovery counter at start of each turn
     local synced_files = ctx:sync_files()
     if #synced_files > 0 then
         logger.info(string.format("[FS WATCHER] Auto-synced %d changed file(s): %s", #synced_files, table.concat(synced_files, ", ")))
@@ -197,44 +198,11 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local max_commands = ctx:calculate_max_commands(agent_name, available_tokens)
 
     local memory_block = ctx:get_memory_block(memory_budget)
-    local sys_prompt_text = load_prompt(agent_cfg.prompt_file)
-
-    local toolchain_manifest = registry.generate_tool_manifest(agent_cfg.allowed_tools)
 
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ctx:get_search_digest(digest_budget)
 
-    local command_limit_info = ctx:get_command_limit_info(agent_name, available_tokens)
-
-    local has_delegate = false
-    local has_complete = false
-    for _, t in ipairs(agent_cfg.allowed_tools or {}) do
-        if t == "delegate_plan" or t == "*" then has_delegate = true end
-        if t == "task_complete" or t == "*" then has_complete = true end
-    end
-
-    local pipeline_rule = "1. PIPELINE CONTROL: "
-    if has_delegate and has_complete then
-        pipeline_rule = pipeline_rule .. "To advance the pipeline, use `<cmd>delegate_plan</cmd>` to assign work to the next stage, OR use `<cmd>task_complete</cmd>` if no code changes are needed."
-    elseif has_delegate then
-        pipeline_rule = pipeline_rule .. "To advance the pipeline, you MUST use `<cmd>delegate_plan</cmd>` to assign work."
-    elseif has_complete then
-        pipeline_rule = pipeline_rule .. "To advance or finish your stage, you MUST execute `<cmd>task_complete</cmd>`."
-    else
-        pipeline_rule = pipeline_rule .. "Analyze the context and answer the user."
-    end
-
-    local engine_directives = string.format([[
-==================================================
-ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
-  %s
-  2. STRICT TOOL SYNTAX: You MUST wrap all tool executions STRICTLY in `<cmd>tool:args</cmd>` tags.
-  Example: <cmd>read_file:src/main.c</cmd>
-  3. EXECUTION ORDER: The system parses and executes commands from the END of your response. Place critical commands at the end.
-  4. %s
-==================================================]], pipeline_rule, command_limit_info)
-
-
+    -- System prompt is now assembled centrally in context/init.lua:get_system_prompt()
     local system_prompt = ctx:get_system_prompt(agent_name, agent_cfg)
     -- dynamic_context removed: replaced by recency block injection in last user message
 
@@ -433,13 +401,21 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
 
     content = utils.trim(content)
 
-    -- Unclosed reasoning detection and recovery
     if thought and #thought > 0 and (#content == 0 or content == "") then
-        logger.warn("[AGENT] Detected unclosed reasoning block. Attempting recovery...")
+        ctx.consecutive_recoveries = (ctx.consecutive_recoveries or 0) + 1
+        logger.warn(string.format("[AGENT] Detected unclosed reasoning block. Attempting recovery... (consecutive: %d)", ctx.consecutive_recoveries))
+
+        if ctx.consecutive_recoveries >= 3 then
+            logger.error("[AGENT] Circuit breaker triggered: 3 consecutive recoveries. Advancing to next stage to break infinite loop.")
+            return "PIPELINE_NEXT_STAGE"
+        end
+
         local summarized = optimizer.summarize_unclosed_thought(thought, config)
         if summarized then
             content = summarized
             logger.info("[AGENT] Successfully recovered from unclosed reasoning.")
+
+            ctx:add_message(agent_name, "user", "[SYSTEM RECOVERY: Your previous generation was interrupted. I have reconstructed your intent from the unclosed reasoning block. IMPORTANT: You MUST output at least one <cmd> command tag in your response. Do NOT output only reasoning text. Proceed with the next steps based on this summary.]\n")
         else
             logger.error("[AGENT] Failed to recover from unclosed reasoning. Discarding thought.")
             thought = nil
@@ -473,6 +449,7 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
     end
 
     ctx:add_message(agent_name, "assistant", final_history_content)
+    ctx:squash_last_mutation(agent_name)
 
     local run_count = 0
     local cmd_iterator_exec = parser.extract_commands(content)
@@ -487,6 +464,9 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
 
         local res = registry.execute(cmd_block, ctx, agent_name)
 
+        -- Reset recovery counter on successful command execution
+        ctx.consecutive_recoveries = 0
+
         local tool_name = cmd_block:match("^([^:]+)") or cmd_block
 
         if res.output and res.output ~= "" then
@@ -494,7 +474,6 @@ ENGINE DIRECTIVES (CRITICAL & NON-NEGOTIABLE):
             if #display_out > 500 then display_out = display_out:sub(1, 500) .. "\n...[TRUNCATED IN UI]" end
             print("\27[36m" .. display_out .. "\27[0m")
             ctx:add_message(agent_name, "user", res.output)
-            ctx:add_tool_output(tool_name, res.output) 
         end
         if res.signal then signal = res.signal end
 

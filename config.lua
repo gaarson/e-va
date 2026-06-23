@@ -14,7 +14,14 @@ function M.get()
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
         CHARS_PER_TOKEN = 3.5,
-        MCP_MAX_OUTPUT_TOKENS = 32000
+        MCP_MAX_OUTPUT_TOKENS = 32000,
+        -- History management limits
+        MAX_HISTORY_MESSAGES = 200,  -- hard cap per agent history
+        MAX_HISTORY_TOKENS = 50000,  -- token cap per agent history
+        SQUASH_THRESHOLD_MESSAGES = 150,  -- trigger squash when history exceeds this
+        SQUASH_THRESHOLD_TOKENS = 40000,  -- trigger squash when history tokens exceed this
+        INCLUDE_PINNED_IN_RECENCY = true,  -- auto-include pinned files in recency block
+        DEDUP_TOOL_OUTPUTS = true  -- if true, do NOT add tool output as separate user message
     }
 
     cfg.PIPELINE_SETTINGS = {
@@ -38,7 +45,7 @@ function M.get()
 
     local SAMPLERS = {
         ANALYTICAL = {
-            max_tokens = 2048,
+            max_tokens = 4096,
             temperature = 0.3,
             top_p = 0.95,
             top_k = 40,
