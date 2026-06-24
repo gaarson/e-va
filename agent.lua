@@ -206,7 +206,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         end
         if not response_data then break end
         if response_data.interrupted then
-            logger.log_messages_pretty(messages, turn, ctx)
+            logger.log_messages_pretty(messages, turn, agent_name, ctx)
             interruption_retries = interruption_retries + 1
             if interruption_retries > MAX_INTERRUPTION_RETRIES then break end
             print("\n\27[33m[SYSTEM] Generation interrupted. Provide additional context or corrections (or press Enter to continue):\27[0m")

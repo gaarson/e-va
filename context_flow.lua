@@ -601,7 +601,7 @@ function M:add_search_result(query, result) self.search_history[query] = result 
 
 function M:estimate_tokens(text)
     if not text then return 0 end
-    local divisor = self.config.token_estimation.chars_per_token or 3.5
+    local divisor = self.flow_config.token_estimation.chars_per_token or 3.5
     return math.ceil(#text / divisor)
 end
 
