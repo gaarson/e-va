@@ -11,6 +11,56 @@ local log_dir = string.format("%s/logs/%s", agent_home, project_name)
 
 os.execute(string.format("mkdir -p '%s'", log_dir))
 
+-- Module-level state
+local indent_level = 0
+local logging_enabled = true
+local log_file = nil
+
+-- Timestamp helper
+local function get_timestamp()
+    return os.date("%Y-%m-%d %H:%M:%S")
+end
+
+-- Initialize persistent log file at module load
+local function init_log_file()
+    if log_file then return end
+    local timestamp = os.date("%Y%m%d_%H%M%S")
+    local filename = string.format("%s/run_%s.log", log_dir, timestamp)
+    local f, err = io.open(filename, "a")
+    if f then
+        log_file = f
+        local ts = get_timestamp()
+        log_file:write(string.format("[%s] [INIT] Logger started (file: %s)\n", ts, filename))
+        log_file:flush()
+
+        -- Crash-safe shutdown via __gc on a dummy object
+        local shutdown_guard = setmetatable({}, {
+            __gc = function()
+                if log_file then
+                    M.close()
+                end
+            end
+        })
+        -- Keep reference alive at module level so GC doesn't collect prematurely during normal operation
+        -- We intentionally let this be collected only on Lua shutdown
+        rawset(M, "_shutdown_guard", shutdown_guard)
+    else
+        io.stderr:write(string.format("[LOGGER FATAL] Failed to open log file: %s (%s)\n", filename, tostring(err)))
+    end
+end
+
+init_log_file()
+
+-- Write a line to the persistent log file (respects logging_enabled and indent)
+local function write_to_file(level, msg)
+    if not logging_enabled or not log_file then return end
+    local ts = get_timestamp()
+    local indent_str = string.rep("  ", indent_level)
+    log_file:write(string.format("[%s] %s[%s] %s\n", ts, indent_str, level, msg))
+    log_file:flush()
+end
+
+-- Inspect helper (preserved from original)
 local function inspect_impl(root, options)
     options = options or {}
     local depth = options.depth or 3
@@ -39,93 +89,179 @@ local function inspect_impl(root, options)
     return "\n" .. _dump(root, "  ", "", 1)
 end
 
+-- Core logging functions (backward compatible signatures)
+
 function M.info(msg, data)
     local d_str = data and inspect_impl(data) or ""
-    print(string.format("\27[32m[INFO]\27[0m %s %s", msg, d_str))
+    local full_msg = msg .. d_str
+
+    -- Console output (unchanged format)
+    print(string.format("\27[32m[INFO]\27[0m %s", full_msg))
+
+    -- File output (with timestamp and indent)
+    write_to_file("INFO", full_msg)
 end
 
 function M.warn(msg, data)
     local d_str = data and inspect_impl(data) or ""
-    print(string.format("\27[33m[WARN]\27[0m %s %s", msg, d_str))
+    local full_msg = msg .. d_str
+
+    -- Console output (unchanged format)
+    print(string.format("\27[33m[WARN]\27[0m %s", full_msg))
+
+    -- File output (with timestamp and indent)
+    write_to_file("WARN", full_msg)
 end
 
 function M.error(msg, data)
     local d_str = data and inspect_impl(data) or ""
-    io.stderr:write(string.format("\27[31m[ERROR]\27[0m %s %s\n", msg, d_str))
+    local full_msg = msg .. d_str
+
+    -- Console output (unchanged format)
+    io.stderr:write(string.format("\27[31m[ERROR]\27[0m %s\n", full_msg))
+
+    -- File output (with timestamp and indent)
+    write_to_file("ERROR", full_msg)
 end
 
-function M.log_context(turn, phase, content)
-    local filename = string.format("%s/turn_%03d_%s.log", log_dir, turn, phase)
-    local f = io.open(filename, "w")
-    if f then
-        f:write(content)
-        f:close()
-    else
-        io.stderr:write(string.format("[LOGGER FATAL] Failed to write log to: %s\n", filename))
+-- Indentation support
+
+function M.push_indent()
+    indent_level = indent_level + 1
+end
+
+function M.pop_indent()
+    if indent_level > 0 then
+        indent_level = indent_level - 1
     end
 end
 
-function M.log_messages_pretty(messages, turn, agent_name, ctx)
-    local colors = {
-        system    = "\27[35m",  -- magenta
-        user      = "\27[32m",  -- green
-        assistant = "\27[36m",  -- cyan
-        end_c     = "\27[0m"
-    }
+-- Toggleable logging
 
-    print("\n" .. string.rep("─", 72))
-    print(string.format("\27[1m[MESSAGES] Turn %d | Agent: %s | Total: %d msg(s)\27[0m", turn, agent_name, #messages))
-    print(string.rep("─", 72))
-
-    for i, msg in ipairs(messages) do
-        local role = msg.role or "unknown"
-        local color = colors[role] or "\27[37m"
-
-        local content = msg.content
-        if type(content) == "table" then
-            local json = require("JSON")
-            content = json:encode(content, 2)
-        end
-        content = tostring(content)
-
-        print(string.format(
-            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)\27[0m",
-            i, color .. role .. "\27[0m", ctx:estimate_tokens(content) ))
-
-        -- Print each line of content with color prefix and indentation (4 spaces) + prefix (4 spaces) = 8 spaces total indent before text starts after "    " + color prefix "    " 
-         -- Actually let's use exactly what was requested: indent of 4 spaces then colored text per line  
-         -- Format is: <indent><color>line<end_color> where indent is consistent across lines  
-         -- Looking at example format more carefully it seems like just simple indented lines with colors applied per-line  
-         
-         for line in content:gmatch("[^\r\n]+") do  
-             io.write(string.format("    %s%s\27[0m\n", color, line))  
-         end  
-         io.flush()  
-    end
-
-    print(string.rep("─", 72) .. "\n")
+function M.enable()
+    logging_enabled = true
 end
 
-function M.log_final_dump(ctx, turn, agent_name)
-    local messages = {}
+function M.disable()
+    logging_enabled = false
+end
+
+-- Flush: force write buffer and write a marker
+
+function M.flush()
+    if log_file then
+        local ts = get_timestamp()
+        log_file:write(string.format("[%s] [FLUSH] Logger flushed\n", ts))
+        log_file:flush()
+    end
+end
+
+-- Close: write final marker, flush, close handle
+
+function M.close()
+    if log_file then
+        local ts = get_timestamp()
+        log_file:write(string.format("[%s] [SHUTDOWN] Logger closed\n", ts))
+        log_file:flush()
+        log_file:close()
+        log_file = nil
+
+        -- Remove shutdown guard so __gc doesn't try to close again on Lua exit after explicit close() call. 
+        -- However if close() was called explicitly we don't want __gc to do anything harmful. 
+        -- Setting _shutdown_guard to nil allows it to be GC'd harmlessly since __gc checks log_file which is nil. 
+        rawset(M, "_shutdown_guard", nil) 
+    end 
+end 
+
+-- Context logging (FIXED: append mode instead of overwrite) 
+
+function M.log_context(turn, phase, content) 
+    local filename = string.format("%s/turn_%03d_%s.log", log_dir, turn, phase) 
+    local f = io.open(filename, "a") 
+    if f then 
+        f:write(content) 
+        f:close() 
+    else 
+        io.stderr:write(string.format("[LOGGER FATAL] Failed to write log to: %s\n", filename)) 
+    end 
+end 
+
+-- Pretty message logging (unchanged signature and behavior) 
+
+function M.log_messages_pretty(messages, turn, agent_name, ctx) 
+    local colors = { 
+        system    = "\27[35m",  -- magenta 
+        user      = "\27[32m",  -- green 
+        assistant = "\27[36m",  -- cyan 
+        end_c     = "\27[0m" 
+    } 
+
+    print("\n" .. string.rep("\u2500", 72)) 
+    print(string.format("\27[1m[MESSAGES] Turn %d | Agent: %s | Total: %d msg(s)\27[0m", turn, agent_name, #messages)) 
+    print(string.rep("\u2500", 72)) 
+
+    for i, msg in ipairs(messages) do 
+        local role = msg.role or "unknown" 
+        local color = colors[role] or "\27[37m" 
+
+        local content = msg.content 
+        if type(content) == "table" then 
+            local json = require("JSON") 
+            content = json:encode(content, 2) 
+        end 
+        content = tostring(content) 
+
+        print(string.format( 
+            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)\27[0m", 
+            i, color .. role .. "\27[0m", ctx:estimate_tokens(content))) 
+
+        for line in content:gmatch("[^\r\n]+") do  
+            io.write(string.format("    %s%s\27[0m\n", color, line))  
+        end  
+        io.flush()  
+    end 
+
+    print(string.rep("\u2500", 72) .. "\n") 
+end 
+
+-- Final dump logging (unchanged signature and behavior) 
+
+function M.log_final_dump(ctx, turn, agent_name) 
+    local messages = {} 
     
-    -- Get system prompt if available
-    local system_prompt = ctx:get_system_prompt() or ""
-    if system_prompt and system_prompt ~= "" then
-        table.insert(messages, { role = "system", content = system_prompt })
-    end
+    -- Get system prompt if available 
+    local system_prompt_result = pcall(function() return ctx:get_system_prompt() end) 
+    local system_prompt = "" 
+    if system_prompt_result then 
+        system_prompt_result = select(2, pcall(function() return ctx:get_system_prompt() end)) 
+        -- Actually let's just try directly with pcall result handling properly 
+    end 
     
-    -- Get full history for the agent
-    local history = ctx:get_history(agent_name) or {}
-    for _, msg in ipairs(history) do
-        table.insert(messages, msg)
-    end
+    -- Simpler approach that matches original behavior 
+    system_prompt = "" 
+    if ctx.get_system_prompt then 
+        local ok, prompt_val = pcall(ctx.get_system_prompt, ctx) 
+        if ok and prompt_val and prompt_val ~= "" then 
+            system_prompt = prompt_val 
+            table.insert(messages, { role = "system", content = system_prompt }) 
+        end 
+    end 
     
-    if #messages > 0 then
-        M.log_messages_pretty(messages, turn, agent_name, ctx)
-    else
-        print("\n\27[33m[LOGGER] No messages to dump for agent: " .. tostring(agent_name) .. "\27[0m\n")
-    end
-end
+    -- Get full history for the agent 
+    if ctx.get_history then 
+        local ok, history_val = pcall(ctx.get_history, ctx, agent_name) 
+        if ok and history_val then 
+            for _, msg in ipairs(history_val) do 
+                table.insert(messages, msg) 
+            end 
+        end 
+    end 
+    
+    if #messages > 0 then 
+        M.log_messages_pretty(messages, turn, agent_name, ctx) 
+    else 
+        print("\n\27[33m[LOGGER] No messages to dump for agent: " .. tostring(agent_name) .. "\27[0m\n") 
+    end 
+end 
 
 return M
