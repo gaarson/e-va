@@ -172,10 +172,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local memory_budget = math.floor(available_tokens * limits.MEMORY_RATIO)
     local chat_budget = available_tokens - memory_budget
 
-    local max_commands = ctx:calculate_max_commands(agent_name, available_tokens)
-
-    local memory_block = ctx:get_memory_block(memory_budget)
-
     local digest_budget = math.floor(chat_budget * 0.2)
     local search_digest = ctx:get_search_digest(digest_budget)
 
@@ -220,7 +216,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         end
     end
 
-    -- Recency block injection: APPEND to the LAST user message in chat_buffer
     local recency_block = ctx:get_recency_block()
     for i = #chat_buffer, 1, -1 do
         if chat_buffer[i].role == "user" then
@@ -271,7 +266,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         end
     end
     
-    -- Ensure the last message before LLM call is from user role
     if #messages > 1 and messages[#messages].role == "assistant" then
         table.insert(messages, { role = "user", content = "[SYSTEM]: Continue your analysis. Execute the next command or ask a question if clarification is needed." })
     end
@@ -429,7 +423,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         -- LLM просто разговаривает, ничего не делает
         if turn_result.hint then
             logger.info("[SYSTEM] No command detected. " .. turn_result.hint)
-            ctx:add_message(agent_name, "user", "[SYSTEM CONTINUATION]: Your previous response contained no command. Continue your work — execute a tool or advance the pipeline.")
+            -- ctx:add_message(agent_name, "user", "[SYSTEM CONTINUATION]: Your previous response contained no command. Continue your work — execute a tool or advance the pipeline.")
         end
     elseif turn_result.type == "EXECUTED" then
         -- Команда выполнена
@@ -467,7 +461,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 
     ctx:squash_last_mutation(agent_name)
 
-    local OPTIMIZER_INTERVAL = 5
+    local OPTIMIZER_INTERVAL = 7
     local context_usage_ratio = total_ctx_tokens / (config.LIMITS.MAX_CONTEXT or 250000)
     
     if turn % OPTIMIZER_INTERVAL == 0 or context_usage_ratio > 0.7 then

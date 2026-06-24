@@ -47,11 +47,11 @@ function M.get()
         ANALYTICAL = {
             max_tokens = 4096,
             temperature = 0.2,
-            top_p = 0.75,
+            top_p = 0.80,
             top_k = 35,
             -- min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
-            frequency_penalty = 0.1
+            frequency_penalty = 0.2
             -- presence_penalty = 0.0
         },
         ENGINEERING = {
@@ -61,7 +61,7 @@ function M.get()
             top_k = 40,
             -- min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
-            frequency_penalty = 0.1
+            frequency_penalty = 0.2
             -- presence_penalty = 0.0
         }
     }

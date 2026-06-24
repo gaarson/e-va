@@ -30,7 +30,7 @@ function M:reset()
     self.handoff_memo = nil
     self.test_failures = 0
     self.last_actions = {} -- Новые: последние N действий
-    self.max_last_actions = 100
+    self.max_last_actions = 10
     self.task_summary = "" 
     self.turn_requested_files = {} -- Track files requested in the current turn for recency block
     self.consecutive_recoveries = 0 -- Track consecutive unclosed-thought recovery attempts
