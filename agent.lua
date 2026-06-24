@@ -23,16 +23,25 @@ end
 config = utils.apply_agent_defaults(config)
 
 local llm = require("llm_handler")
-local optimizer = require("optimizer")
+local json = require("JSON")
 
 local logger = require("logger")
-local Context = require("context")
+local ContextFlow = require("context_flow")
 local registry = require("tool_registry")
 local tools = require("tools")
 local os = require("os")
 
-local ctx = Context.new(config)
+local ctx = ContextFlow.new(config.CONTEXT_FLOW, config)
 local STATE_FILE = config.PROJECT_ROOT .. "/.e-va-conf/.state.json"
+
+local function save_state()
+    local snap = ctx:snapshot()
+    if snap then
+        os.execute(string.format("mkdir -p '%s/.e-va-conf'", config.PROJECT_ROOT))
+        local f = io.open(STATE_FILE, "w")
+        if f then f:write(snap); f:close() end
+    end
+end
 
 local function resolve_task_instruction(task, config, utils, logger)
     local instruction = task.instruction
@@ -117,174 +126,32 @@ if not instruction then
     end
 end
 
-local function parse_think_tags(text, is_reasoning)
-    if not text or text == "" then return "", "" end
-
-    local content = text
-    local thought = ""
-    local start_idx = content:find("<think>")
-
-    if start_idx then
-        local prefix = content:sub(1, start_idx - 1)
-        local end_idx = content:find("</think>", start_idx + 7)
-        if end_idx then
-            thought = content:sub(start_idx + 7, end_idx - 1)
-            content = prefix .. content:sub(end_idx + 8)
-        else
-            if is_reasoning then
-                thought = content:sub(start_idx + 7)
-                content = prefix
-            else
-                content = prefix .. content:sub(start_idx)
-                thought = ""
-            end
-        end
-    elseif is_reasoning then
-        local end_idx = content:find("</think>")
-        if end_idx then
-            thought = content:sub(1, end_idx - 1)
-            content = content:sub(end_idx + 8)
-        else
-            thought = content
-            content = ""
-        end
-    end
-
-    thought = utils.trim(thought)
-    if thought == "" then thought = nil end
-
-    return utils.trim(content), thought
-end
-
 local function run_agent_turn(agent_name, agent_cfg, turn)
-    ctx.consecutive_recoveries = 0  -- Reset recovery counter at start of each turn
+    ctx.consecutive_recoveries = 0
     local synced_files = ctx:sync_files()
     if #synced_files > 0 then
         logger.info(string.format("[FS WATCHER] Auto-synced %d changed file(s): %s", #synced_files, table.concat(synced_files, ", ")))
     end
-    local executor = require("command_executor").new(ctx, agent_name)
-
     ctx:clear_turn_requested_files()
 
+    local executor = require("command_executor").new(ctx, agent_name)
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
 
-    local memory_budget = math.floor(available_tokens * limits.MEMORY_RATIO)
-    local chat_budget = available_tokens - memory_budget
+    local context_data = ctx:build_context(agent_name, agent_cfg, available_tokens)
+    local messages = context_data.messages
+    local total_ctx_tokens = context_data.total_tokens
 
-    local digest_budget = math.floor(chat_budget * 0.2)
-    local search_digest = ctx:get_search_digest(digest_budget)
-
-    -- System prompt is now assembled centrally in context/init.lua:get_system_prompt()
-    local system_prompt = ctx:get_system_prompt(agent_cfg)
-    -- dynamic_context removed: replaced by recency block injection in last user message
-
-    local messages = { { role = "system", content = system_prompt } }
-
-    local chat_buffer = {}
-    local current_chat_cost = 0
-    local history = ctx:get_history(agent_name)
-    local history_len = #history
-
-    local REINFORCEMENT_INTERVAL = 5
-    if turn > 1 and turn % REINFORCEMENT_INTERVAL == 0 then
-        local current_task = ctx.execution_plan[ctx.current_task_index]
-        if current_task then
-            local reminder = string.format(
-                "\n[SYSTEM REMINDER]: You are currently working on Step %d/%d.\n" ..
-                "Task: %s\n" ..
-                "File: %s\n" ..
-                "Please ensure you are still following the plan.",
-                ctx.current_task_index,
-                #ctx.execution_plan,
-                current_task.instruction,
-                current_task.file
-            )
-            table.insert(chat_buffer, { role = "user", content = reminder })
-            current_chat_cost = current_chat_cost + ctx:estimate_tokens(reminder)
-        end
-    end
-
-    if history_len > 0 then
-        for i = history_len, 1, -1 do
-            local msg = history[i]
-            local cost = ctx:estimate_tokens(msg.content or "")
-            if (current_chat_cost + cost) < chat_budget then
-                table.insert(chat_buffer, 1, msg)
-                current_chat_cost = current_chat_cost + cost
-            else break end
-        end
-    end
-
-    local recency_block = ctx:get_recency_block()
-    for i = #chat_buffer, 1, -1 do
-        if chat_buffer[i].role == "user" then
-            chat_buffer[i].content = chat_buffer[i].content .. "\n\n" .. recency_block
-            if search_digest and search_digest ~= "" then
-                chat_buffer[i].content = chat_buffer[i].content .. "\n\n" .. search_digest
-            end
-            break
-        end
-    end
-
-    local total_ctx_tokens = ctx:estimate_tokens(system_prompt)
-
-    if history_len == 0 then
-        if ctx.handoff_memo and ctx.handoff_memo ~= "" then
-            local handoff_msg = "[SYSTEM: HANDOFF MEMO FROM PREVIOUS STAGE]\n" .. ctx.handoff_memo
-            table.insert(chat_buffer, { role = "user", content = handoff_msg })
-            total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(handoff_msg)
-        else
-            local default_msg = "[SYSTEM: INITIATION]\nYou have been assigned to this pipeline stage. Please review the context. If no explicit task was delegated to your role, analyze the state and take action, or execute ### COMMAND ###\ntask_complete\n### END_COMMAND ###."
-            table.insert(chat_buffer, { role = "user", content = default_msg })
-            total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(default_msg)
-        end
-    end
-
-    for _, msg in ipairs(chat_buffer) do
-      local safe_role = msg.role
-        if safe_role == "system" then safe_role = "user" end
-        table.insert(messages, { role = safe_role, content = msg.content })
-        total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(msg.content)
-    end
-
-    -- Image injection logic
     if config.PICTURES_DIR then
         ctx:load_images(config.PROJECT_ROOT .. "/" .. config.PICTURES_DIR)
     end
-    local image_parts = ctx:get_image_content_parts()
-    if #image_parts > 0 then
-        for i = 1, #messages do
-            if messages[i].role == "user" then
-                local original_content = messages[i].content
-                messages[i].content = {
-                    { type = "text", text = original_content },
-                    unpack(image_parts)
-                }
-                break
-            end
-        end
-    end
-    
-    if #messages > 1 and messages[#messages].role == "assistant" then
-        table.insert(messages, { role = "user", content = "[SYSTEM]: Continue your analysis. Execute the next command or ask a question if clarification is needed." })
-    end
 
-    local json = require("JSON")
-    local trace_dump = json:encode({
-        turn = turn,
-        agent = agent_name,
-        tokens = total_ctx_tokens,
-        payload = messages
-    })
-    logger.log_context(turn, agent_name .. "_PROMPT", trace_dump)
-
-    -- logger.log_messages_pretty(messages, turn, agent_name, ctx)
-
+    logger.log_context(turn, agent_name .. "_PROMPT", json:encode({
+        turn = turn, agent = agent_name, tokens = total_ctx_tokens, payload = messages
+    }))
     logger.info(string.format("[TURN %d] Agent: %s | Active Context Tokens: ~%d / %d", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
 
     io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", tostring(agent_name)))
-
     local print_buf = ""
     local in_thought = agent_cfg.is_reasoning or false
     local tag_open = "<think>"
@@ -293,10 +160,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     if in_thought then io.write("\27[90m") end
 
     local response_data, err
-    local max_retries = 5
-    local retry_delay = 5
-    local interruption_retries = 0
-    local MAX_INTERRUPTION_RETRIES = 3
+    local max_retries, retry_delay = 5, 5
+    local interruption_retries, MAX_INTERRUPTION_RETRIES = 0, 3
 
     local on_token_fn = function(t)
         print_buf = print_buf .. t
@@ -304,17 +169,14 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             if not in_thought then
                 local s, e = print_buf:find(tag_open)
                 if s then
-                    io.write(print_buf:sub(1, s - 1))
-                    io.write("\27[90m" .. tag_open)
+                    io.write(print_buf:sub(1, s - 1) .. "\27[90m" .. tag_open)
                     print_buf = print_buf:sub(e + 1)
                     in_thought = true
                 elseif #print_buf > #tag_open then
                     local safe_len = #print_buf - #tag_open
                     io.write(print_buf:sub(1, safe_len))
                     print_buf = print_buf:sub(safe_len + 1)
-                else
-                    break
-                end
+                else break end
             else
                 local s, e = print_buf:find(tag_close)
                 if s then
@@ -325,9 +187,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                     local safe_len = #print_buf - #tag_close
                     io.write(print_buf:sub(1, safe_len))
                     print_buf = print_buf:sub(safe_len + 1)
-                else
-                    break
-                end
+                else break end
             end
         end
         io.flush()
@@ -344,29 +204,22 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                 retry_delay = retry_delay * 3
             end
         end
-
         if not response_data then break end
-
         if response_data.interrupted then
+            logger.log_messages_pretty(messages, turn, ctx)
             interruption_retries = interruption_retries + 1
-            if interruption_retries > MAX_INTERRUPTION_RETRIES then
-                logger.warn("[SYSTEM] Max interruption retries reached. Resuming with current context.")
-                break
-            end
+            if interruption_retries > MAX_INTERRUPTION_RETRIES then break end
             print("\n\27[33m[SYSTEM] Generation interrupted. Provide additional context or corrections (or press Enter to continue):\27[0m")
             local user_input = io.read("*l")
             if user_input and user_input ~= "" then
                 table.insert(messages, { role = "user", content = user_input })
             end
             response_data = nil
-        else
-            break
-        end
+        else break end
     end
 
     if print_buf ~= "" then
-        if in_thought then io.write(print_buf .. "\27[0m")
-        else io.write(print_buf) end
+        if in_thought then io.write(print_buf .. "\27[0m") else io.write(print_buf) end
     end
     io.write("\n")
 
@@ -374,107 +227,34 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         logger.error("FATAL: Network unreachable after " .. max_retries .. " attempts.", err)
         return "ERROR"
     end
-
-    local raw_content = llm.extract_content(response_data) or ""
-    local content, thought = parse_think_tags(raw_content, agent_cfg.is_reasoning)
-
-    content = utils.trim(content)
-
-    if thought and #thought > 0 and (#content == 0 or content == "") then
-        ctx.consecutive_recoveries = (ctx.consecutive_recoveries or 0) + 1
-        logger.warn(string.format("[AGENT] Detected unclosed reasoning block. Attempting recovery... (consecutive: %d)", ctx.consecutive_recoveries))
-
-        if ctx.consecutive_recoveries >= 3 then
-            logger.error("[AGENT] Circuit breaker triggered: 3 consecutive recoveries. Advancing to next stage to break infinite loop.")
-            return "PIPELINE_NEXT_STAGE"
-        end
-
-        local summarized = optimizer.summarize_unclosed_thought(thought, config)
-        if summarized then
-            content = summarized
-            logger.info("[AGENT] Successfully recovered from unclosed reasoning.")
-
-            ctx:add_message(agent_name, "user", "[SYSTEM RECOVERY: Your previous generation was interrupted. I have reconstructed your intent from the unclosed reasoning block. Proceed with the next steps based on this summary.]\n")
-        else
-            logger.error("[AGENT] Failed to recover from unclosed reasoning. Discarding thought.")
-            thought = nil
-        end
+    --
+    -- 1. Извлекаем текст ответа
+    local content = ""
+    if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
+        content = response_data.choices[1].message.content
     end
 
-    if thought ~= "" then ctx:add_thought(turn, thought) end
-
-    local signal = nil
-    local turn_result = executor:process_turn(content)
-
-    -- Сохраняем ответ ассистента в историю (обрезанный, если была команда)
-    local cmd_idx = content:find(executor.cmd_start)
-    local history_content = content
-    if cmd_idx then
-        history_content = content:sub(1, cmd_idx - 1)
-        -- Добавляем плейсхолдер, чтобы LLM понимал, что команда была выполнена
-        local tool_name = turn_result.tool or "unknown"
-        history_content = history_content -- .. "\n[SYSTEM: Command `" .. tool_name .. "` executed successfully.]"
-    end
-    ctx:add_message(agent_name, "assistant", utils.trim(history_content))
-    ctx:squash_last_mutation(agent_name)
-
-    -- Обработка результата
-    if turn_result.type == "CONVERSATION" then
-        -- LLM просто разговаривает, ничего не делает
-        if turn_result.hint then
-            logger.info("[SYSTEM] No command detected. " .. turn_result.hint)
-            -- ctx:add_message(agent_name, "user", "[SYSTEM CONTINUATION]: Your previous response contained no command. Continue your work — execute a tool or advance the pipeline.")
-        end
-    elseif turn_result.type == "EXECUTED" then
-        -- Команда выполнена
-        local display_out = turn_result.output or ""
-        if #display_out > 500 then display_out = display_out:sub(1, 500) .. "\n...[TRUNCATED IN UI]" end
-        print("\27[36m" .. display_out .. "\27[0m")
-
-        -- Добавляем результат в контекст как сообщение от пользователя (системное)
-        ctx:add_message(agent_name, "user", turn_result.output)
-
-        if turn_result.signal then signal = turn_result.signal end
-
-    elseif turn_result.type == "USER_QUESTION" then
-        -- Пауза для ввода пользователя
-        io.write(string.format("\n\27[33m[AGENT ASKS]:\27[0m %s\n", turn_result.question))
-        io.write("\27[36m>>> YOUR REPLY:\27[0m ")
-        local user_ans = io.read("*l")
-        ctx:add_message(agent_name, "user", "[USER REPLY]: " .. (user_ans or "(empty)"))
-
-    elseif turn_result.type == "RETRY" then
-        -- LLM ошиблась в формате, просим исправить
-        ctx:add_message(agent_name, "user", "[SYSTEM CORRECTION]: " .. turn_result.message .. "\nPlease output exactly one command using the strict format.")
-
-    elseif turn_result.type == "COMPLETED" then
-        -- Задача выполнена
-        if turn_result.output then
-          ctx:add_message(agent_name, "user", turn_result.output)
-        end
-        signal = "PIPELINE_NEXT_STAGE"
-
-    elseif turn_result.type == "ERROR" then
-        logger.error("[COMMAND EXECUTOR] " .. turn_result.message)
-        signal = "PIPELINE_NEXT_STAGE" -- Прерываем стадию при критической ошибке
+    if content == "" then
+        logger.warn("Empty response from LLM")
+        return nil
     end
 
-    ctx:squash_last_mutation(agent_name)
+    -- 2. Передаем ответ в новый модуль контекста
+    -- process_turn_response сам выполнит команду, обновит историю и сделает squash если нужно
+    local result = ctx:process_turn_response(agent_name, content, executor)
 
-    local OPTIMIZER_INTERVAL = 7
-    local context_usage_ratio = total_ctx_tokens / (config.LIMITS.MAX_CONTEXT or 250000)
-    
-    if turn % OPTIMIZER_INTERVAL == 0 or context_usage_ratio > 0.7 then
-        logger.info(string.format("[OPTIMIZER TRIGGER] turn=%d | ratio=%.2f", turn, context_usage_ratio))
-        local ok, err = pcall(optimizer.analyze_and_optimize, ctx, config)
-        if not ok then logger.error("[OPTIMIZER] pcall failed: " .. tostring(err)) end
+    -- 3. Обрабатываем результат
+    if result.type == "COMPLETED" then
+        save_state()
+        return "PIPELINE_NEXT_STAGE" -- Сигнал для завершения стадии
+    elseif result.type == "ERROR" then
+        logger.error("Agent execution error: " .. (result.message or "Unknown error"))
+        -- Можно вернуть ошибку или продолжить, в зависимости от логики
+        return "ERROR"
     end
 
-    utils.write_file(STATE_FILE, ctx:snapshot())
-
-    collectgarbage("collect")
-
-    return signal
+    -- Если это просто разговор или успешное выполнение команды (не завершающее)
+    return nil
 end
 
 local function execute_pipeline()
@@ -672,7 +452,7 @@ if not restored then
             { stage = "BOOTSTRAP_DISCOVERY", agents = { "BOOTSTRAPPER" }, mode = "sequential" }
         }
 
-        ctx = Context.new(config)
+        ctx = ContextFlow.new(config.CONTEXT_FLOW, config)
 
         local function detect_lint_command()
             local root = config.PROJECT_ROOT

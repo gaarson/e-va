@@ -2,6 +2,7 @@ local M = {}
 local utils = require("utils")
 local registry = require("tool_registry")
 local logger = require("logger")
+local inspect = require("inspect")
 
 -- Состояния цикла
 M.STATES = {
@@ -56,6 +57,7 @@ function M:validate_command(cmd)
     tool_name = utils.trim(tool_name)
     
     -- Проверка прав доступа (через registry)
+
     local agent_cfg = self.ctx.config.AGENTS[self.agent_name]
     if not registry.is_tool_allowed(agent_cfg, tool_name) then
         return false, string.format("Unauthorized tool '%s'.", tool_name)

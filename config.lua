@@ -15,13 +15,49 @@ function M.get()
         MEMORY_RATIO = 0.8,
         CHARS_PER_TOKEN = 3.5,
         MCP_MAX_OUTPUT_TOKENS = 32000,
-        -- History management limits
-        MAX_HISTORY_MESSAGES = 200,  -- hard cap per agent history
-        MAX_HISTORY_TOKENS = 160000,  -- token cap per agent history
-        SQUASH_THRESHOLD_MESSAGES = 150,  -- trigger squash when history exceeds this
-        SQUASH_THRESHOLD_TOKENS = 120000,  -- trigger squash when history tokens exceed this
-        INCLUDE_PINNED_IN_RECENCY = true,  -- auto-include pinned files in recency block
-        DEDUP_TOOL_OUTPUTS = true  -- if true, do NOT add tool output as separate user message
+    }
+
+    cfg.CONTEXT_FLOW = {
+        storage = {
+            max_history_messages = 200,
+            max_history_tokens = 160000,
+            squash_threshold_messages = 150,
+            squash_threshold_tokens = 120000,
+            dedup_tool_outputs = true,
+            include_pinned_in_recency = true,
+        },
+        context_injection = {
+            mode = "append_to_last_user", -- Меняйте на "separate_message" для моделей с коротким контекстом
+            recency_block_enabled = true,
+            search_digest_enabled = true,
+            max_recency_tokens = 4000,
+            max_search_digest_tokens = 2000,
+        },
+        command_flow = {
+            strict_parsing = true,
+            max_retries = 3,
+            auto_squash_on_mutation = true,
+            continuation_prompt = "[SYSTEM]: Continue your analysis...",
+            reinforcement_interval = 5,
+        },
+        token_estimation = {
+            chars_per_token = 3.5,
+            system_prompt_estimate = 6000,
+            reserved_output = 5000,
+        },
+
+        model_profiles = {
+            reasoning = {
+                context_injection = { mode = "separate_message" },
+                command_flow = { strict_parsing = true, max_retries = 5 },
+                storage = { squash_threshold_tokens = 100000 }
+            },
+            coding = {
+                context_injection = { mode = "append_to_last_user", max_recency_tokens = 6000 },
+                command_flow = { auto_squash_on_mutation = true, reinforcement_interval = 3 },
+                storage = { max_history_tokens = 120000 }
+            }
+        }
     }
 
     cfg.PIPELINE_SETTINGS = {
@@ -45,17 +81,18 @@ function M.get()
 
     local SAMPLERS = {
         ANALYTICAL = {
-            max_tokens = 4096,
+            max_tokens = 32768,
             temperature = 0.2,
             top_p = 0.80,
             top_k = 35,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = false},
+            -- chat_template_kwargs = {enable_thinking = true},
+            -- enable_thinking = true,
             frequency_penalty = 0.2
             -- presence_penalty = 0.0
         },
         ENGINEERING = {
-            max_tokens = 8192,
+            max_tokens = 32768,
             temperature = 0.1,
             top_p = 0.95,
             top_k = 40,

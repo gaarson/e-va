@@ -3,6 +3,7 @@ local M = {
 }
 local logger = require("logger")
 local utils = require("utils")
+local inspect = require('inspect')
 
 function M.register(name, description, usage, handler)
     if type(handler) ~= "function" then
@@ -31,6 +32,7 @@ end
 
 function M.execute(action_string, ctx, agent_name)
     local config = ctx.config
+    -- print(inspect(config))
     local agent_cfg = config.AGENTS[agent_name]
 
     local cmd_name, args = action_string:match("^([^:]+):?(.*)")

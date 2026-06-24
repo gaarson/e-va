@@ -26,7 +26,7 @@ function M.analyze_and_optimize(ctx, config)
     local pinned_list = {}
     for k, _ in pairs(ctx.pinned_files or {}) do table.insert(pinned_list, k) end
 
-    local thoughts_text = ctx:get_recent_thoughts_text(ctx)
+    local thoughts_text = ctx:get_recent_thoughts_text()
     
     local context_brief = string.format(
         "TASK SUMMARY: %s\nCURRENT STEP: %d/%d\nLOADED FILES: %s\nRECENT ACTIONS: %s\nPINNED: %s\n",
