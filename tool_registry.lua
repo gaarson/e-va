@@ -42,7 +42,7 @@ function M.execute(action_string, ctx, agent_name)
     cmd_name = utils.trim(cmd_name)
 
     if cmd_name == "" then
-        return { output = "\n[ERROR]: Malformed command syntax. Use <cmd>tool:args</cmd>", signal = nil }
+        return { output = "\n[ERROR]: Malformed command syntax. Use ### COMMAND ###\ntool:args\n### END_COMMAND ###", signal = nil }
     end
 
     local tool = M.tools[cmd_name]
@@ -71,7 +71,7 @@ function M.generate_tool_manifest(allowed_tools)
     local doc = {
         "## SYSTEM DIRECTIVE: TOOLCHAIN INTERFACE",
         "You must interact with the environment using strict XML tags.",
-        "> **PARSING ORDER**: Commands are executed from the **END** of your response. Always place your final/most important `<cmd>` tags at the very end of your text to ensure they are processed first.",
+        "> **PARSING ORDER**: Commands are executed from the **END** of your response. Always place your final/most important command block at the very end of your text.",
         "",
         "CRITICAL: Do NOT invent tools. Only the following tools are available to your profile:\n"
     }
@@ -103,12 +103,18 @@ function M.generate_tool_manifest(allowed_tools)
     table.sort(tools_to_list, function(a, b) return a.name < b.name end)
 
     for _, item in ipairs(tools_to_list) do
-        table.insert(doc, string.format("### Tool: `<cmd>%s</cmd>`\n**Description**: %s\n**Usage Example**:\n%s\n", item.name, item.tool.desc, item.tool.usage))
+        local usage_example = string.format(
+            "### COMMAND ###\n%s\n### END_COMMAND ###", 
+            item.tool.usage:gsub("### COMMAND ###\n", ""):gsub("\n### END_COMMAND ###", "") -- Удаляем старые теги из описания, если они там есть
+        )
+        table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s\n", item.name, item.tool.desc, usage_example))
     end
 
-    -- table.insert(doc, "CRITICAL RULE: You MUST execute `<cmd>task_complete</cmd>` when your instructions are fulfilled to advance the pipeline.")
+    -- table.insert(doc, "CRITICAL RULE: You MUST execute `### COMMAND ###\ntask_complete\n### END_COMMAND ###` when your instructions are fulfilled to advance the pipeline.")
 
     return table.concat(doc, "\n")
 end
+
+M.is_tool_allowed = is_tool_allowed
 
 return M

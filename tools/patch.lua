@@ -2,10 +2,10 @@ local utils = require("utils")
 local patcher = require("patcher")
 
 local function register(registry)
-    registry.register("patch", "Applies diffs to code. REQUIRES 1-2 lines of unchanged surrounding code (MUC) in the SEARCH block to make the match unique. Do not emit zero-op patches.", "<cmd>patch:src/main.c\n<<<<<<< SEARCH\n unchanged context\n code to remove\n unchanged context\n=======\n unchanged context\n code to add\n unchanged context\n>>>>>>> REPLACE\n</cmd>", function(args, ctx, agent_name)
+    registry.register("patch", "Applies diffs to code. REQUIRES 1-2 lines of unchanged surrounding code (MUC) in the SEARCH block to make the match unique. Do not emit zero-op patches.", "### COMMAND ###\npatch:src/main.c\n<<<<<<< SEARCH\n unchanged context\n code to remove\n unchanged context\n=======\n unchanged context\n code to add\n unchanged context\n>>>>>>> REPLACE\n\n### END_COMMAND ###", function(args, ctx, agent_name)
         local path, patch_body = args:match("^([^%s\n]+)%s*\n(.*)")
         if not path or not patch_body then
-            return { output = "\n[ERROR]: Invalid patch syntax. Use <cmd>patch:file\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n</cmd>" }
+            return { output = "\n[ERROR]: Invalid patch syntax. Use ### COMMAND ###\npatch:file\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n\n### END_COMMAND ###" }
         end
 
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, path)

@@ -88,34 +88,44 @@ function M.log_messages_pretty(messages, turn, agent_name, ctx)
         end
         content = tostring(content)
 
-        -- Truncate long content for display
-        local max_display = 5000
-        local display_content = content
-        local truncated = false
-        if #content > max_display then
-            display_content = content:sub(1, max_display) .. "..."
-            truncated = true
-        end
-
-        -- Replace newlines for single-line preview
-        local one_line = display_content:gsub("\n", "\\n")
-
         print(string.format(
-            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)\27[0m\n" ..
-            "  %s%q\27[0m",
-            i,
-            color .. role .. "\27[0m",
-            ctx:estimate_tokens(content),
-            color,
-            one_line
-        ))
+            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)\27[0m",
+            i, color .. role .. "\27[0m", ctx:estimate_tokens(content) ))
 
-        if truncated then
-            print(string.format("  \27[33m[...truncated from %d chars]\27[0m", #content))
-        end
+        -- Print each line of content with color prefix and indentation (4 spaces) + prefix (4 spaces) = 8 spaces total indent before text starts after "    " + color prefix "    " 
+         -- Actually let's use exactly what was requested: indent of 4 spaces then colored text per line  
+         -- Format is: <indent><color>line<end_color> where indent is consistent across lines  
+         -- Looking at example format more carefully it seems like just simple indented lines with colors applied per-line  
+         
+         for line in content:gmatch("[^\r\n]+") do  
+             io.write(string.format("    %s%s\27[0m\n", color, line))  
+         end  
+         io.flush()  
     end
 
     print(string.rep("─", 72) .. "\n")
+end
+
+function M.log_final_dump(ctx, turn, agent_name)
+    local messages = {}
+    
+    -- Get system prompt if available
+    local system_prompt = ctx:get_system_prompt() or ""
+    if system_prompt and system_prompt ~= "" then
+        table.insert(messages, { role = "system", content = system_prompt })
+    end
+    
+    -- Get full history for the agent
+    local history = ctx:get_history(agent_name) or {}
+    for _, msg in ipairs(history) do
+        table.insert(messages, msg)
+    end
+    
+    if #messages > 0 then
+        M.log_messages_pretty(messages, turn, agent_name, ctx)
+    else
+        print("\n\27[33m[LOGGER] No messages to dump for agent: " .. tostring(agent_name) .. "\27[0m\n")
+    end
 end
 
 return M

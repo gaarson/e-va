@@ -1,7 +1,7 @@
 local utils = require("utils")
 
 local function register(registry)
-    registry.register("rollback", "Restores file from its .bak version", "<cmd>rollback:src/main.c</cmd>", function(args, ctx, agent_name)
+    registry.register("rollback", "Restores file from its .bak version", "### COMMAND ###\nrollback:src/main.c\n### END_COMMAND ###", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
         local ok, err = utils.restore_backup(full_path)

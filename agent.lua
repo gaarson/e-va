@@ -29,7 +29,6 @@ local logger = require("logger")
 local Context = require("context")
 local registry = require("tool_registry")
 local tools = require("tools")
-local parser = require("parser")
 local os = require("os")
 
 local ctx = Context.new(config)
@@ -118,29 +117,6 @@ if not instruction then
     end
 end
 
-local function load_prompt(file_path)
-    if not file_path then return "You are an AI assistant. Follow the user's instructions." end
-
-    local local_path = config.PROJECT_ROOT .. "/.e-va-conf/" .. file_path
-    local content = utils.read_file_range(local_path)
-
-    if not content then
-        local proj_path = config.PROJECT_ROOT .. "/" .. file_path
-        content = utils.read_file_range(proj_path)
-    end
-
-    if not content then
-        local global_path = agent_home .. "/" .. file_path
-        content = utils.read_file_range(global_path)
-    end
-
-    if not content then
-        logger.warn("Failed to load prompt from all paths: " .. file_path)
-        return "You are an AI assistant. Follow the user's instructions."
-    end
-    return content
-end
-
 local function parse_think_tags(text, is_reasoning)
     if not text or text == "" then return "", "" end
 
@@ -186,6 +162,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     if #synced_files > 0 then
         logger.info(string.format("[FS WATCHER] Auto-synced %d changed file(s): %s", #synced_files, table.concat(synced_files, ", ")))
     end
+    local executor = require("command_executor").new(ctx, agent_name)
 
     ctx:clear_turn_requested_files()
 
@@ -263,7 +240,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             table.insert(chat_buffer, { role = "user", content = handoff_msg })
             total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(handoff_msg)
         else
-            local default_msg = "[SYSTEM: INITIATION]\nYou have been assigned to this pipeline stage. Please review the context. If no explicit task was delegated to your role, analyze the state and take action, or execute <cmd>task_complete</cmd>."
+            local default_msg = "[SYSTEM: INITIATION]\nYou have been assigned to this pipeline stage. Please review the context. If no explicit task was delegated to your role, analyze the state and take action, or execute ### COMMAND ###\ntask_complete\n### END_COMMAND ###."
             table.insert(chat_buffer, { role = "user", content = default_msg })
             total_ctx_tokens = total_ctx_tokens + ctx:estimate_tokens(default_msg)
         end
@@ -293,6 +270,11 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             end
         end
     end
+    
+    -- Ensure the last message before LLM call is from user role
+    if #messages > 1 and messages[#messages].role == "assistant" then
+        table.insert(messages, { role = "user", content = "[SYSTEM]: Continue your analysis. Execute the next command or ask a question if clarification is needed." })
+    end
 
     local json = require("JSON")
     local trace_dump = json:encode({
@@ -303,7 +285,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     })
     logger.log_context(turn, agent_name .. "_PROMPT", trace_dump)
 
-    logger.log_messages_pretty(messages, turn, agent_name, ctx)
+    -- logger.log_messages_pretty(messages, turn, agent_name, ctx)
 
     logger.info(string.format("[TURN %d] Agent: %s | Active Context Tokens: ~%d / %d", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
 
@@ -428,62 +410,62 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     if thought ~= "" then ctx:add_thought(turn, thought) end
 
     local signal = nil
-    local cmds_executed = 0
-    local MAX_CMDS_PER_TURN = 5
-    local safe_assistant_content = ""
-    local spammed = false
+    local turn_result = executor:process_turn(content)
 
-    local cmd_iterator = parser.extract_commands(content)
-    for cmd_block in cmd_iterator do
-        cmds_executed = cmds_executed + 1
-        if cmds_executed > MAX_CMDS_PER_TURN then
-            spammed = true
-            break
-        end
-        safe_assistant_content = safe_assistant_content .. "<cmd>" .. cmd_block .. "</cmd>\n"
+    -- Сохраняем ответ ассистента в историю (обрезанный, если была команда)
+    local cmd_idx = content:find(executor.cmd_start)
+    local history_content = content
+    if cmd_idx then
+        history_content = content:sub(1, cmd_idx - 1)
+        -- Добавляем плейсхолдер, чтобы LLM понимал, что команда была выполнена
+        local tool_name = turn_result.tool or "unknown"
+        history_content = history_content -- .. "\n[SYSTEM: Command `" .. tool_name .. "` executed successfully.]"
     end
-
-    local final_history_content = ""
-
-    if spammed then
-        final_history_content = final_history_content .. safe_assistant_content
-    else
-        final_history_content = final_history_content .. content
-    end
-
-    ctx:add_message(agent_name, "assistant", final_history_content)
+    ctx:add_message(agent_name, "assistant", utils.trim(history_content))
     ctx:squash_last_mutation(agent_name)
 
-    local run_count = 0
-    local cmd_iterator_exec = parser.extract_commands(content)
-    for cmd_block in cmd_iterator_exec do
-        run_count = run_count + 1
-        if run_count > MAX_CMDS_PER_TURN then
-            local warn_msg = string.format("\n[SYSTEM NOTE]: You reached the execution limit of %d commands per turn. Remaining commands were safely ignored.", MAX_CMDS_PER_TURN)
-            print("\27[33m" .. warn_msg .. "\27[0m")
-            ctx:add_message(agent_name, "user", warn_msg)
-            break
+    -- Обработка результата
+    if turn_result.type == "CONVERSATION" then
+        -- LLM просто разговаривает, ничего не делает
+        if turn_result.hint then
+            logger.info("[SYSTEM] No command detected. " .. turn_result.hint)
+            ctx:add_message(agent_name, "user", "[SYSTEM CONTINUATION]: Your previous response contained no command. Continue your work — execute a tool or advance the pipeline.")
         end
+    elseif turn_result.type == "EXECUTED" then
+        -- Команда выполнена
+        local display_out = turn_result.output or ""
+        if #display_out > 500 then display_out = display_out:sub(1, 500) .. "\n...[TRUNCATED IN UI]" end
+        print("\27[36m" .. display_out .. "\27[0m")
 
-        local res = registry.execute(cmd_block, ctx, agent_name)
+        -- Добавляем результат в контекст как сообщение от пользователя (системное)
+        ctx:add_message(agent_name, "user", turn_result.output)
 
-        -- Reset recovery counter on successful command execution
-        ctx.consecutive_recoveries = 0
+        if turn_result.signal then signal = turn_result.signal end
 
-        local tool_name = cmd_block:match("^([^:]+)") or cmd_block
+    elseif turn_result.type == "USER_QUESTION" then
+        -- Пауза для ввода пользователя
+        io.write(string.format("\n\27[33m[AGENT ASKS]:\27[0m %s\n", turn_result.question))
+        io.write("\27[36m>>> YOUR REPLY:\27[0m ")
+        local user_ans = io.read("*l")
+        ctx:add_message(agent_name, "user", "[USER REPLY]: " .. (user_ans or "(empty)"))
 
-        ctx:add_tool_output(tool_name, res.output or "")
+    elseif turn_result.type == "RETRY" then
+        -- LLM ошиблась в формате, просим исправить
+        ctx:add_message(agent_name, "user", "[SYSTEM CORRECTION]: " .. turn_result.message .. "\nPlease output exactly one command using the strict format.")
 
-        if res.output and res.output ~= "" then
-            local display_out = res.output
-            if #display_out > 500 then display_out = display_out:sub(1, 500) .. "\n...[TRUNCATED IN UI]" end
-            print("\27[36m" .. display_out .. "\27[0m")
-            ctx:add_message(agent_name, "user", res.output)
+    elseif turn_result.type == "COMPLETED" then
+        -- Задача выполнена
+        if turn_result.output then
+          ctx:add_message(agent_name, "user", turn_result.output)
         end
-        if res.signal then signal = res.signal end
+        signal = "PIPELINE_NEXT_STAGE"
 
-        if signal == "PIPELINE_NEXT_STAGE" then break end
+    elseif turn_result.type == "ERROR" then
+        logger.error("[COMMAND EXECUTOR] " .. turn_result.message)
+        signal = "PIPELINE_NEXT_STAGE" -- Прерываем стадию при критической ошибке
     end
+
+    ctx:squash_last_mutation(agent_name)
 
     local OPTIMIZER_INTERVAL = 5
     local context_usage_ratio = total_ctx_tokens / (config.LIMITS.MAX_CONTEXT or 250000)
@@ -732,7 +714,7 @@ if not restored then
 3. Generate .e-va-conf/config.lua.
 4. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
 5. Generate MD prompts for your agents.
-Use <cmd>task_complete</cmd> when the scaffold is ready.
+Use ### COMMAND ###\ntask_complete\n### END_COMMAND ### when the scaffold is ready.
 ]], lint_cmd)
 
         if instruction and instruction ~= "" then

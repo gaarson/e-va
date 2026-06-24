@@ -2,10 +2,10 @@ local utils = require("utils")
 local os = require("os")
 
 local function register(registry)
-    registry.register("create_file", "Creates or overwrites a file with new content", "<cmd>create_file:src/new.c\n#include <stdio.h>\nint main() { return 0; }\n</cmd>", function(args, ctx, agent_name)
+    registry.register("create_file", "Creates or overwrites a file with new content", "### COMMAND ###\ncreate_file:src/new.c\n#include <stdio.h>\nint main() { return 0; }\n\n### END_COMMAND ###", function(args, ctx, agent_name)
         local path, new_code = args:match("^([^%s]+)%s*\n(.*)")
         if not path then
-            return { output = "\n[ERROR]: Invalid create_file syntax. Use <cmd>create_file:path/to/file\n[code]</cmd>" }
+            return { output = "\n[ERROR]: Invalid create_file syntax. Use ### COMMAND ###\ncreate_file:path/to/file\n[code]\n### END_COMMAND ###" }
         end
 
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, path)

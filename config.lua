@@ -37,31 +37,31 @@ function M.get()
 
     local BASE_PARAMS = {
         stream = true,
-        -- stop={ "<|im_end|>", "<|endoftext|>", "</tool_call>" },
-        stop_token_ids = { 248046, 248044 },
-        -- peculative_ngram = true,
+        stop={ "<|im_end|>", "<|endoftext|>", "</tool_call>" },
+        -- stop_token_ids = { 248046, 248044 },
+        peculative_ngram = true,
         stream_options = { include_usage = true }
     }
 
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 4096,
-            temperature = 0.3,
-            top_p = 0.95,
-            top_k = 40,
-            min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = true},
-            frequency_penalty = 0.5
+            temperature = 0.1,
+            -- top_p = 0.95,
+            -- top_k = 40,
+            -- min_p = 0.02,
+            chat_template_kwargs = {enable_thinking = false},
+            frequency_penalty = 0.1
             -- presence_penalty = 0.0
         },
         ENGINEERING = {
             max_tokens = 8192,
             temperature = 0.1,
-            top_p = 0.95,
-            top_k = 40,
-            min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = true},
-            frequency_penalty = 0.5
+            -- top_p = 0.95,
+            -- top_k = 40,
+            -- min_p = 0.02,
+            chat_template_kwargs = {enable_thinking = false},
+            frequency_penalty = 0.1
             -- presence_penalty = 0.0
         }
     }
@@ -98,7 +98,7 @@ function M.get()
             -- url = "http://192.168.0.102:8000/v1/chat/completions",
             url = "https://zo-diak.com/ai/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-            is_reasoning = true,
+            -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
@@ -112,7 +112,7 @@ function M.get()
             -- url = "http://192.168.0.102:8000/v1/chat/completions",
             url = "https://zo-diak.com/ai/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-            is_reasoning = true,
+            -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",

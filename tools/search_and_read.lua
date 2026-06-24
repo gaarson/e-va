@@ -1,9 +1,9 @@
 local utils = require("utils")
 local function register(registry)
-    registry.register("search_and_read", "Searches for files matching a pattern and reads them into memory. Useful for reading all files in a directory or matching a glob pattern.", "<cmd>search_and_read:src/*.c</cmd>", function(args, ctx, agent_name)
+    registry.register("search_and_read", "Searches for files matching a pattern and reads them into memory. Useful for reading all files in a directory or matching a glob pattern.", "### COMMAND ###\nsearch_and_read:src/*.c\n### END_COMMAND ###", function(args, ctx, agent_name)
         local pattern = utils.trim(args)
         if pattern == "" then
-            return { output = "\n[ERROR]: No pattern specified. Use <cmd>search_and_read:src/*.c</cmd>" }
+            return { output = "\n[ERROR]: No pattern specified. Use ### COMMAND ###\nsearch_and_read:src/*.c\n### END_COMMAND ###" }
         end
         
         local safe_pattern = utils.shell_quote(pattern)
