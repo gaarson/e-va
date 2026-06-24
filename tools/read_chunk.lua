@@ -1,7 +1,7 @@
 local utils = require("utils")
 
 local function register(registry)
-    registry.register("read_chunk", "Reads specific lines from a file", "### COMMAND ###\nread_chunk:src/main.c:10-25\n### END_COMMAND ###", function(args, ctx, agent_name)
+    registry.register("read_chunk", "Reads specific lines from a file", "$$$ COMMAND $$$\nread_chunk:src/main.c:10-25\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
         local path, start_l, end_l = args:match("^(.-):(%d+)%-(%d+)$")
         if not path then path, start_l, end_l = args:match("^path:(.-):(%d+)%-(%d+)$") end
 

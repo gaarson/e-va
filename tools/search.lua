@@ -1,7 +1,7 @@
 local utils = require("utils")
 
 local function register(registry)
-    registry.register("search", "Fast RipGrep search", "### COMMAND ###\nsearch:function_name\n### END_COMMAND ###", function(args, ctx, agent_name)
+    registry.register("search", "Fast RipGrep search", "$$$ COMMAND $$$\nsearch:function_name\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
         local query = utils.trim(args)
         if query == "" then return { output = "\n[ERROR]: Empty search query." } end
         if ctx:has_searched(query) then return { output = "\n[SYSTEM]: Skipped duplicate search. Check History." } end

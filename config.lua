@@ -118,8 +118,10 @@ function M.get()
     -- Добавь в возвращаемую таблицу cfg:
     cfg.OPTIMIZER_AGENT = {
         name = "OPTIMIZER",
-        url = "https://zo-diak.com/ai/v1/chat/completions",
-        model = "Qwen3.5-27B-AWQ",
+        -- url = "https://zo-diak.com/ai/v1/chat/completions",
+        url = "http://192.168.0.102:8000/v1/chat/completions",
+        -- model = "Qwen3.5-27B-AWQ",
+        model = "gemma4-12B",
         token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
         -- is_reasoning = true,
         params = {
@@ -137,6 +139,7 @@ function M.get()
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",
+            -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = {
@@ -146,11 +149,12 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            -- url = "http://192.168.0.102:8000/v1/chat/completions",
             url = "https://zo-diak.com/ai/v1/chat/completions",
+            -- url = "http://192.168.0.102:8000/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",
+            -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = {

@@ -88,7 +88,7 @@ M.PRUNE_STRATEGIES = {
             for i = 1, #history - 5 do
                 if history[i] and history[i].role == "assistant" then
                     local c = history[i].content or ""
-                    if c:match("### COMMAND ###\n(patch|create_file):") then
+                    if c:match("$$$ COMMAND $$$\n(patch|create_file):") then
                         history[i].content = "[SYSTEM MEMORY: Previous code mutation squashed to save context.]"
                         total = total - estimate_fn(c) + estimate_fn(history[i].content)
                         if total <= limits.max_tokens then break end
@@ -189,7 +189,7 @@ function M:squash_last_mutation(agent_name)
         local msg = history[i]
         if msg.role == "assistant" then
             local original = msg.content or ""
-            local squashed = original:gsub("### COMMAND ###\n(patch|create_file):([^%s\n]+)%s*\n.-### END_COMMAND ###", 
+            local squashed = original:gsub("$$$ COMMAND $$$\n(patch|create_file):([^%s\n]+)%s*\n.-$$$ END_COMMAND $$$", 
                 function(_, file_path) return string.format("\n[SYSTEM MEMORY: %s applied to '%s'.]\n", 
                     (file_path == "patch" and "Patch" or "File"), file_path or "unknown") end)
             squashed = utils.trim(squashed:gsub("\n\n+", "\n\n"))
@@ -282,6 +282,8 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         local role = msg.role == "system" and "user" or msg.role
         table.insert(messages, { role = role, content = msg.content })
     end
+
+    -- print(string.format("[DEBUG] Recency Block content: %s", recency)) 
     
     -- Инъекция изображений
     if self.images_loaded and #self.images > 0 then
@@ -394,11 +396,17 @@ function M:get_engine_directives(agent_cfg)
                  has_complete and "Use `task_complete` to finish." or "Analyze and respond."
     return string.format([[
 ==================================================
-⚙️ ENGINE DIRECTIVES:
+ENGINE DIRECTIVES:
 1. PIPELINE: %s
-2. STRICT COMMAND SYNTAX: Wrap tools in ### COMMAND ### ... ### END_COMMAND ###
+2. STRICT COMMAND SYNTAX: Wrap tools in 
+
+$$$ COMMAND $$$
+
+... 
+
+$$$ END_COMMAND $$$
+
 3. ONE COMMAND PER TURN. Use batch tools if needed.
-4. NO XML TAGS like <cmd> or <function> or <tool_call>. ONLY use the block format.
 ==================================================]], rule)
 end
 
@@ -460,8 +468,8 @@ function M:process_turn_response(agent_name, raw_content, executor)
     local tool_name = cmd:match("^([^:]+)")
     -- Сохраняем ответ ассистента (обрезанный если была команда)
     local hist_content = raw_content
-    if cmd:match("### COMMAND ###") then
-        local idx = raw_content:find("### COMMAND ###")
+    if cmd:match("$$$ COMMAND $$$") then
+        local idx = raw_content:find("$$$ COMMAND $$$")
         hist_content = raw_content:sub(1, idx - 1)
     end
     self:add_message(agent_name, "assistant", utils.trim(hist_content))
@@ -697,7 +705,7 @@ function M:get_report(agent_name)
     if count > 0 then search_summary = string.format("\n## SEARCH HISTORY\n(Cached %d queries)\n", count) end
     local tree_content = self.file_tree or "(empty)"
     if #tree_content > 30000 then
-        tree_content = tree_content:sub(1, 30000) .. "\n... [TREE TRUNCATED - USE ### COMMAND ###\nexplore_tree:path:depth\n### END_COMMAND ### TO NAVIGATE]"
+        tree_content = tree_content:sub(1, 30000) .. "\n... [TREE TRUNCATED - USE $$$ COMMAND $$$\nexplore_tree:path:depth\n$$$ END_COMMAND $$$ TO NAVIGATE]"
     end
     local tree_block = string.format("## PROJECT STRUCTURE (Current View)\n```text\n%s\n```\n", tree_content)
     return string.format("# PROJECT CONTEXT\nRoot: %s\n---\n%s%s", self.flow_config.PROJECT_ROOT, tree_block, search_summary)

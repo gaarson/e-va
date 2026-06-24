@@ -1,7 +1,7 @@
 local utils = require("utils")
 
 local function register(registry)
-    registry.register("ask_user", "Pause execution and ask the human user a question", "### COMMAND ###\nask_user:Is this logic correct?\n### END_COMMAND ###", function(args, ctx, agent_name)
+    registry.register("ask_user", "Pause execution and ask the human user a question", "$$$ COMMAND $$$\nask_user:Is this logic correct?\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
         io.write(string.format("\n\27[33m[AGENT '%s' ASKS]:\27[0m %s\n", agent_name, args))
         io.write("\27[36m>>> YOUR REPLY (or press Enter to skip):\27[0m ")
         local ans = io.read("*l")

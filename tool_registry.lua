@@ -15,10 +15,10 @@ end
 
 local function is_tool_allowed(agent_cfg, tool_name)
     if not agent_cfg or not agent_cfg.allowed_tools then return false end
-    
+
     for _, allowed in ipairs(agent_cfg.allowed_tools) do
         if allowed == tool_name or allowed == "*" then return true end
-        
+
         if allowed:sub(-1) == "*" then
             local prefix = allowed:sub(1, -2)
             if tool_name:sub(1, #prefix) == prefix then 
@@ -26,7 +26,7 @@ local function is_tool_allowed(agent_cfg, tool_name)
             end
         end
     end
-    
+
     return false
 end
 
@@ -44,7 +44,7 @@ function M.execute(action_string, ctx, agent_name)
     cmd_name = utils.trim(cmd_name)
 
     if cmd_name == "" then
-        return { output = "\n[ERROR]: Malformed command syntax. Use ### COMMAND ###\ntool:args\n### END_COMMAND ###", signal = nil }
+        return { output = "\n[ERROR]: Malformed command syntax. Use $$$ COMMAND $$$\ntool:args\n$$$ END_COMMAND $$$", signal = nil }
     end
 
     local tool = M.tools[cmd_name]
@@ -105,14 +105,11 @@ function M.generate_tool_manifest(allowed_tools)
     table.sort(tools_to_list, function(a, b) return a.name < b.name end)
 
     for _, item in ipairs(tools_to_list) do
-        local usage_example = string.format(
-            "### COMMAND ###\n%s\n### END_COMMAND ###", 
-            item.tool.usage:gsub("### COMMAND ###\n", ""):gsub("\n### END_COMMAND ###", "") -- Удаляем старые теги из описания, если они там есть
-        )
+        local usage_example = item.tool.usage
         table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s\n", item.name, item.tool.desc, usage_example))
     end
 
-    -- table.insert(doc, "CRITICAL RULE: You MUST execute `### COMMAND ###\ntask_complete\n### END_COMMAND ###` when your instructions are fulfilled to advance the pipeline.")
+    -- table.insert(doc, "CRITICAL RULE: You MUST execute `$$$ COMMAND $$$\ntask_complete\n$$$ END_COMMAND $$$` when your instructions are fulfilled to advance the pipeline.")
 
     return table.concat(doc, "\n")
 end
@@ -120,3 +117,5 @@ end
 M.is_tool_allowed = is_tool_allowed
 
 return M
+
+

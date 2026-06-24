@@ -21,8 +21,8 @@ function M.new(ctx, agent_name)
         retry_count = 0,
         max_retries = 3,
         -- Строгие маркеры, которые сложно случайно сгенерировать в коде
-        cmd_start = "### COMMAND ###",
-        cmd_end = "### END_COMMAND ###"
+        cmd_start = "$$$ COMMAND $$$",
+        cmd_end = "$$$ END_COMMAND $$$"
     }, { __index = M })
 end
 

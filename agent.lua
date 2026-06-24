@@ -132,7 +132,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     if #synced_files > 0 then
         logger.info(string.format("[FS WATCHER] Auto-synced %d changed file(s): %s", #synced_files, table.concat(synced_files, ", ")))
     end
-    ctx:clear_turn_requested_files()
+    if turn >= 3 then ctx:clear_turn_requested_files() end
 
     local executor = require("command_executor").new(ctx, agent_name)
     local limits = config.LIMITS
@@ -245,13 +245,13 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 
     -- 3. Обрабатываем результат
     if result.type == "COMPLETED" then
-        save_state()
         return "PIPELINE_NEXT_STAGE" -- Сигнал для завершения стадии
     elseif result.type == "ERROR" then
         logger.error("Agent execution error: " .. (result.message or "Unknown error"))
         -- Можно вернуть ошибку или продолжить, в зависимости от логики
         return "ERROR"
     end
+    save_state()
 
     -- Если это просто разговор или успешное выполнение команды (не завершающее)
     return nil
@@ -380,6 +380,7 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
         local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. norm_start)
         if content then
             ctx:add_file(norm_start, content)
+            ctx:track_requested_file(norm_start)
             initial_msg = initial_msg .. "\n(Note: I loaded target file '"..norm_start.."' for you)"
         end
     end
@@ -488,7 +489,13 @@ if not restored then
 3. Generate .e-va-conf/config.lua.
 4. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
 5. Generate MD prompts for your agents.
-Use ### COMMAND ###\ntask_complete\n### END_COMMAND ### when the scaffold is ready.
+Use 
+$$$ COMMAND $$$
+
+task_complete
+
+$$$ END_COMMAND $$$ 
+when the scaffold is ready.
 ]], lint_cmd)
 
         if instruction and instruction ~= "" then

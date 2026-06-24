@@ -1,7 +1,7 @@
 local utils = require("utils")
 
 local function register(registry)
-    registry.register("outline", "Generates an AST-like outline of a file (functions, classes, structs)", "### COMMAND ###\noutline:src/main.c\n### END_COMMAND ###", function(args, ctx, agent_name)
+    registry.register("outline", "Generates an AST-like outline of a file (functions, classes, structs)", "$$$ COMMAND $$$\noutline:src/main.c\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
 

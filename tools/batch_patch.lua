@@ -2,7 +2,7 @@ local utils = require("utils")
 local patcher = require("patcher")
 
 local function register(registry)
-    registry.register("batch_patch", "Applies patches to multiple files in a single command.", "### COMMAND ###\nbatch_patch:file1\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n---FILE---\nfile2\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n### END_COMMAND ###", function(args, ctx, agent_name)
+    registry.register("batch_patch", "Applies patches to multiple files in a single command.", "$$$ COMMAND $$$\nbatch_patch:file1\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n---FILE---\nfile2\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
         local blocks = {}
         local current_block = ""
         local current_file = nil
@@ -26,7 +26,7 @@ local function register(registry)
         end
         
         if #blocks == 0 then
-            return { output = "\n[ERROR]: No valid patch blocks found. Use ### COMMAND ###\nbatch_patch:file1\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n---FILE---\nfile2\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n### END_COMMAND ###" }
+            return { output = "\n[ERROR]: No valid patch blocks found. Use $$$ COMMAND $$$\nbatch_patch:file1\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n---FILE---\nfile2\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n$$$ END_COMMAND $$$" }
         end
         
         local results = {}

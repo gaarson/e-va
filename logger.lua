@@ -189,42 +189,37 @@ end
 -- Pretty message logging (unchanged signature and behavior) 
 
 function M.log_messages_pretty(messages, turn, agent_name, ctx) 
-    local colors = { 
+    local colors = {
         system    = "\27[35m",  -- magenta 
         user      = "\27[32m",  -- green 
         assistant = "\27[36m",  -- cyan 
-        end_c     = "\27[0m" 
-    } 
+        end_c     = "\27[0m"
+    }
 
-    print("\n" .. string.rep("\u2500", 72)) 
+    print("\n")
     print(string.format("\27[1m[MESSAGES] Turn %d | Agent: %s | Total: %d msg(s)\27[0m", turn, agent_name, #messages)) 
-    print(string.rep("\u2500", 72)) 
 
-    for i, msg in ipairs(messages) do 
-        local role = msg.role or "unknown" 
-        local color = colors[role] or "\27[37m" 
+    for i, msg in ipairs(messages) do
+        local role = msg.role or "unknown"
+        local color = colors[role] or "\27[37m"
 
         local content = msg.content 
-        if type(content) == "table" then 
-            local json = require("JSON") 
-            content = json:encode(content, 2) 
-        end 
+        if type(content) == "table" then
+            local json = require("JSON")
+            content = json:encode(content, 2)
+        end
         content = tostring(content) 
 
         print(string.format( 
-            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)\27[0m", 
-            i, color .. role .. "\27[0m", ctx:estimate_tokens(content))) 
+            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)", 
+            i, color .. role, ctx:estimate_tokens(content))) 
 
-        for line in content:gmatch("[^\r\n]+") do  
-            io.write(string.format("    %s%s\27[0m\n", color, line))  
-        end  
+        io.write(string.format("%s%s\27[0m\n", color, content)) 
         io.flush()  
     end 
 
-    print(string.rep("\u2500", 72) .. "\n") 
+    print("\n") 
 end 
-
--- Final dump logging (unchanged signature and behavior) 
 
 function M.log_final_dump(ctx, turn, agent_name) 
     local messages = {} 

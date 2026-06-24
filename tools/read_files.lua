@@ -1,13 +1,13 @@
 local utils = require("utils")
 local function register(registry)
-    registry.register("read_files", "Reads multiple files into memory at once. Use this instead of multiple read_file commands to save turns.", "### COMMAND ###\nread_files:src/main.c,src/utils.h,src/config.lua\n### END_COMMAND ###", function(args, ctx, agent_name)
+    registry.register("read_files", "Reads multiple files into memory at once. Use this instead of multiple read_file commands to save turns.", "$$$ COMMAND $$$\nread_files:src/main.c,src/utils.h,src/config.lua\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
         local paths = {}
         for path in args:gmatch("([^,]+)") do
             table.insert(paths, utils.trim(path))
         end
         
         if #paths == 0 then
-            return { output = "\n[ERROR]: No files specified. Use ### COMMAND ###\nread_files:file1,file2,file3\n### END_COMMAND ###" }
+            return { output = "\n[ERROR]: No files specified. Use $$$ COMMAND $$$\nread_files:file1,file2,file3\n$$$ END_COMMAND $$$" }
         end
         
         local results = {}

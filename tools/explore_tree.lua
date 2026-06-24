@@ -1,7 +1,7 @@
 local utils = require("utils")
 
 local function register(registry)
-    registry.register("explore_tree", "Explore directory structure with depth limit", "### COMMAND ###\nexplore_tree:src/api:2\n### END_COMMAND ###", function(args, ctx, agent_name)
+    registry.register("explore_tree", "Explore directory structure with depth limit", "$$$ COMMAND $$$\nexplore_tree:src/api:2\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
         local path, depth = args:match("^(.-):(%d+)$")
         if not path then
             path = utils.trim(args)
