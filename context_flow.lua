@@ -285,13 +285,23 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
 
     -- print(string.format("[DEBUG] Recency Block content: %s", recency)) 
     
-    -- Инъекция изображений
+    -- Инъекция изображений (OpenAI Format)
     if self.images_loaded and #self.images > 0 then
-        for i = 1, #messages do
+        local formatted_images = {}
+        for _, img in ipairs(self.images) do
+            table.insert(formatted_images, {
+                type = "image_url",
+                image_url = {
+                    url = "data:" .. img.mime_type .. ";base64," .. img.base64_data
+                }
+            })
+        end
+        
+        for i = #messages, 1, -1 do
             if messages[i].role == "user" then
                 messages[i].content = {
                     { type = "text", text = messages[i].content },
-                    unpack(self.images)
+                    unpack(formatted_images)
                 }
                 break
             end
@@ -790,7 +800,6 @@ function M:get_insights_summary()
     return text
 end
 
--- Алиасы для обратной совместимости
 function M:get_execution_plan_text() return self:get_plan_text() end
 function M:get_last_actions_text() return self:get_actions_text() end
 

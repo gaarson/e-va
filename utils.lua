@@ -365,15 +365,14 @@ function M.load_images_from_dir(dir_path)
     if not dir_path then return {} end
 
     local safe_dir = M.shell_quote(dir_path)
-    local exists = os.execute(string.format("test -d %s", safe_dir))
-    if not exists then return {} end
+    if os.execute(string.format("test -d %s", safe_dir)) ~= 0 then return {} end
 
     local exts = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
     local patterns = {}
     for _, ext in ipairs(exts) do
         table.insert(patterns, "-iname '*." .. ext .. "'")
     end
-    local find_cmd = string.format("find %s -maxdepth 1 -type f %s 2>/dev/null", safe_dir, table.concat(patterns, " -o "))
+    local find_cmd = string.format("find %s -maxdepth 1 -type f \\( %s \\) 2>/dev/null", safe_dir, table.concat(patterns, " -o "))
 
     local p = io.popen(find_cmd)
     if not p then return {} end

@@ -134,6 +134,10 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     end
     if turn >= 3 then ctx:clear_turn_requested_files() end
 
+    if config.PICTURES_DIR then
+        ctx:load_images(config.PROJECT_ROOT .. "/" .. config.PICTURES_DIR)
+    end
+
     local executor = require("command_executor").new(ctx, agent_name)
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
@@ -141,10 +145,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local context_data = ctx:build_context(agent_name, agent_cfg, available_tokens)
     local messages = context_data.messages
     local total_ctx_tokens = context_data.total_tokens
-
-    if config.PICTURES_DIR then
-        ctx:load_images(config.PROJECT_ROOT .. "/" .. config.PICTURES_DIR)
-    end
 
     logger.log_context(turn, agent_name .. "_PROMPT", json:encode({
         turn = turn, agent = agent_name, tokens = total_ctx_tokens, payload = messages
@@ -196,6 +196,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     while true do
         for attempt = 1, max_retries do
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
+            print('REQUEST!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
             if response_data then break end
             logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
             if attempt < max_retries then
@@ -411,17 +412,18 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
 end
 
 if not restored then
+    print(is_bootstrap)
     if is_bootstrap then
       print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent with High Creativity...\27[0m")
 
         os.execute("mkdir -p " .. config.PROJECT_ROOT .. "/.e-va-conf/prompts")
 
         config.AGENTS = config.AGENTS or {}
-        local fallback_agent = config.AGENTS.ARCHITECT or {}
+        local arch_agent = config.AGENTS.ARCHITECT or {}
 
         -- Validate bootstrap prerequisites
-        local has_url = fallback_agent.url or os.getenv("LLM_URL")
-        local has_model = fallback_agent.model or os.getenv("LLM_MODEL")
+        local has_url = arch_agent.url or os.getenv("LLM_URL")
+        local has_model = arch_agent.model or os.getenv("LLM_MODEL")
         
         if not has_url then
             logger.error("[BOOTSTRAP] FATAL: No LLM URL found in config.AGENTS.ARCHITECT or env var LLM_URL.")
@@ -435,11 +437,13 @@ if not restored then
             os.exit(1)
         end
 
+        print(inspect(arch_agent))
+
         config.AGENTS.BOOTSTRAPPER = {
             name = "BOOTSTRAPPER",
-            url = fallback_agent.url or os.getenv("LLM_URL") or "http://127.0.0.1:8000/v1/chat/completions",
-            model = fallback_agent.model or os.getenv("LLM_MODEL") or "default-model",
-            token = fallback_agent.token or nil,
+            url = arch_agent.url or os.getenv("LLM_URL") or "http://127.0.0.1:8000/v1/chat/completions",
+            model = arch_agent.model or os.getenv("LLM_MODEL") or "default-model",
+            token = arch_agent.token or nil,
             params = {
                 stream = true,
                 temperature = 0.7,
@@ -450,7 +454,7 @@ if not restored then
         }
 
         config.PIPELINE = {
-            { stage = "BOOTSTRAP_DISCOVERY", agents = { "BOOTSTRAPPER" }, mode = "sequential" }
+            { stage = "BOOTSTRAP_DISCOVERY", agents = { "BOOTSTRAPPER" }, mode = "interactive" }
         }
 
         ctx = ContextFlow.new(config.CONTEXT_FLOW, config)
@@ -485,15 +489,12 @@ if not restored then
         local lint_cmd = detect_lint_command()
         local trigger_msg = string.format([[
 1. Explore the project.
-2. Run '%s' (piped through head) to see current errors.
-3. Generate .e-va-conf/config.lua.
-4. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
-5. Generate MD prompts for your agents.
+2. Generate .e-va-conf/config.lua.
+3. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
+4. Generate MD prompts for your agents.
 Use 
 >>> COMMAND >>>
-
 task_complete
-
 >>> END_COMMAND >>> 
 when the scaffold is ready.
 ]], lint_cmd)
@@ -504,7 +505,6 @@ when the scaffold is ready.
 
         ctx:add_message("BOOTSTRAPPER", "user", trigger_msg)
         execute_pipeline()
-        os.exit(0)
 
     elseif instruction or target_agent then
         setup_and_run_task(start_file, instruction, nil)

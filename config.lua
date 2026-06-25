@@ -73,31 +73,31 @@ function M.get()
 
     local BASE_PARAMS = {
         stream = true,
-        stop={ "<|im_end|>", "<|endoftext|>", "</tool_call>" },
+        stop={"<|im_end|>", "<|endoftext|>"},
         -- stop_token_ids = { 248046, 248044 },
-        peculative_ngram = true,
-        stream_options = { include_usage = true }
+        -- peculative_ngram = true,
+        -- stream_options = { include_usage = true }
     }
 
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 32768,
-            temperature = 0.2,
+            temperature = 0.1,
             top_p = 0.80,
             top_k = 35,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = false},
+            -- chat_template_kwargs = {enable_thinking = false},
             -- enable_thinking = true,
-            frequency_penalty = 0.2
+            -- frequency_penalty = 0.2
             -- presence_penalty = 0.0
         },
         ENGINEERING = {
-            max_tokens = 32768,
+            max_tokens = 65536,
             temperature = 0.1,
             top_p = 0.95,
             top_k = 40,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = false},
+            -- chat_template_kwargs = {enable_thinking = false},
             frequency_penalty = 0.2
             -- presence_penalty = 0.0
         }
