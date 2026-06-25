@@ -2,7 +2,7 @@ local utils = require("utils")
 local os = require("os")
 
 local function register(registry)
-    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts (Mandatory for linters/tests)", "$$$ COMMAND $$$\nshell:make test\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
+    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts (Mandatory for linters/tests)", ">>> COMMAND >>>\nshell:make test\n>>> END_COMMAND >>>", function(args, ctx, agent_name)
         local cmd = utils.trim(args)
         local safe_prefixes = { "ls", "cat", "grep", "rg", "echo", "pwd", "ps", "find", "head", "tail", "whoami", "make", "test", "npm", "cargo" }
         local is_safe = false
@@ -91,7 +91,7 @@ local function register(registry)
             if res:match("[Ee]rror") or res:match("[Ff]ail") or res:match("command not found") or (exit_code and exit_code ~= 0) then
                 ctx.test_failures = ctx.test_failures + 1
                 if ctx.test_failures >= 3 then
-                    output = output .. "\n\n[CIRCUIT BREAKER TRIGGERED]: You have failed this shell validation 3 times in a row. STOP BLIND PATCHING. Read the actual error and use $$$ COMMAND $$$\nread_chunk\n$$$ END_COMMAND $$$ to verify the source code before trying again."
+                    output = output .. "\n\n[CIRCUIT BREAKER TRIGGERED]: You have failed this shell validation 3 times in a row. STOP BLIND PATCHING. Read the actual error and use >>> COMMAND >>>\nread_chunk\n>>> END_COMMAND >>> to verify the source code before trying again."
                     ctx.test_failures = 0
                 end
             else

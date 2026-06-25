@@ -1,7 +1,7 @@
 local utils = require("utils")
 
 local function register(registry)
-    registry.register("cleanup_baks", "Deletes all .bak files", "$$$ COMMAND $$$\ncleanup_baks\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
+    registry.register("cleanup_baks", "Deletes all .bak files", ">>> COMMAND >>>\ncleanup_baks\n>>> END_COMMAND >>>", function(args, ctx, agent_name)
         local ok = utils.cleanup_backups(ctx.config.PROJECT_ROOT)
         if ok then return { output = "\n[SYSTEM]: All .bak files removed." }
         else return { output = "\n[ERROR]: Failed to clean up .bak files." } end
@@ -9,5 +9,6 @@ local function register(registry)
 end
 
 return { register = register }
+
 
 

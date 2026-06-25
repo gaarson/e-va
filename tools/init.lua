@@ -53,7 +53,7 @@ local function init(provided_config)
                 for _, tool in ipairs(mcp_tools) do
                     local eva_tool_name = "mcp_" .. srv_name .. "_" .. tool.name
                     print("[DEBUG MCP TOOL DISCOVERY] -> " .. eva_tool_name)
-                    local usage_example = string.format("$$$ COMMAND $$$\n%s:{\"param\": \"value\"}\n$$$ END_COMMAND $$$", eva_tool_name)
+                    local usage_example = string.format(">>> COMMAND >>>\n%s:{\"param\": \"value\"}\n>>> END_COMMAND >>>", eva_tool_name)
                     
                     local schema_str = cjson.encode(tool.inputSchema or {})
                     

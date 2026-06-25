@@ -1,6 +1,6 @@
 local utils = require("utils")
 local function register(registry)
-    registry.register("read_file", "Loads full file into memory", "$$$ COMMAND $$$\nread_file:src/main.c$$$ END_COMMAND $$$", function(args, ctx, agent_name)
+    registry.register("read_file", "Loads full file into memory", ">>> COMMAND >>>\nread_file:src/main.c>>> END_COMMAND >>>", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         if ctx.knowledge_base[rel_path] then
             return { output = "\n[SYSTEM]: File '" .. rel_path .. "' is ALREADY in memory. Scroll up and look at the <file_context path=\""..rel_path.."\> XML block in your SYSTEM PROMPT to read its contents. DO NOT call read_file on this path again. Proceed with your next step." }

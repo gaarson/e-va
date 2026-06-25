@@ -86,7 +86,7 @@ function M.get()
             top_p = 0.80,
             top_k = 35,
             -- min_p = 0.02,
-            -- chat_template_kwargs = {enable_thinking = true},
+            chat_template_kwargs = {enable_thinking = false},
             -- enable_thinking = true,
             frequency_penalty = 0.2
             -- presence_penalty = 0.0
@@ -123,7 +123,7 @@ function M.get()
         -- model = "Qwen3.5-27B-AWQ",
         model = "gemma4-12B",
         token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-        -- is_reasoning = true,
+        is_reasoning = true,
         params = {
             stream = true,
             temperature = 0.1,

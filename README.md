@@ -25,7 +25,7 @@ docker run --rm -it -v $(pwd):/home/agent/workspace e-va-agent
 
 ```
 
-**Продвинутый запуск (для использования инструмента `$$$ COMMAND $$$\ntrace_execution\n$$$ END_COMMAND $$$`):**
+**Продвинутый запуск (для использования инструмента `>>> COMMAND >>>\ntrace_execution\n>>> END_COMMAND >>>`):**
 Инструмент `trace_execution` использует `bpftrace` (eBPF) для профилирования бинарников на лету. Это требует взаимодействия с kernel space. Для работы этого инструмента контейнер должен запускаться с расширенными правами:
 
 ```bash
@@ -115,7 +115,7 @@ LLM часто галлюцинируют с пробелами, табами и
 **Синтаксис патча:**
 
 ```xml
-$$$ COMMAND $$$
+>>> COMMAND >>>
 patch:src/main.c
 <<<<<<< SEARCH
     // Unchanged line
@@ -127,7 +127,7 @@ patch:src/main.c
     int b = 2; // New code
     // Unchanged line
 >>>>>>> REPLACE
-$$$ END_COMMAND $$$
+>>> END_COMMAND >>>
 
 ```
 
@@ -140,7 +140,7 @@ Instruction-Tuned модели (Qwen, Claude) обучены использов�
 **Уровни защиты E-va:**
 
 1. **Recency Injection**: В самый конец каждого промпта (непосредственно перед ответом модели) движок вклеивает блок `⚙️ ENGINE DIRECTIVES`, строго запрещающий использование `<tool_call>`.
-2. **Parser Sanitization**: По принципу Postel's Law, `parser.lua` автоматически удаляет "мусорные" теги-обертки LLM до того, как state machine начнет извлекать команды `$$$ COMMAND $$$\n`.
+2. **Parser Sanitization**: По принципу Postel's Law, `parser.lua` автоматически удаляет "мусорные" теги-обертки LLM до того, как state machine начнет извлекать команды `>>> COMMAND >>>\n`.
 3. **Shell Escaping**: Все пути и аргументы, передаваемые в системный shell, экранируются через `utils.shell_quote` для защиты от Command Injection.
 4. **Shell Circuit Breaker**: Если агент 3 раза подряд "ломает" билд (команда `make` или `test` возвращает non-zero exit code), E-va прерывает цикл и заставляет агента перечитать исходники.
 
@@ -180,7 +180,7 @@ local utils = require("utils")
 
 local function register(registry)
     -- registry.register(Имя, Описание, Пример_использования, Функция_обработчик)
-    registry.register("my_tool", "Делает что-то полезное", "$$$ COMMAND $$$\nmy_tool:arg1\n$$$ END_COMMAND $$$", function(args, ctx, agent_name)
+    registry.register("my_tool", "Делает что-то полезное", ">>> COMMAND >>>\nmy_tool:arg1\n>>> END_COMMAND >>>", function(args, ctx, agent_name)
         local arg = utils.trim(args)
         
         if arg == "" then
