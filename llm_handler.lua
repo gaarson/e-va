@@ -51,6 +51,14 @@ function M.send_request(profile, messages, options)
     local payload = provider.build_payload(profile, messages, options)
 
     local body = json:encode(payload)
+    
+    -- Pre-flight validation: ensure body is valid JSON before sending
+    local ok, decoded = pcall(json.decode, json, body)
+    if not ok then
+        logger:error("PRE-FLIGHT VALIDATION FAILED: Constructed JSON body is invalid. Error: " .. tostring(decoded))
+        return nil, "Invalid JSON body constructed for API request"
+    end
+    
     req:set_body(body)
 
     local headers, stream = req:go(600)

@@ -28,9 +28,17 @@ function M:parse_command(text)
     -- Гибкий паттерн: игнорирует любые пробелы/переносы вокруг команды
     local pattern = string.format("%s%s(.-)%s%s", self.cmd_start, "%s*", "%s*", self.cmd_end)
     local match = text:match(pattern)
+    
     if not match then
-        return nil, "No valid command block found"
+        -- Fallback: if no closed block, look for just the start marker
+        local fallback_pattern = self.cmd_start .. "%s*(.*)"
+        match = text:match(fallback_pattern)
+        
+        if not match or match == "" then
+            return nil, "No valid command block found"
+        end
     end
+
     match = utils.trim(match)
     if match == "" then
         return nil, "Empty command payload"

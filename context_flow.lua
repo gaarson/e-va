@@ -501,8 +501,9 @@ function M:process_turn_response(agent_name, raw_content, executor)
     end
     -- Добавляем результат в историю как user/system
     if res.output then
-        self:add_message(agent_name, "user", res.output)
-        self:add_tool_output(tool_name, res.output)
+        local sanitized_output = utils.sanitize_for_json(res.output)
+        self:add_message(agent_name, "user", sanitized_output)
+        self:add_tool_output(tool_name, sanitized_output)
     end
     return { type = res.signal == "PIPELINE_NEXT_STAGE" and "COMPLETED" or "EXECUTED",
              tool = tool_name, output = res.output, signal = res.signal }

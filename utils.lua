@@ -368,6 +368,72 @@ function M.base64_encode(str)
     return table.concat(out)
 end
 
+function M.escape_json_string(str)
+    if type(str) ~= "string" then return tostring(str) end
+    str = str:gsub("\\", "\\\\")
+    str = str:gsub('"', '\\"')
+    str = str:gsub("\n", "\\n")
+    str = str:gsub("\r", "\\r")
+    str = str:gsub("\t", "\\t")
+    str = str:gsub("\b", "\\b")
+    str = str:gsub("\f", "\\f")
+    -- Escape remaining control characters 0x00-0x1F
+    local out = {}
+    for i = 1, #str do
+        local byte = string.byte(str, i)
+        if byte >= 0 and byte <= 31 then
+            table.insert(out, string.format("\\u%04x", byte))
+        else
+            table.insert(out, string.sub(str, i, i))
+        end
+    end
+    return table.concat(out)
+end
+
+function M.sanitize_for_json(str)
+    if type(str) ~= "string" then return tostring(str) end
+    -- Strip null bytes
+    str = str:gsub("\0", "")
+    -- Replace invalid UTF-8 bytes with '?'
+    local out = {}
+    local i = 1
+    while i <= #str do
+        local byte = string.byte(str, i)
+        if byte <= 0x7F then
+            table.insert(out, string.char(byte))
+            i = i + 1
+        elseif byte >= 0xC2 and byte <= 0xDF then
+            if i + 1 <= #str and string.byte(str, i + 1) >= 0x80 and string.byte(str, i + 1) <= 0xBF then
+                table.insert(out, string.sub(str, i, i + 1))
+                i = i + 2
+            else
+                table.insert(out, "?")
+                i = i + 1
+            end
+        elseif byte >= 0xE0 and byte <= 0xEF then
+            if i + 2 <= #str and string.byte(str, i + 1) >= 0x80 and string.byte(str, i + 1) <= 0xBF and string.byte(str, i + 2) >= 0x80 and string.byte(str, i + 2) <= 0xBF then
+                table.insert(out, string.sub(str, i, i + 2))
+                i = i + 3
+            else
+                table.insert(out, "?")
+                i = i + 1
+            end
+        elseif byte >= 0xF0 and byte <= 0xF4 then
+            if i + 3 <= #str and string.byte(str, i + 1) >= 0x80 and string.byte(str, i + 1) <= 0xBF and string.byte(str, i + 2) >= 0x80 and string.byte(str, i + 2) <= 0xBF and string.byte(str, i + 3) >= 0x80 and string.byte(str, i + 3) <= 0xBF then
+                table.insert(out, string.sub(str, i, i + 3))
+                i = i + 4
+            else
+                table.insert(out, "?")
+                i = i + 1
+            end
+        else
+            table.insert(out, "?")
+            i = i + 1
+        end
+    end
+    return table.concat(out)
+end
+
 function M.load_images_from_dir(dir_path)
     if not dir_path then return {} end
 
