@@ -80,9 +80,6 @@ function M.get()
 
     local BASE_PARAMS = {
         stream = true,
-        -- stop={"<|im_end|>", "<|endoftext|>", },
-        -- stop_token_ids = { 248046, 248044, 151645, 151668 },
-        -- 248046,
         -- peculative_ngram = true,
         -- stream_options = { include_usage = true }
     }
@@ -115,6 +112,7 @@ function M.get()
         url = os.getenv("LLM_URL") or "http://localhost:8000/v1/chat/completions",
         model = os.getenv("LLM_MODEL") or "default-model",
         is_reasoning = false,
+        min_max_tokens = 1024,
         params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
         -- reasoning_config = {
         --     auto_toggle = true, -- Разрешить агенту самому включать/выключать мысли

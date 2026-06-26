@@ -24,6 +24,7 @@ config = utils.apply_agent_defaults(config)
 
 local llm = require("llm_handler")
 local json = require("JSON")
+local context_optimizer = require("context_optimizer")
 
 local logger = require("logger")
 local ContextFlow = require("context_flow")
@@ -197,7 +198,12 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         for attempt = 1, max_retries do
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
             if response_data then break end
-            logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
+            if type(err) == 'table' and err.type == 'CONTEXT_EXCEEDED' then
+                local new_val = context_optimizer.shrink_max_tokens(agent_cfg, config.AGENT_DEFAULTS.min_max_tokens or 1024)
+                logger.info(string.format('[CONTEXT OPTIMIZATION] Reduced max_tokens to %d', new_val))
+            else
+                logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
+            end
             if attempt < max_retries then
                 print(string.format("\27[33m[SYSTEM] Retrying in %d seconds...\27[0m", retry_delay))
                 os.execute("sleep " .. tostring(retry_delay))

@@ -3,6 +3,7 @@ local http = require("http.request")
 local json = require("JSON")
 local logger = require("logger")
 local providers = require("llm_providers")
+local context_optimizer = require("context_optimizer")
 
 local function sanitize_messages(messages)
     local sanitized = {}
@@ -71,6 +72,9 @@ function M.send_request(profile, messages, options)
             pcall(function() err_body = stream:get_body_as_string() end)
         end
         logger.error("API Error: " .. status, err_body)
+        if status == "400" and context_optimizer.is_context_exceeded(err_body) then
+            return nil, { type = 'CONTEXT_EXCEEDED', raw = 'HTTP 400', body = err_body }
+        end
         return nil, "HTTP " .. status
     end
 
