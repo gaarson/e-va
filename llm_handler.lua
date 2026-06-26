@@ -4,6 +4,26 @@ local json = require("JSON")
 local logger = require("logger")
 local providers = require("llm_providers")
 
+local function sanitize_messages(messages)
+    local sanitized = {}
+    for _, m in ipairs(messages) do
+        if type(m.content) ~= "string" then
+            logger.error("INVALID_MESSAGE: Content must be a string. Got: " .. type(m.content))
+            return nil
+        end
+        
+        -- Ensure content is a valid string for JSON (replace actual newlines with \n)
+        -- This is the most common cause of "parsing the body" errors 
+        local clean_content = m.content:gsub("\n", "\\n"):gsub("\r", "\\r")
+        
+        table.insert(sanitized, {
+            role = m.role or "user",
+            content = clean_content
+        })
+    end
+    return sanitized
+end
+
 function M.send_request(profile, messages, options)
     options = options or {}
     local on_token_cb = options.on_token
@@ -14,6 +34,11 @@ function M.send_request(profile, messages, options)
 
     local provider_name = profile.provider or "openai"
     local provider = providers.get(provider_name)
+
+    -- local sanitized_messages = sanitize_messages(messages)
+    -- if not sanitized_messages then
+    --     return nil, "Failed to sanitize messages: format is incorrect"
+    -- end
 
     local req = http.new_from_uri(profile.url)
     req.headers:upsert(":method", "POST")

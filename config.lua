@@ -14,7 +14,7 @@ function M.get()
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
         CHARS_PER_TOKEN = 3.5,
-        MCP_MAX_OUTPUT_TOKENS = 32000,
+        MCP_MAX_OUTPUT_TOKENS = 64000,
     }
 
     cfg.CONTEXT_FLOW = {
@@ -30,8 +30,8 @@ function M.get()
             mode = "append_to_last_user", -- Меняйте на "separate_message" для моделей с коротким контекстом
             recency_block_enabled = true,
             search_digest_enabled = true,
-            max_recency_tokens = 4000,
-            max_search_digest_tokens = 2000,
+            max_recency_tokens = 12000,
+            max_search_digest_tokens = 12000,
         },
         command_flow = {
             strict_parsing = true,
@@ -50,12 +50,12 @@ function M.get()
             reasoning = {
                 context_injection = { mode = "separate_message" },
                 command_flow = { strict_parsing = true, max_retries = 5 },
-                storage = { squash_threshold_tokens = 100000 }
+                storage = { squash_threshold_tokens = 120000 }
             },
             coding = {
-                context_injection = { mode = "append_to_last_user", max_recency_tokens = 6000 },
+                context_injection = { mode = "append_to_last_user", max_recency_tokens = 20000 },
                 command_flow = { auto_squash_on_mutation = true, reinforcement_interval = 3 },
-                storage = { max_history_tokens = 120000 }
+                storage = { max_history_tokens = 100000 }
             }
         }
     }
@@ -73,8 +73,9 @@ function M.get()
 
     local BASE_PARAMS = {
         stream = true,
-        stop={"<|im_end|>", "<|endoftext|>"},
-        -- stop_token_ids = { 248046, 248044 },
+        -- stop={"<|im_end|>", "<|endoftext|>", },
+        -- stop_token_ids = { 248046, 248044, 151645, 151668 },
+        -- 248046,
         -- peculative_ngram = true,
         -- stream_options = { include_usage = true }
     }
@@ -83,22 +84,22 @@ function M.get()
         ANALYTICAL = {
             max_tokens = 32768,
             temperature = 0.1,
-            top_p = 0.80,
-            top_k = 35,
+            -- top_p = 0.80,
+            top_k = 60,
             -- min_p = 0.02,
-            -- chat_template_kwargs = {enable_thinking = false},
+            -- chat_template_kwargs = {enable_thinking = 'True'},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
-            -- presence_penalty = 0.0
+            repetition_penalty = 1.05
         },
         ENGINEERING = {
             max_tokens = 65536,
             temperature = 0.1,
-            top_p = 0.95,
-            top_k = 40,
+            -- top_p = 0.95,
+            top_k = 60,
             -- min_p = 0.02,
             -- chat_template_kwargs = {enable_thinking = false},
-            frequency_penalty = 0.2
+            repetition_penalty = 1.05
             -- presence_penalty = 0.0
         }
     }
@@ -123,7 +124,7 @@ function M.get()
         -- model = "Qwen3.5-27B-AWQ",
         model = "gemma4-12B",
         token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-        is_reasoning = true,
+        -- is_reasoning = true,
         params = {
             stream = true,
             temperature = 0.1,

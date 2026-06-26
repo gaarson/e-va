@@ -222,7 +222,7 @@ end
 
 function M:add_tool_output(tool_name, output)
     if not output or output == "" then return end
-    local max_len = 1500
+    local max_len = 10000000
     local truncated = #output > max_len and output:sub(1, max_len) .. "\n...[TRUNCATED]" or output
     table.insert(self.recent_tool_outputs, { tool = tool_name, output = truncated })
     if #self.recent_tool_outputs > self.flow_config.storage.max_recent_tool_outputs then
