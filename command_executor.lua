@@ -1,16 +1,13 @@
 local M = {}
 local utils = require("utils")
 local registry = require("tool_registry")
-local logger = require("logger")
-local inspect = require("inspect")
 
--- Состояния цикла
 M.STATES = {
-    IDLE = "IDLE",           -- Ждем ответа LLM
-    EXECUTING = "EXECUTING", -- Выполняем команду
-    WAITING_USER = "WAITING_USER", -- Ждем ввода от человека
-    COMPLETED = "COMPLETED", -- Задача выполнена
-    ERROR = "ERROR"          -- Критическая ошибка
+    IDLE = "IDLE",
+    EXECUTING = "EXECUTING",
+    WAITING_USER = "WAITING_USER",
+    COMPLETED = "COMPLETED",
+    ERROR = "ERROR"
 }
 
 function M.new(ctx, agent_name)
@@ -20,7 +17,6 @@ function M.new(ctx, agent_name)
         state = M.STATES.IDLE,
         retry_count = 0,
         max_retries = 3,
-        -- Строгие маркеры, которые сложно случайно сгенерировать в коде
         cmd_start = ">>> COMMAND >>>",
         cmd_end = ">>> END_COMMAND >>>"
     }, { __index = M })
@@ -60,7 +56,7 @@ function M:validate_command(cmd)
     if not registry.is_tool_allowed(agent_cfg, tool_name) then
         return false, string.format("Unauthorized tool '%s'.", tool_name)
     end
-    
+
     if not registry.tools[tool_name] then
         return false, string.format("Unknown tool '%s'.", tool_name)
     end
@@ -74,7 +70,7 @@ function M:process_turn(response_text)
     end
 
     local cmd, parse_err = self:parse_command(response_text)
-    
+
     -- 1. Если команды нет -> это просто разговор/анализ
     if not cmd then
         self.state = M.STATES.IDLE
@@ -95,9 +91,9 @@ function M:process_turn(response_text)
 
     self.state = M.STATES.EXECUTING
     self.retry_count = 0
-    
+
     local tool_name = cmd:match("^([^:]+)")
-    
+
     -- 3. Специальная обработка ask_user
     if tool_name == "ask_user" then
         self.state = M.STATES.WAITING_USER
@@ -107,7 +103,7 @@ function M:process_turn(response_text)
 
     -- 4. Выполнение команды
     local res = registry.execute(cmd, self.ctx, self.agent_name)
-    
+
     if res.signal == "PIPELINE_NEXT_STAGE" then
         self.state = M.STATES.COMPLETED
         return { type = "COMPLETED", output = res.output }

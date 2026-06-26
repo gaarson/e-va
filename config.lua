@@ -143,8 +143,19 @@ function M.get()
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = {
-              "read_file", "read_files", "read_chunk", "search", "mcp_browser_*", "explore_tree", "shell", "delegate_plan", "ask_user", "outline", "pin", "unpin",
-              "optimize_context", -- "task_complete"
+              "read_file", 
+              "read_files", 
+              "read_chunk", 
+              "search", 
+              "mcp_browser_*", 
+              "explore_tree", 
+              "shell", 
+              "delegate_plan", 
+              "ask_user", 
+              "outline", 
+              "pin", 
+              "unpin",
+              "optimize_context",
             }
         },
         CODER = {
@@ -158,7 +169,19 @@ function M.get()
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             prompt_file = "prompts/coder.md",
             allowed_tools = {
-              "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin", "optimize_context"
+              "patch", 
+              "create_file",
+              "shell",
+              "read_file",
+              "read_chunk",
+              "search",
+              "rollback",
+              "cleanup_baks",
+              "task_complete",
+              "outline",
+              "pin",
+              "unpin",
+              "optimize_context",
             }
         }
     }

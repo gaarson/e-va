@@ -18,10 +18,10 @@ M.DEFAULT_CONFIG = {
         max_history_messages = 200,
         max_history_tokens = 160000,
         squash_threshold_messages = 150,
-        squash_threshold_tokens = 120000,
+        squash_threshold_tokens = 50000,
         dedup_tool_outputs = true,
         include_pinned_in_recency = true,
-        max_recent_tool_outputs = 10,
+        max_recent_tool_outputs = 5,
     },
     -- Сборка контекста (промпта)
     context_injection = {
@@ -483,7 +483,7 @@ function M:process_turn_response(agent_name, raw_content, executor)
         end
         return { type = "RETRY", message = string.format("Command rejected: %s. Output exactly one valid command.", val_err) }
     end
-    
+
     -- 3. Выполнение
     -- print(inspect(self))
     -- print(inspect(self))

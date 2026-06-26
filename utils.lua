@@ -282,11 +282,17 @@ function M.explore_directory(root_path, target_subpath, max_depth)
     p:close()
 
     local files = {}
+    local max_files = 50 
+    local count = 0
+
     for line in out:gmatch("[^\r\n]+") do
+        if count >= max_files then break end
+        
         local rel = M.normalize_path(root_path, line)
         if rel ~= "" and rel ~= full_target then
             local full_path = root_path .. "/" .. rel
             local safe_full_path = M.shell_quote(full_path)
+            
             local is_dir = os.execute(string.format("test -d %s", safe_full_path)) == 0
 
             if is_dir then
@@ -295,6 +301,7 @@ function M.explore_directory(root_path, target_subpath, max_depth)
                 local lines_count = M.count_lines_fast(full_path)
                 table.insert(files, string.format("  %s (%s lines)", rel, tostring(lines_count)))
             end
+            count = count + 1
         end
     end
 

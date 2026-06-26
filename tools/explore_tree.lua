@@ -8,6 +8,7 @@ local function register(registry)
             depth = 1
         end
 
+            
         local tree_view = utils.explore_directory(ctx.config.PROJECT_ROOT, path, depth)
         ctx.file_tree = tree_view
         return { output = string.format("\n[SYSTEM]: Explored directory '%s' (Depth: %s).\n```text\n%s\n```", path, depth, tree_view) }

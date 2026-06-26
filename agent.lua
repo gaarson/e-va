@@ -196,7 +196,6 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     while true do
         for attempt = 1, max_retries do
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
-            print('REQUEST!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
             if response_data then break end
             logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
             if attempt < max_retries then
@@ -261,11 +260,21 @@ end
 local function execute_pipeline()
     local turn = 1
     local MAX_TURNS = (config.PIPELINE_SETTINGS and config.PIPELINE_SETTINGS.MAX_TURNS) or 150
+    local current_stage_idx = 1
 
-    for stage_idx, stage in ipairs(config.PIPELINE) do
-        logger.info(string.format("\n=== PIPELINE STAGE [%d/%d]: %s ===", stage_idx, #config.PIPELINE, tostring(stage.stage)))
+    while current_stage_idx <= #config.PIPELINE and turn < MAX_TURNS do
+        local stage = config.PIPELINE[current_stage_idx]
+        logger.info(string.format("\n=== PIPELINE STAGE [%d/%d]: %s ===", current_stage_idx, #config.PIPELINE, tostring(stage.stage)))
 
         local stage_complete = false
+        
+        -- Очищаем локальную историю для новой стадии (но не базу знаний)
+        -- Это соответствует требованию "с чистого листа, но с общей базой знаний"
+        for name, _ in pairs(ctx.history) do
+            -- ctx.history[name] = {}
+            -- Если это не системный агент/база, можно подумать об очистке, 
+            -- но проще просто следить, что мы не копируем историю предыдущей стадии в текущую.
+        end
 
         while not stage_complete and turn < MAX_TURNS do
             turn = turn + 1
@@ -278,7 +287,7 @@ local function execute_pipeline()
 
                 logger.info(string.format("[INTERACTIVE MODE] Hooked to agent: %s", target_agent))
                 io.write("\n\27[36m=== HUMAN-IN-THE-LOOP (HITL) SESSION ===\27[0m\n")
-                io.write("Type your message. Commands: '/back' back to anaylis, '/go' (next stage), '/exit' (abort).\n")
+                io.write("Type your message. Commands: '/go' (next), '/back' (prev), '/mode <stage_name>', '/exit' (abort).\n")
 
                 while true do
                     io.write(string.format("\n\27[36m>>> USER -> %s:\27[0m ", target_agent))
@@ -287,17 +296,55 @@ local function execute_pipeline()
                     if not user_input or user_input == "/exit" then
                         print("\n\27[31m[SYSTEM] User aborted the execution.\27[0m")
                         os.exit(0)
-                    elseif user_input == "/go" then
+                    end
+
+                    -- Обработка команд управления
+                    if user_input == "/go" then
                         print("\n\27[32m[SYSTEM] Moving to the next pipeline stage...\27[0m")
+                        -- current_stage_idx = current_stage_idx + 1
                         stage_complete = true
                         break
+                    elseif user_input == "/back" then
+                        if current_stage_idx > 1 then
+                            print("\n\27[32m[SYSTEM] Moving back to previous stage...\27[0m")
+                            current_stage_idx = current_stage_idx - 1
+                            stage_complete = true
+                            break
+                        else
+                            print("\n\27[33m[SYSTEM] Cannot go back further.\27[0m")
+                        end
+                    elseif user_input:match("^/mode%s*(%S+)") then
+                        local mode_name = user_input:match("^/mode%s*(%S+)")
+                        local found_idx = nil
+                        for i, s in ipairs(config.PIPELINE) do
+                            if s.stage == mode_name then
+                                found_idx = i
+                                break
+                            end
+                        end
+                        if found_idx then
+                            print(string.format("\n\27[32m[SYSTEM] Switching to stage: %s\27[0m", mode_name))
+                            current_stage_idx = found_idx
+                            stage_complete = true
+                            break
+                        else
+                            print(string.format("\n\27[31m[SYSTEM] Stage '%s' not found in pipeline.\27[0m", mode_name))
+                        end
                     elseif utils.trim(user_input) ~= "" then
                         ctx:add_message(target_agent, "user", user_input)
                         local sig = run_agent_turn(target_agent, config.AGENTS[target_agent], turn)
-                        turn = turn + 1
+                        
+                        -- Исправленная логика:
                         if sig == "PIPELINE_NEXT_STAGE" then
-                            stage_complete = true
-                            break
+                            print("\n\27[33m[SYSTEM] Agent requested next stage. Type '/go' to proceed.\27[0m")
+                        elseif sig == "ERROR" then
+                            print("\n\27[31m[SYSTEM] Error occurred during agent turn. Please try again.\27[0m")
+                        else
+                            -- Тут мы ничего не печатаем специально, потому что run_agent_turn
+                            -- уже добавил результат выполнения команды (или текст чата) в историю.
+                            -- Но если мы хотим подтверждение выполнения команды:
+                            -- (Опционально можно добавить проверку на tyep == EXECUTED через контекст)
+                            turn = turn + 1
                         end
                     end
                 end
@@ -336,6 +383,9 @@ local function execute_pipeline()
         if turn >= MAX_TURNS then
             print("\n\27[31m[SYSTEM FATAL] Max turns reached. Aborting.\27[0m")
             os.exit(1)
+        end
+        if stage_complete then
+          current_stage_idx = current_stage_idx + 1
         end
     end
     print("\n\27[32m[SYSTEM] Pipeline execution finished entirely.\27[0m")
@@ -412,7 +462,6 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
 end
 
 if not restored then
-    print(is_bootstrap)
     if is_bootstrap then
       print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent with High Creativity...\27[0m")
 
@@ -436,8 +485,6 @@ if not restored then
             print("\n\27[31m[FATAL] Cannot bootstrap: Missing LLM Model. Set config.AGENTS.ARCHITECT.model or export LLM_MODEL.\27[0m")
             os.exit(1)
         end
-
-        print(inspect(arch_agent))
 
         config.AGENTS.BOOTSTRAPPER = {
             name = "BOOTSTRAPPER",
