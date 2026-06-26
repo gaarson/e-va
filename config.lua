@@ -66,6 +66,13 @@ function M.get()
         CONTEXT_INJECTION_MODE = "separate_message" -- "separate_message" or "append_to_last_user"
     }
 
+    cfg.HANDOFF = {
+        enabled = true,
+        clear_history = "per_stage",
+        memo_sections = { "execution_plan", "decisions", "files_modified", "remaining_tasks" },
+        max_memo_tokens = 4000,
+    }
+
     cfg.TASKS = {}
 
     cfg.CREATE_BACKUPS = false
@@ -82,7 +89,7 @@ function M.get()
 
     local SAMPLERS = {
         ANALYTICAL = {
-            max_tokens = 32768,
+            max_tokens = 16384,
             temperature = 0.1,
             -- top_p = 0.80,
             top_k = 60,
@@ -93,7 +100,7 @@ function M.get()
             repetition_penalty = 1.05
         },
         ENGINEERING = {
-            max_tokens = 65536,
+            max_tokens = 16384,
             temperature = 0.1,
             -- top_p = 0.95,
             top_k = 60,

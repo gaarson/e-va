@@ -574,6 +574,104 @@ function M:reset()
     self.file_tree = nil
 end
 
+-- ============================================================================
+-- 7. HANDOFF MEMO & STAGE TRANSITION
+-- ============================================================================
+function M:generate_handoff_memo(agent_name, agent_cfg)
+    local cfg = self.config.HANDOFF or {}
+    local sections = cfg.memo_sections or { "execution_plan", "decisions", "files_modified", "remaining_tasks" }
+    local max_tokens = cfg.max_memo_tokens or 4000
+    local div = self.flow_config.token_estimation.chars_per_token
+    local parts = {}
+    local tokens = 0
+
+    table.insert(parts, string.format("<handoff_memo agent=\"%s\">", agent_name))
+
+    for _, sec in ipairs(sections) do
+        if sec == "execution_plan" then
+            local plan_text = self:get_plan_text()
+            if plan_text ~= "" then
+                table.insert(parts, "<execution_plan>" .. plan_text .. "</execution_plan>")
+            end
+        elseif sec == "decisions" or sec == "last_actions" then
+            local actions_text = self:get_actions_text()
+            if actions_text ~= "" then
+                table.insert(parts, "<decisions>" .. actions_text .. "</decisions>")
+            end
+        elseif sec == "files_modified" then
+            local modified = {}
+            for path, state in pairs(self.file_states) do
+                if state == "MODIFIED" or state == "CREATED" then
+                    table.insert(modified, path)
+                end
+            end
+            if #modified > 0 then
+                table.insert(parts, "<files_modified>" .. table.concat(modified, ", ") .. "</files_modified>")
+            end
+        elseif sec == "remaining_tasks" then
+            if self.execution_plan and #self.execution_plan > 0 then
+                local remaining = {}
+                for i = self.current_task_index, #self.execution_plan do
+                    table.insert(remaining, string.format("Step %d: %s -> %s", i, self.execution_plan[i].file, self.execution_plan[i].instruction))
+                end
+                if #remaining > 0 then
+                    table.insert(parts, "<remaining_tasks>" .. table.concat(remaining, "\n") .. "</remaining_tasks>")
+                end
+            end
+        elseif sec == "knowledge_base_keys" then
+            local keys = {}
+            for path, _ in pairs(self.knowledge_base) do
+                table.insert(keys, path)
+            end
+            if #keys > 0 then
+                table.insert(parts, "<knowledge_base_keys>" .. table.concat(keys, ", ") .. "</knowledge_base_keys>")
+            end
+        elseif sec == "pinned_files" then
+            local pins = {}
+            for path, _ in pairs(self.pinned_files) do
+                table.insert(pins, path)
+            end
+            if #pins > 0 then
+                table.insert(parts, "<pinned_files>" .. table.concat(pins, ", ") .. "</pinned_files>")
+            end
+        elseif sec == "agent_summary" then
+            table.insert(parts, "<agent_summary>[PROMPT: Please summarize your work in this stage]</agent_summary>")
+        end
+        tokens = tokens + math.ceil(#sec / div)
+        if tokens >= max_tokens then break end
+    end
+
+    table.insert(parts, "</handoff_memo>")
+    return table.concat(parts, "\n")
+end
+
+function M:clear_history_for_stage(strategy)
+    if strategy == "none" or strategy == nil then
+        return
+    elseif strategy == "full" then
+        self.history = {}
+        self.thoughts = {}
+        self.last_actions = {}
+        self.recent_tool_outputs = {}
+        self.turn_requested_files = {}
+    elseif strategy == "per_stage" then
+        -- Clear history for agents NOT in the next stage
+        -- We keep only messages from agents that will be active in the next stage
+        -- Since we don't have next stage info here, we do a soft clear: keep last N messages
+        local keep_count = 10
+        if #self.history > keep_count then
+            self.history = { unpack(self.history, #self.history - keep_count + 1, #self.history) }
+        end
+        self.thoughts = {}
+        self.recent_tool_outputs = {}
+        self.turn_requested_files = {}
+    end
+end
+
+function M:set_handoff_memo(memo)
+    self.handoff_memo = memo
+end
+
 function M:sync_files()
     local updated_files = {}
     local root = self.config.PROJECT_ROOT or "."

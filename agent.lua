@@ -261,6 +261,7 @@ local function execute_pipeline()
     local turn = 1
     local MAX_TURNS = (config.PIPELINE_SETTINGS and config.PIPELINE_SETTINGS.MAX_TURNS) or 150
     local current_stage_idx = 1
+    local last_active_agent = nil
 
     while current_stage_idx <= #config.PIPELINE and turn < MAX_TURNS do
         local stage = config.PIPELINE[current_stage_idx]
@@ -281,6 +282,7 @@ local function execute_pipeline()
 
             if stage.mode == "interactive" then
                 local target_agent = "ARCHITECT"
+                last_active_agent = target_agent
                 if type(stage.agent) == "string" then target_agent = stage.agent
                 elseif type(stage.agents) == "table" and type(stage.agents[1]) == "string" then target_agent = stage.agents[1]
                 elseif type(stage.agents) == "string" then target_agent = stage.agents end
@@ -352,6 +354,7 @@ local function execute_pipeline()
                 local threads = {}
                 for _, a_name in ipairs(stage.agents or {}) do
                     local agent_name = tostring(a_name)
+                    last_active_agent = agent_name
                     local co = coroutine.create(function() return run_agent_turn(agent_name, config.AGENTS[agent_name], turn) end)
                     table.insert(threads, { name = agent_name, co = co })
                 end
@@ -372,6 +375,7 @@ local function execute_pipeline()
             else
                 for _, a_name in ipairs(stage.agents or {}) do
                     local agent_name = tostring(a_name)
+                    last_active_agent = agent_name
                     local sig = run_agent_turn(agent_name, config.AGENTS[agent_name], turn)
                     if sig == "PIPELINE_NEXT_STAGE" then
                         stage_complete = true
@@ -385,6 +389,14 @@ local function execute_pipeline()
             os.exit(1)
         end
         if stage_complete then
+          -- Handoff logic before stage transition
+          if config.HANDOFF and config.HANDOFF.enabled and last_active_agent then
+              local agent_cfg = config.AGENTS[last_active_agent]
+              local memo = ctx:generate_handoff_memo(last_active_agent, agent_cfg)
+              ctx:set_handoff_memo(memo)
+              ctx:clear_history_for_stage(config.HANDOFF.clear_history)
+              print(string.format("\n\27[36m[HANDOFF] Generated memo for agent '%s'. Strategy: %s\27[0m", last_active_agent, config.HANDOFF.clear_history))
+          end
           current_stage_idx = current_stage_idx + 1
         end
     end
