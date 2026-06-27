@@ -71,6 +71,13 @@ function M.get()
         clear_history = "per_stage",
         memo_sections = { "execution_plan", "decisions", "files_modified", "remaining_tasks" },
         max_memo_tokens = 4000,
+
+        pass_knowledge_base = true,        -- Передавать все файлы из базы знаний
+        pass_pinned_files = true,          -- Передавать зафиксированные файлы
+        pass_requested_files = true,       -- Передавать файлы, запрошенные на предыдущем этапе
+        pass_recent_tool_outputs = true,   -- Передавать результаты последних инструментов
+        auto_load_plan_files = true,       -- Автоматически подгружать файлы из плана
+        max_knowledge_base_files = 50,     -- Максимальное количество файлов для передачи
     }
 
     cfg.TASKS = {}
@@ -150,7 +157,7 @@ function M.get()
             prompt_file = "prompts/architect.md",
             allowed_tools = {
               "read_file", 
-              "read_files", 
+              -- "read_files", 
               "read_chunk", 
               "search", 
               "mcp_browser_*", 

@@ -584,9 +584,9 @@ function M:generate_handoff_memo(agent_name, agent_cfg)
     local div = self.flow_config.token_estimation.chars_per_token
     local parts = {}
     local tokens = 0
-
+    
     table.insert(parts, string.format("<handoff_memo agent=\"%s\">", agent_name))
-
+    
     for _, sec in ipairs(sections) do
         if sec == "execution_plan" then
             local plan_text = self:get_plan_text()
@@ -637,10 +637,11 @@ function M:generate_handoff_memo(agent_name, agent_cfg)
         elseif sec == "agent_summary" then
             table.insert(parts, "<agent_summary>[PROMPT: Please summarize your work in this stage]</agent_summary>")
         end
+        
         tokens = tokens + math.ceil(#sec / div)
         if tokens >= max_tokens then break end
     end
-
+    
     table.insert(parts, "</handoff_memo>")
     return table.concat(parts, "\n")
 end
@@ -655,9 +656,7 @@ function M:clear_history_for_stage(strategy)
         self.recent_tool_outputs = {}
         self.turn_requested_files = {}
     elseif strategy == "per_stage" then
-        -- Clear history for agents NOT in the next stage
-        -- We keep only messages from agents that will be active in the next stage
-        -- Since we don't have next stage info here, we do a soft clear: keep last N messages
+        -- Очищаем историю, но сохраняем базу знаний
         local keep_count = 10
         if #self.history > keep_count then
             self.history = { unpack(self.history, #self.history - keep_count + 1, #self.history) }
@@ -667,6 +666,7 @@ function M:clear_history_for_stage(strategy)
         self.turn_requested_files = {}
     end
 end
+
 
 function M:set_handoff_memo(memo)
     self.handoff_memo = memo
@@ -897,6 +897,72 @@ function M:get_insights_summary()
         text = text .. string.format("- %s: %s\n", query, table.concat(lines, "; "))
     end
     return text
+end
+
+function M:get_handoff_files()
+    local files_to_pass = {} -- 1. Инициализируем таблицу
+    local max_files = self.config.HANDOFF.max_knowledge_base_files or 50 -- 2. Берем лимит из конфига
+
+    -- 1. Файлы из плана (приоритетные)
+    if self.execution_plan then
+        for _, task in ipairs(self.execution_plan) do
+            if task.file then
+                local rel_path = utils.normalize_path(self.config.PROJECT_ROOT, task.file)
+                if self.knowledge_base[rel_path] then
+                    files_to_pass[rel_path] = true
+                end
+            end
+        end
+    end
+    -- 2. Зафиксированные файлы
+    if self.config.HANDOFF.pass_pinned_files then
+        for path, _ in pairs(self.pinned_files) do
+            if self.knowledge_base[path] then
+                files_to_pass[path] = true
+            end
+        end
+    end
+    -- 3. Запрошенные файлы
+    if self.config.HANDOFF.pass_requested_files then
+        for path, _ in pairs(self.turn_requested_files) do
+            if self.knowledge_base[path] then
+                files_to_pass[path] = true
+            end
+        end
+    end
+    -- 4. Остальные файлы из базы знаний (если нужно)
+    if self.config.HANDOFF.pass_knowledge_base then
+        for path, _ in pairs(self.knowledge_base) do
+            if not files_to_pass[path] then
+                files_to_pass[path] = true
+                if #files_to_pass >= max_files then break end
+            end
+        end
+    end
+    return files_to_pass
+end
+
+-- НОВЫЙ: Метод для инъекции файлов в контекст следующего этапа
+function M:inject_handoff_files(agent_name)
+    local files_to_pass = self:get_handoff_files() -- 3. Вызываем исправленный метод
+    if not next(files_to_pass) then return end
+    local parts = {}
+    for path, _ in pairs(files_to_pass) do
+        local content = self.knowledge_base[path]
+        if content then
+            local status = "READ_ONLY"
+            if self.pinned_files[path] then status = "PINNED"
+            elseif self.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
+            table.insert(parts, string.format(
+                "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
+                path, status, content:gsub("\n", "\n\t")
+            ))
+        end
+    end
+    if #parts > 0 then
+        local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n")
+        self:add_message(agent_name, "user", block)
+    end
 end
 
 function M:get_execution_plan_text() return self:get_plan_text() end

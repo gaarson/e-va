@@ -395,17 +395,29 @@ local function execute_pipeline()
             os.exit(1)
         end
         if stage_complete then
-          -- Handoff logic before stage transition
-          if config.HANDOFF and config.HANDOFF.enabled and last_active_agent then
-              local agent_cfg = config.AGENTS[last_active_agent]
-              local memo = ctx:generate_handoff_memo(last_active_agent, agent_cfg)
-              ctx:set_handoff_memo(memo)
-              ctx:clear_history_for_stage(config.HANDOFF.clear_history)
-              print(string.format("\n\27[36m[HANDOFF] Generated memo for agent '%s'. Strategy: %s\27[0m", last_active_agent, config.HANDOFF.clear_history))
-          end
-          current_stage_idx = current_stage_idx + 1
+            -- Handoff logic before stage transition
+            if config.HANDOFF and config.HANDOFF.enabled and last_active_agent then
+                local agent_cfg = config.AGENTS[last_active_agent]
+                local memo = ctx:generate_handoff_memo(last_active_agent, agent_cfg)
+                ctx:set_handoff_memo(memo)
+                ctx:clear_history_for_stage(config.HANDOFF.clear_history)
+                print(string.format("\n\27[36m[HANDOFF] Generated memo for agent '%s'. Strategy: %s\27[0m", last_active_agent, config.HANDOFF.clear_history))
+                
+                -- НОВЫЙ: Подгружаем файлы из плана
+                if config.HANDOFF.auto_load_plan_files then
+                    ctx:load_plan_files()
+                end
+                
+                -- НОВЫЙ: Инжектируем файлы в контекст следующего этапа
+                if config.HANDOFF.pass_knowledge_base or config.HANDOFF.pass_pinned_files or config.HANDOFF.pass_requested_files then
+                    local next_agent = config.PIPELINE[current_stage_idx + 1] and config.PIPELINE[current_stage_idx + 1].agents[1] or "CODER"
+                    ctx:inject_handoff_files(next_agent)
+                end
+            end
+            
+            current_stage_idx = current_stage_idx + 1
         end
-    end
+      end
     print("\n\27[32m[SYSTEM] Pipeline execution finished entirely.\27[0m")
     os.remove(STATE_FILE)
 end
