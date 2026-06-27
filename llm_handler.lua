@@ -5,26 +5,6 @@ local logger = require("logger")
 local providers = require("llm_providers")
 local context_optimizer = require("context_optimizer")
 
-local function sanitize_messages(messages)
-    local sanitized = {}
-    for _, m in ipairs(messages) do
-        if type(m.content) ~= "string" then
-            logger.error("INVALID_MESSAGE: Content must be a string. Got: " .. type(m.content))
-            return nil
-        end
-        
-        -- Ensure content is a valid string for JSON (replace actual newlines with \n)
-        -- This is the most common cause of "parsing the body" errors 
-        local clean_content = m.content:gsub("\n", "\\n"):gsub("\r", "\\r")
-        
-        table.insert(sanitized, {
-            role = m.role or "user",
-            content = clean_content
-        })
-    end
-    return sanitized
-end
-
 function M.send_request(profile, messages, options)
     options = options or {}
     local on_token_cb = options.on_token
@@ -35,11 +15,6 @@ function M.send_request(profile, messages, options)
 
     local provider_name = profile.provider or "openai"
     local provider = providers.get(provider_name)
-
-    -- local sanitized_messages = sanitize_messages(messages)
-    -- if not sanitized_messages then
-    --     return nil, "Failed to sanitize messages: format is incorrect"
-    -- end
 
     local req = http.new_from_uri(profile.url)
     req.headers:upsert(":method", "POST")
@@ -52,14 +27,14 @@ function M.send_request(profile, messages, options)
     local payload = provider.build_payload(profile, messages, options)
 
     local body = json:encode(payload)
-    
+
     -- Pre-flight validation: ensure body is valid JSON before sending
     local ok, decoded = pcall(json.decode, json, body)
     if not ok then
         logger:error("PRE-FLIGHT VALIDATION FAILED: Constructed JSON body is invalid. Error: " .. tostring(decoded))
         return nil, "Invalid JSON body constructed for API request"
     end
-    
+
     req:set_body(body)
 
     local headers, stream = req:go(600)

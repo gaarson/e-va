@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     lua5.1 \
     liblua5.1-0-dev \
     gcc \
+    sudo \
     make \
     git \
     curl \
@@ -77,6 +78,9 @@ ENV PROJECT_ROOT=/workspace
 ENV CHROME_PATH=/usr/bin/google-chrome-stable
 
 VOLUME ["/workspace/.e-va-conf"]
+
+RUN echo "chromeuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/chromeuser \
+    && chmod 0440 /etc/sudoers.d/chromeuser
 
 USER chromeuser
 
