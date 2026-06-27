@@ -479,6 +479,35 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
     end
 end
 
+local function run_pipe_mode()
+    print("=== PIPE MODE START ===")
+    io.flush()
+    while true do
+        io.stderr:write("> ")
+        io.stderr:flush()
+        local line = io.read("*l")
+        if not line then break end
+        local trimmed = line:gsub("^%s*(.-)%s*$", "%1")
+        if trimmed == "quit" or trimmed == "exit" then
+            print("=== PIPE MODE EXIT ===")
+            break
+        end
+        if trimmed ~= "" then
+            print("=== RESPONSE START ===")
+            setup_and_run_task(nil, trimmed, nil)
+            print("=== RESPONSE END ===")
+            io.flush()
+        end
+    end
+end
+
+for _, a in ipairs(arg) do
+    if a == "--pipe" then
+        run_pipe_mode()
+        os.exit(0)
+    end
+end
+
 if not restored then
     if is_bootstrap then
       print("\n\27[35m[SYSTEM] Initializing Bootstrapper Meta-Agent with High Creativity...\27[0m")

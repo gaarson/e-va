@@ -69,7 +69,7 @@ local function register(registry)
             os.execute("sleep 0.1")
         end
 
-        print("\27[34m[SYSTEM: Execution finished]\27[0m")
+        print("\n[SYSTEM: Execution finished]")
 
         os.remove(tmp_file)
         os.remove(exit_file)

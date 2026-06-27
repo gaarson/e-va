@@ -1,0 +1,6 @@
+logs/
+spec/
+examples/
+.git/
+.env
+.e-va-conf/

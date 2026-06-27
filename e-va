@@ -1,5 +1,15 @@
 #!/bin/bash
 
+if [ -n "$GIT_EVA_URL" ]; then echo "Cloning $GIT_EVA_URL ..."; rm -rf /app/*; rm -rf /app/.* 2>/dev/null; git clone "$GIT_EVA_URL" /tmp/repo; cp -a /tmp/repo/. /app/; rm -rf /tmp/repo; fi
+
+# --- PIPE MODE DOCUMENTATION ---
+# The --pipe flag enables continuous stdin/stdout mode for external communication.
+# Usage examples:
+#   echo "analyze this code" | docker run -i e-va-agent ./e-va --pipe
+#   docker run -it e-va-agent ./e-va --pipe  (for interactive session)
+# Termination: Send 'quit' or 'exit' via stdin.
+# --------------------------------------------------
+
 SOURCE="${BASH_SOURCE}"
 while [ -h "$SOURCE" ]; do
   DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"

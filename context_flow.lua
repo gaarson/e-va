@@ -452,7 +452,7 @@ function M:get_plan_text()
     local t = "\n=== EXECUTION PLAN ===\n"
     for i, task in ipairs(self.execution_plan) do
         local mark = (i < self.current_task_index) and "[x]" or (i == self.current_task_index) and "[>]" or "[ ]"
-        t = t .. string.format("%s Step %d: %s -> %s\n", mark, i, task.file, task.instruction)
+        t = t .. string.format("%s Step %d: %s -> %s\n", mark, i, tostring(task.file or "?"), tostring(task.instruction or "?"))
     end return t end
 
 function M:get_actions_text()
