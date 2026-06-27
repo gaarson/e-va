@@ -254,12 +254,14 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         return "PIPELINE_NEXT_STAGE" -- Сигнал для завершения стадии
     elseif result.type == "ERROR" then
         logger.error("Agent execution error: " .. (result.message or "Unknown error"))
-        -- Можно вернуть ошибку или продолжить, в зависимости от логики
         return "ERROR"
+    elseif result.type == "EXECUTED" then
+        save_state()
+        return "AUTO_LOOP"
     end
     save_state()
 
-    -- Если это просто разговор или успешное выполнение команды (не завершающее)
+    -- Если это просто разговор
     return nil
 end
 
@@ -341,17 +343,27 @@ local function execute_pipeline()
                     elseif utils.trim(user_input) ~= "" then
                         ctx:add_message(target_agent, "user", user_input)
                         local sig = run_agent_turn(target_agent, config.AGENTS[target_agent], turn)
+                        local auto_loop_count = 0
+                        local MAX_AUTO_LOOP = 10
                         
-                        -- Исправленная логика:
+                        -- Auto-loop: keep running agent while it executes commands (AUTO_LOOP signal)
+                        while sig == "AUTO_LOOP" and auto_loop_count < MAX_AUTO_LOOP do
+                            auto_loop_count = auto_loop_count + 1
+                            turn = turn + 1
+                            logger.info(string.format("[AUTO-LOOP %d/%d] Agent continuing execution...", auto_loop_count, MAX_AUTO_LOOP))
+                            sig = run_agent_turn(target_agent, config.AGENTS[target_agent], turn)
+                        end
+                        
+                        if auto_loop_count >= MAX_AUTO_LOOP then
+                            print("\n\27[33m[SYSTEM] Auto-loop limit (" .. MAX_AUTO_LOOP .. ") reached. Resuming user input.\27[0m")
+                        end
+                        
                         if sig == "PIPELINE_NEXT_STAGE" then
                             print("\n\27[33m[SYSTEM] Agent requested next stage. Type '/go' to proceed.\27[0m")
                         elseif sig == "ERROR" then
                             print("\n\27[31m[SYSTEM] Error occurred during agent turn. Please try again.\27[0m")
                         else
-                            -- Тут мы ничего не печатаем специально, потому что run_agent_turn
-                            -- уже добавил результат выполнения команды (или текст чата) в историю.
-                            -- Но если мы хотим подтверждение выполнения команды:
-                            -- (Опционально можно добавить проверку на tyep == EXECUTED через контекст)
+                            -- CONVERSATION (nil) or exhausted auto-loop: prompt user
                             turn = turn + 1
                         end
                     end
@@ -405,7 +417,7 @@ local function execute_pipeline()
                 
                 -- НОВЫЙ: Подгружаем файлы из плана
                 if config.HANDOFF.auto_load_plan_files then
-                    ctx:load_plan_files()
+                    ctx:get_handoff_files()
                 end
                 
                 -- НОВЫЙ: Инжектируем файлы в контекст следующего этапа

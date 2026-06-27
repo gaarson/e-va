@@ -74,7 +74,7 @@ M.PRUNE_STRATEGIES = {
     fifo_assistant_first = function(history, limits)
         while #history > limits.max_history_messages do
             local idx = 1
-            if history[idx] and history[idx].role == "assistant" then
+            if history[idx] and history[idx].role == "user" then
                 table.remove(history, idx)
             else
                 table.remove(history, 1)
@@ -107,13 +107,21 @@ M.INJECTION_STRATEGIES = {
         table.insert(messages, { role = "user", content = block })
     end,
     append_to_last_user = function(messages, recency, digest)
+        local block = recency
+        if digest and digest ~= "" then block = block .. "\n\n" .. digest end
+        if block == "" then return end
+        
+        local found = false
         for i = #messages, 1, -1 do
             if messages[i].role == "user" then
-                local block = recency
-                if digest and digest ~= "" then block = block .. "\n\n" .. digest end
                 messages[i].content = messages[i].content .. "\n\n" .. block
+                found = true
                 break
             end
+        end
+        -- Если user-сообщений нет, создаём системный блок контекста
+        if not found then
+            table.insert(messages, { role = "user", content = "[SYSTEM CONTEXT INJECTION]\n" .. block })
         end
     end,
     system_block = function(messages, recency, digest)
@@ -248,11 +256,18 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
     local current_cost = 0
     local history = self:get_history(agent_name)
     local estimate = function(t) return math.ceil((#(t or "")) / self.flow_config.token_estimation.chars_per_token) end
-    
-    -- Бюджет на чат
-    local chat_budget = available_tokens - math.floor(available_tokens * 0.2) -- 20% на память/файлы
-    
-    -- Загружаем историю с конца (recency bias)
+
+    -- 1. Оцениваем размер обязательных блоков
+    local recency = self:get_recency_block()
+    local recency_cost = estimate(recency)
+    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
+    local manifest_cost = estimate(tools_manifest)
+
+    -- 2. Рассчитываем реальный бюджет на историю
+    local overhead = recency_cost + manifest_cost + math.ceil(#system_prompt / self.flow_config.token_estimation.chars_per_token)
+    local chat_budget = math.max(0, available_tokens - overhead - math.floor(available_tokens * 0.1)) -- 10% запас
+
+    -- 3. Загружаем историю с конца
     for i = #history, 1, -1 do
         local msg = history[i]
         local cost = estimate(msg.content)
@@ -261,14 +276,11 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
             current_cost = current_cost + cost
         else break end
     end
-    
-    -- Инъекция recency block
-    local recency = self:get_recency_block()
-    local digest = self.flow_config.context_injection.search_digest_enabled and self:get_search_digest(self.flow_config.context_injection.max_search_digest_tokens) or ""
-    
+
+    -- 4. Инъекция recency
     local inject_fn = M.INJECTION_STRATEGIES[self.flow_config.context_injection.mode] or M.INJECTION_STRATEGIES.append_to_last_user
-    inject_fn(chat_buffer, recency, digest)
-    
+    inject_fn(chat_buffer, recency, "")
+
     -- Добавляем handoff или initiation
     if #history == 0 then
         local init_msg = self.handoff_memo and 
@@ -334,7 +346,8 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         end
     end
     
-    local total_tokens = estimate(system_prompt) + current_cost + estimate(recency) + estimate(digest)
+    local total_tokens = estimate(system_prompt) + current_cost + recency_cost + manifest_cost
+
     return {
         messages = messages,
         total_tokens = total_tokens,
@@ -353,35 +366,16 @@ function M:get_recency_block()
     if #self.last_actions > 0 then
         table.insert(parts, "<last_actions>" .. self:get_actions_text() .. "</last_actions>")
     end
-    
-    -- Requested files
-    for path, _ in pairs(self.turn_requested_files) do
-        if self.knowledge_base[path] then
-            table.insert(parts, string.format("<file_context path=\"%s\" status=\"READ_ONLY\">\n%s\n</file_context>", 
-                path, self.knowledge_base[path]:gsub("\n", "\n\t")))
-        end
-    end
-    
-    -- Pinned files
+
     if self.flow_config.storage.include_pinned_in_recency then
         for path, _ in pairs(self.pinned_files) do
             if not self.turn_requested_files[path] and self.knowledge_base[path] then
-                table.insert(parts, string.format("<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>", 
+                table.insert(parts, string.format("<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>",
                     path, self.knowledge_base[path]:gsub("\n", "\n\t")))
             end
         end
     end
-    
-    -- Recent tool outputs
-    if #self.recent_tool_outputs > 0 then
-        local tool_xml = "<recent_tool_outputs>"
-        for _, t in ipairs(self.recent_tool_outputs) do
-            tool_xml = tool_xml .. string.format("\n  <tool name=\"%s\">\n%s\n  </tool>", t.tool, t.output:gsub("\n", "\n  "))
-        end
-        tool_xml = tool_xml .. "\n</recent_tool_outputs>"
-        table.insert(parts, tool_xml)
-    end
-    
+
     return table.concat(parts, "\n")
 end
 
@@ -495,7 +489,16 @@ function M:process_turn_response(agent_name, raw_content, executor)
         local idx = raw_content:find(">>> COMMAND >>>")
         hist_content = raw_content:sub(1, idx - 1)
     end
-    self:add_message(agent_name, "assistant", utils.trim(hist_content))
+
+    local trimmed_hist = utils.trim(hist_content)
+    if trimmed_hist ~= "" then
+        self:add_message(agent_name, "assistant", trimmed_hist)
+    end
+    -- Если ответ был только командой, добавляем системный маркер, чтобы сохранить чередование ролей
+    if trimmed_hist == "" and cmd then
+        self:add_message(agent_name, "assistant", "[SYSTEM: Executing command without additional reasoning]")
+    end
+
     if self.flow_config.command_flow.auto_squash_on_mutation then
         self:squash_last_mutation(agent_name)
     end
@@ -503,7 +506,6 @@ function M:process_turn_response(agent_name, raw_content, executor)
     if res.output then
         local sanitized_output = utils.sanitize_for_json(res.output)
         self:add_message(agent_name, "user", sanitized_output)
-        self:add_tool_output(tool_name, sanitized_output)
     end
     return { type = res.signal == "PIPELINE_NEXT_STAGE" and "COMPLETED" or "EXECUTED",
              tool = tool_name, output = res.output, signal = res.signal }
@@ -647,26 +649,26 @@ function M:generate_handoff_memo(agent_name, agent_cfg)
 end
 
 function M:clear_history_for_stage(strategy)
-    if strategy == "none" or strategy == nil then
-        return
-    elseif strategy == "full" then
+    if strategy == "none" or strategy == nil then return end
+    
+    if strategy == "full" then
         self.history = {}
         self.thoughts = {}
         self.last_actions = {}
         self.recent_tool_outputs = {}
         self.turn_requested_files = {}
     elseif strategy == "per_stage" then
-        -- Очищаем историю, но сохраняем базу знаний
         local keep_count = 10
-        if #self.history > keep_count then
-            self.history = { unpack(self.history, #self.history - keep_count + 1, #self.history) }
+        for agent_name, msgs in pairs(self.history) do
+            if #msgs > keep_count then
+                self.history[agent_name] = { unpack(msgs, #msgs - keep_count + 1, #msgs) }
+            end
         end
         self.thoughts = {}
         self.recent_tool_outputs = {}
         self.turn_requested_files = {}
     end
 end
-
 
 function M:set_handoff_memo(memo)
     self.handoff_memo = memo
@@ -944,19 +946,32 @@ end
 
 -- НОВЫЙ: Метод для инъекции файлов в контекст следующего этапа
 function M:inject_handoff_files(agent_name)
-    local files_to_pass = self:get_handoff_files() -- 3. Вызываем исправленный метод
+    local files_to_pass = self:get_handoff_files()
     if not next(files_to_pass) then return end
     local parts = {}
+    local history = self:get_history(agent_name)
+    
     for path, _ in pairs(files_to_pass) do
         local content = self.knowledge_base[path]
         if content then
-            local status = "READ_ONLY"
-            if self.pinned_files[path] then status = "PINNED"
-            elseif self.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
-            table.insert(parts, string.format(
-                "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
-                path, status, content:gsub("\n", "\n\t")
-            ))
+            -- Проверка: не был ли файл уже добавлен в историю на этом этапе
+            local is_in_history = false
+            for _, msg in ipairs(history) do
+                if msg.content and string.find(msg.content, path, 1, true) then -- true = plain search
+                    is_in_history = true
+                    break
+                end
+            end
+            
+            if not is_in_history then
+                local status = "READ_ONLY"
+                if self.pinned_files[path] then status = "PINNED"
+                elseif self.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
+                table.insert(parts, string.format(
+                    "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
+                    path, status, content:gsub("\n", "\n\t")
+                ))
+            end
         end
     end
     if #parts > 0 then

@@ -27,20 +27,27 @@ local function register(registry)
             
             -- НОВЫЙ: Автоматически подгружаем файлы из плана
             local loaded_files = {}
+            local max_files = 5 -- Ограничение на количество файлов в одном плане
             for _, task in ipairs(plan) do
-                if task.file then
+                if task.file and #loaded_files < max_files then
                     local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, task.file)
                     if not ctx.knowledge_base[rel_path] then
                         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
                         local content = utils.read_file_range(full_path)
                         if content then
-                            ctx:add_file(rel_path, content)
-                            table.insert(loaded_files, rel_path)
+                            -- Проверка размера файла (не более 5000 токенов)
+                            local token_count = ctx:estimate_tokens(content)
+                            if token_count <= 5000 then
+                                ctx:add_file(rel_path, content)
+                                table.insert(loaded_files, rel_path)
+                            else
+                                logger.warn(string.format("[DELEGATE] File %s too large (%d tokens), skipping.", rel_path, token_count))
+                            end
                         end
                     end
                 end
             end
-            
+
             local auto_msg = ""
             if #loaded_files > 0 then
                 auto_msg = " Auto-loaded targets into context: " .. table.concat(loaded_files, ", ")
