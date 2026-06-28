@@ -110,18 +110,23 @@ M.INJECTION_STRATEGIES = {
         local block = recency
         if digest and digest ~= "" then block = block .. "\n\n" .. digest end
         if block == "" then return end
-        
-        local found = false
+
         for i = #messages, 1, -1 do
             if messages[i].role == "user" then
-                messages[i].content = messages[i].content .. "\n\n" .. block
-                found = true
+                local content = messages[i].content
+                
+                -- Удаляем предыдущие динамические блоки, чтобы избежать накопления
+                -- Примечание: в Lua 5.1 точка не ловит \n, поэтому используем (.|\n)
+                content = content:gsub("<execution_plan>(.-)</execution_plan>", "")
+                content = content:gsub("<last_actions>(.-)</last_actions>", "")
+                content = content:gsub("<file_context[^>]->(.-)</file_context>", "")
+                content = content:gsub("\n\n+", "\n\n")
+                content = utils.trim(content)
+                
+                -- Собираем чистое сообщение + свежий блок контекста
+                messages[i].content = (content ~= "" and content .. "\n\n" or "") .. block
                 break
             end
-        end
-        -- Если user-сообщений нет, создаём системный блок контекста
-        if not found then
-            table.insert(messages, { role = "user", content = "[SYSTEM CONTEXT INJECTION]\n" .. block })
         end
     end,
     system_block = function(messages, recency, digest)
@@ -272,7 +277,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         local msg = history[i]
         local cost = estimate(msg.content)
         if current_cost + cost < chat_budget then
-            table.insert(chat_buffer, 1, msg)
+            table.insert(chat_buffer, 1, { role = msg.role, content = msg.content })
             current_cost = current_cost + cost
         else break end
     end

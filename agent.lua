@@ -22,9 +22,10 @@ if type(config.PIPELINE) ~= "table" or #config.PIPELINE == 0 then
 end
 config = utils.apply_agent_defaults(config)
 
-local llm = require("llm_handler")
-local json = require("JSON")
-local context_optimizer = require("context_optimizer")
+	local llm = require("llm_handler")
+	local json = require("JSON")
+	local context_optimizer = require("context_optimizer")
+	local optimizer = require("optimizer")
 
 local logger = require("logger")
 local ContextFlow = require("context_flow")
@@ -249,10 +250,15 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     -- process_turn_response сам выполнит команду, обновит историю и сделает squash если нужно
     local result = ctx:process_turn_response(agent_name, content, executor)
 
-    -- 3. Обрабатываем результат
-    if result.type == "COMPLETED" then
-        return "PIPELINE_NEXT_STAGE" -- Сигнал для завершения стадии
-    elseif result.type == "ERROR" then
+	    -- PROACTIVE CONTEXT OPTIMIZATION: If context is getting large, optimize before next turn
+	    if ctx:should_squash(agent_name) then
+	        optimizer.analyze_and_optimize(ctx, config)
+	    end
+
+	    -- 3. Обрабатываем результат
+	    if result.type == "COMPLETED" then
+	        return "PIPELINE_NEXT_STAGE" -- Сигнал для завершения стадии
+	    elseif result.type == "ERROR" then
         logger.error("Agent execution error: " .. (result.message or "Unknown error"))
         return "ERROR"
     elseif result.type == "EXECUTED" then
