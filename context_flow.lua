@@ -158,6 +158,8 @@ function M.new(flow_config, full_config)
     self.thoughts = {}
     self.last_actions = {}
     self.turn_requested_files = {}
+    self.promoted_files = {}
+
     self.recent_tool_outputs = {}
     self.global_access_counter = 0
     self.file_access_rank = {}
@@ -373,10 +375,17 @@ function M:get_recency_block()
     end
 
     if self.flow_config.storage.include_pinned_in_recency then
-        for path, _ in pairs(self.pinned_files) do
+        for path,_ in pairs(self.pinned_files) do
             if not self.turn_requested_files[path] and self.knowledge_base[path] then
+                local content = self.knowledge_base[path]
+                if self.promoted_files and self.promoted_files[path] then
+                    local max_display_len = 200
+                    if #content > max_display_len then
+                        content = content:sub(1, max_display_len) .. "\n...[TRUNCATED: Full content moved to conversation history]..."
+                    end
+                end
                 table.insert(parts, string.format("<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>",
-                    path, self.knowledge_base[path]:gsub("\n", "\n\t")))
+                    path, content:gsub("\n", "\n\t")))
             end
         end
     end
@@ -530,6 +539,7 @@ function M:snapshot()
         thoughts = self.thoughts,
         execution_plan = self.execution_plan,
         current_task_index = self.current_task_index,
+        promoted_files = self.promoted_files,
         pinned_files = self.pinned_files,
         last_actions = self.last_actions,
         handoff_memo = self.handoff_memo,
@@ -555,6 +565,8 @@ function M:load_from_snapshot(json_str)
     self.handoff_memo = state.handoff_memo
     self.test_failures = state.test_failures or 0
     self.turn_requested_files = state.turn_requested_files or {}
+    self.promoted_files = state.promoted_files or {}
+
     return true
 end
 
@@ -568,6 +580,7 @@ function M:reset()
     self.thoughts = {}
     self.last_actions = {}
     self.turn_requested_files = {}
+    self.promoted_files = {}
     self.recent_tool_outputs = {}
     self.global_access_counter = 0
     self.file_access_rank = {}
