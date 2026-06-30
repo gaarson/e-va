@@ -617,9 +617,9 @@ if not restored then
 3. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
 4. Generate MD prompts for your agents.
 Use 
->>> COMMAND >>>
+||| COMMAND |||
 task_complete
->>> END_COMMAND >>> 
+||| END_COMMAND ||| 
 when the scaffold is ready.
 ]], lint_cmd)
 

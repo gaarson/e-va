@@ -2,7 +2,7 @@ local utils = require("utils")
 local os = require("os")
 
 local function register(registry)
-    registry.register("trace_execution", "Attach eBPF tracer to a binary to extract real-time arguments and return values", ">>> COMMAND >>>\ntrace_execution:./binary\nuretprobe:./binary:func_name { printf(\"Ret: %%d\", retval); }\n\n>>> END_COMMAND >>>", function(args, ctx, agent_name)
+    registry.register("trace_execution", "Attach eBPF tracer to a binary to extract real-time arguments and return values", "||| COMMAND |||\ntrace_execution:./binary\nuretprobe:./binary:func_name { printf(\"Ret: %%d\", retval); }\n\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local binary, bpf_script = args:match("^([^%s\n]+)%s*\n(.*)")
         if not binary or not bpf_script then
             return { output = "\n[ERROR]: Usage: \x3ccmd\x3etrace_execution:./binary\nuretprobe:./binary:func_name { printf(\"Ret: %%d\", retval); }\x3c/cmd\x3e" }

@@ -1,6 +1,6 @@
 local utils = require("utils")
 local function register(registry)
-    registry.register("read_file", "Loads full file into memory", ">>> COMMAND >>>\nread_file:src/main.c\n>>> END_COMMAND >>>", function(args, ctx, agent_name)
+    registry.register("read_file", "Loads full file into memory", "||| COMMAND |||\nread_file:src/main.c\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         if ctx.knowledge_base[rel_path] then
             local full_content = ctx.knowledge_base[rel_path]

@@ -44,7 +44,7 @@ function M.execute(action_string, ctx, agent_name)
     cmd_name = utils.trim(cmd_name)
 
     if cmd_name == "" then
-        return { output = "\n[ERROR]: Malformed command syntax. Use >>> COMMAND >>>\ntool:args\n>>> END_COMMAND >>>", signal = nil }
+        return { output = "\n[ERROR]: Malformed command syntax. Use ||| COMMAND |||\ntool:args\n||| END_COMMAND |||", signal = nil }
     end
 
     local tool = M.tools[cmd_name]
@@ -108,7 +108,7 @@ function M.generate_tool_manifest(allowed_tools)
         table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s\n", item.name, item.tool.desc, usage_example))
     end
 
-    -- table.insert(doc, "CRITICAL RULE: You MUST execute `>>> COMMAND >>>\ntask_complete\n>>> END_COMMAND >>>` when your instructions are fulfilled to advance the pipeline.")
+    -- table.insert(doc, "CRITICAL RULE: You MUST execute `||| COMMAND |||\ntask_complete\n||| END_COMMAND |||` when your instructions are fulfilled to advance the pipeline.")
 
     return table.concat(doc, "\n")
 end

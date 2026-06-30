@@ -1,5 +1,5 @@
 local function register(registry)
-    registry.register("task_complete", "Signal completion of the current task step", ">>> COMMAND >>>\ntask_complete\n>>> END_COMMAND >>>", function(args, ctx, agent_name)
+    registry.register("task_complete", "Signal completion of the current task step", "||| COMMAND |||\ntask_complete\n||| END_COMMAND |||", function(args, ctx, agent_name)
         if ctx.execution_plan and #ctx.execution_plan > 0 then
             if ctx.current_task_index < #ctx.execution_plan then
                 local old_idx = ctx.current_task_index

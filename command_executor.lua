@@ -17,8 +17,8 @@ function M.new(ctx, agent_name)
         state = M.STATES.IDLE,
         retry_count = 0,
         max_retries = 3,
-        cmd_start = ">>> COMMAND >>>",
-        cmd_end = ">>> END_COMMAND >>>"
+        cmd_start = "||| COMMAND |||",
+        cmd_end = "||| END_COMMAND |||"
     }, { __index = M })
 end
 

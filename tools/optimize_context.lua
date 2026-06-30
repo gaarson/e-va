@@ -5,7 +5,7 @@ local utils = require("utils")
 	local function register(registry)
     registry.register("optimize_context", 
         "Optimizes the current context by removing unnecessary files, updating the task summary, or pinning critical files. Use this when the context is getting too large or when you want to ensure critical information is preserved.", 
-        ">>> COMMAND >>>\noptimize_context:{\"remove_files\": [\"path/to/file1.txt\"], \"pin_files\": [\"path/to/core.h\"], \"update_summary\": \"New summary text\"}\n>>> END_COMMAND >>>", 
+        "||| COMMAND |||\noptimize_context:{\"remove_files\": [\"path/to/file1.txt\"], \"pin_files\": [\"path/to/core.h\"], \"update_summary\": \"New summary text\"}\n||| END_COMMAND |||", 
 	        function(args, ctx, agent_name)
 	            -- PRIMARY PATH: LLM-driven optimization if OPTIMIZER_AGENT is configured
 	            if ctx.config and ctx.config.OPTIMIZER_AGENT then

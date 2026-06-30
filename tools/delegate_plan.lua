@@ -2,7 +2,7 @@ local utils = require("utils")
 local json = require("JSON")
 
 local function register(registry)
-    registry.register("delegate_plan", "Pass execution plan to next stage (JSON Object)", ">>> COMMAND >>>\ndelegate_plan:\n{\n  \"plan\": [{\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking\"}],\n  \"memo\": \"Context for coder\"\n}\n>>> END_COMMAND >>>", function(args, ctx, agent_name)
+    registry.register("delegate_plan", "Pass execution plan to next stage (JSON Object)", "||| COMMAND |||\ndelegate_plan:\n{\n  \"plan\": [{\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking\"}],\n  \"memo\": \"Context for coder\"\n}\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local json_match = utils.trim(args:gsub("`+", ""))
         local status, payload = pcall(function() return json:decode(json_match) end)
         local plan = nil

@@ -140,9 +140,8 @@ Instruction-Tuned модели (Qwen, Claude) обучены использов�
 **Уровни защиты E-va:**
 
 1. **Recency Injection**: В самый конец каждого промпта (непосредственно перед ответом модели) движок вклеивает блок `⚙️ ENGINE DIRECTIVES`, строго запрещающий использование `<tool_call>`.
-2. **Parser Sanitization**: По принципу Postel's Law, `parser.lua` автоматически удаляет "мусорные" теги-обертки LLM до того, как state machine начнет извлекать команды `>>> COMMAND >>>\n`.
-3. **Shell Escaping**: Все пути и аргументы, передаваемые в системный shell, экранируются через `utils.shell_quote` для защиты от Command Injection.
-4. **Shell Circuit Breaker**: Если агент 3 раза подряд "ломает" билд (команда `make` или `test` возвращает non-zero exit code), E-va прерывает цикл и заставляет агента перечитать исходники.
+2. **Shell Escaping**: Все пути и аргументы, передаваемые в системный shell, экранируются через `utils.shell_quote` для защиты от Command Injection.
+3. **Shell Circuit Breaker**: Если агент 3 раза подряд "ломает" билд (команда `make` или `test` возвращает non-zero exit code), E-va прерывает цикл и заставляет агента перечитать исходники.
 
 ---
 
