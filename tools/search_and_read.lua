@@ -26,7 +26,8 @@ local function register(registry)
             if path == "" then break end
             local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, path)
             if ctx.knowledge_base[rel_path] then
-                table.insert(results, string.format("- %s: ALREADY in memory", rel_path))
+                table.insert(results, string.format("- %s: Loaded successfully", rel_path))
+                loaded = loaded + 1
             else
                 local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
                 local content, err = utils.read_file_range(full_path)

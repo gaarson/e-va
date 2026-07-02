@@ -452,6 +452,7 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
     local readme_content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. readme_path)
     if readme_content then
         ctx:add_file(readme_path, readme_content)
+        ctx:pin_file(readme_path)
         table.insert(docs_loaded, readme_path)
     end
 
@@ -463,6 +464,7 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
                     local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. filepath)
                     if content then
                         ctx:add_file(filepath, content)
+                        ctx:pin_file(filepath)
                         table.insert(docs_loaded, filepath)
                     end
                 end
@@ -479,7 +481,7 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
         local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. norm_start)
         if content then
             ctx:add_file(norm_start, content)
-            ctx:track_requested_file(norm_start)
+            ctx:pin_file(norm_start)
             initial_msg = initial_msg .. "\n(Note: I loaded target file '"..norm_start.."' for you)"
         end
     end

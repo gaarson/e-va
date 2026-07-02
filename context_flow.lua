@@ -706,17 +706,24 @@ function M:sync_files()
     return updated_files
 end
 
-function M:load_images(dir_path)
-    if not dir_path or dir_path == "" then
-        self.images = {}
-        self.images_loaded = false
-        return
+    function M:load_images(dir_path)
+        if not dir_path or dir_path == "" then
+            self.images = {}
+            self.images_loaded = false
+            return
+        end
+        self.images = utils.load_images_from_dir(dir_path)
+        self.images_loaded = (#self.images > 0)
     end
-    self.images = utils.load_images_from_dir(dir_path)
-    self.images_loaded = (#self.images > 0)
-end
-
-function M:update_summary(new_summary)
+    
+    function M:add_image(base64_data, mime_type)
+        if not base64_data or base64_data == "" then return end
+        mime_type = mime_type or "image/png"
+        table.insert(self.images, { base64_data = base64_data, mime_type = mime_type })
+        self.images_loaded = true
+    end
+    
+    function M:update_summary(new_summary)
     self.task_summary = utils.trim(new_summary)
     self:add_action("SUMMARY_UPDATE", "Updated task summary")
 end

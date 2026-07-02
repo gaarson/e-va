@@ -108,11 +108,44 @@ function M.execute_tool(proc, tool_name, json_args_string)
     if res.error then return { output = "[MCP EXECUTION ERROR]: " .. json.encode(res.error), signal = nil } end
 
     local output = ""
+    local images_found = {}
     for _, content_block in ipairs(res.result.content or {}) do
-        if content_block.type == "text" then output = output .. content_block.text .. "\n" end
+        if content_block.type == "text" then
+            output = output .. content_block.text .. "\n"
+        elseif content_block.type == "image" then
+            -- MCP image block: { type: "image", data: "<base64>", mimeType: "image/png" }
+            -- or nested: { type: "image", source: { data: "<base64>", mimeType: "image/png" } }
+            local img_data = nil
+            local img_mime = "image/png"
+            
+            if content_block.source and content_block.source.data then
+                img_data = content_block.source.data
+                img_mime = content_block.source.mimeType or "image/png"
+            elseif content_block.data then
+                img_data = content_block.data
+                img_mime = content_block.mimeType or "image/png"
+            end
+            
+            if img_data then
+                -- Handle data URI format: data:image/png;base64,<data>
+                if img_data:match("^data:[^;]+;base64,") then
+                    img_data = img_data:match("^data:[^;]+;base64,(.+)$")
+                end
+                if img_data and #img_data > 0 then
+                    table.insert(images_found, { base64_data = img_data, mime_type = img_mime })
+                end
+            end
+        end
     end
 
-    return { output = output, signal = nil }
+    -- Inject images into context if ctx is provided
+    if ctx and #images_found > 0 then
+        for _, img in ipairs(images_found) do
+            ctx:add_image(img.base64_data, img.mime_type)
+        end
+    end
+
+    return { output = output, signal = nil, images = images_found }
 end
 
 return M

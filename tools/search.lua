@@ -4,7 +4,7 @@ local function register(registry)
     registry.register("search", "Fast RipGrep search", "||| COMMAND |||\nsearch:function_name\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local query = utils.trim(args)
         if query == "" then return { output = "\n[ERROR]: Empty search query." } end
-        if ctx:has_searched(query) then return { output = "\n[SYSTEM]: Skipped duplicate search. Check History." } end
+        if ctx:has_searched(query) then return { output = "\n[SEARCH RESULTS for '"..query.."']:\n" .. ctx.search_history[query] } end
 
         local safe_query = utils.shell_quote(query)
         local safe_root = utils.shell_quote(ctx.config.PROJECT_ROOT)
