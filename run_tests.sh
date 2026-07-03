@@ -12,7 +12,7 @@ TEST_STATUS=$?
 if [ $TEST_STATUS -eq 0 ]; then
     echo ">>> Generating coverage report..."
     ./lua_modules/bin/luacov
-    
+
     echo "========================================="
     echo "Coverage Summary:"
     tail -n 10 luacov.report.out

@@ -114,7 +114,7 @@ M.INJECTION_STRATEGIES = {
         for i = #messages, 1, -1 do
             if messages[i].role == "user" then
                 local content = messages[i].content
-                
+
                 -- Удаляем предыдущие динамические блоки, чтобы избежать накопления
                 -- Примечание: в Lua 5.1 точка не ловит \n, поэтому используем (.|\n)
                 content = content:gsub("<execution_plan>(.-)</execution_plan>", "")
@@ -122,7 +122,7 @@ M.INJECTION_STRATEGIES = {
                 content = content:gsub("<file_context[^>]->(.-)</file_context>", "")
                 content = content:gsub("\n\n+", "\n\n")
                 content = utils.trim(content)
-                
+
                 -- Собираем чистое сообщение + свежий блок контекста
                 messages[i].content = (content ~= "" and content .. "\n\n" or "") .. block
                 break
@@ -191,7 +191,7 @@ function M:prune_history(agent_name)
     local history = self:get_history(agent_name)
     local limits = self.flow_config.storage
     local estimate = function(t) return math.ceil((#(t or "")) / self.flow_config.token_estimation.chars_per_token) end
-    
+
     -- Применяем стратегии (можно расширять)
     M.PRUNE_STRATEGIES.fifo_assistant_first(history, limits)
     M.PRUNE_STRATEGIES.squash_large_patches(history, limits, estimate)
@@ -205,7 +205,7 @@ function M:squash_last_mutation(agent_name)
         if msg.role == "assistant" then
             local original = msg.content or ""
             local squashed = original:gsub("||| COMMAND |||\n(patch|create_file):([^%s\n]+)%s*\n.-||| END_COMMAND |||", 
-                function(_, file_path) return string.format("\n[SYSTEM MEMORY: %s applied to '%s'.]\n", 
+                function(_, file_path) return string.format("\n[SYSTEM MEMORY: %s applied to '%s'.]\n",
                     (file_path == "patch" and "Patch" or "File"), file_path or "unknown") end)
             squashed = utils.trim(squashed:gsub("\n\n+", "\n\n"))
             if original ~= squashed then
@@ -295,7 +295,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
             "[SYSTEM: INITIATION]\nReview context and proceed."
         table.insert(chat_buffer, { role = "user", content = init_msg })
     end
-    
+
     -- Нормализация ролей для API (некоторые не любят system в середине)
     for _, msg in ipairs(chat_buffer) do
         local role = msg.role == "system" and "user" or msg.role
@@ -303,7 +303,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
     end
 
     -- print(string.format("[DEBUG] Recency Block content: %s", recency)) 
-    
+
     -- Инъекция изображений (OpenAI Format)
     if self.images_loaded and #self.images > 0 then
         local formatted_images = {}
@@ -315,7 +315,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
                 }
             })
         end
-        
+
         for i = #messages, 1, -1 do
             if messages[i].role == "user" then
                 messages[i].content = {
@@ -326,13 +326,13 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
             end
         end
     end
-    
+
     -- Фикс для API: если последний assistant, добавляем continuation
     if #messages > 1 and messages[#messages].role == "assistant" then
         table.insert(messages, { role = "user", content = self.flow_config.command_flow.continuation_prompt })
     end
 
-    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
+    tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
     if tools_manifest and tools_manifest ~= "" then
         if #messages > 0 and messages[#messages].role == "user" then
             if type(messages[#messages].content) == "table" then
@@ -352,8 +352,10 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
             table.insert(messages, { role = "user", content = tools_manifest })
         end
     end
-    
+
     local total_tokens = estimate(system_prompt) + current_cost + recency_cost + manifest_cost
+
+    logger.log_messages_pretty(messages, 1, agent_name, self)
 
     return {
         messages = messages,
@@ -481,7 +483,7 @@ function M:process_turn_response(agent_name, raw_content, executor)
         self:add_message(agent_name, "assistant", utils.trim(raw_content))
         return { type = "CONVERSATION", hint = parse_err }
     end
-    
+
     -- 2. Валидация
     local valid, val_err = executor:validate_command(cmd)
     if not valid then
@@ -604,9 +606,9 @@ function M:generate_handoff_memo(agent_name, agent_cfg)
     local div = self.flow_config.token_estimation.chars_per_token
     local parts = {}
     local tokens = 0
-    
+
     table.insert(parts, string.format("<handoff_memo agent=\"%s\">", agent_name))
-    
+
     for _, sec in ipairs(sections) do
         if sec == "execution_plan" then
             local plan_text = self:get_plan_text()
@@ -657,18 +659,18 @@ function M:generate_handoff_memo(agent_name, agent_cfg)
         elseif sec == "agent_summary" then
             table.insert(parts, "<agent_summary>[PROMPT: Please summarize your work in this stage]</agent_summary>")
         end
-        
+
         tokens = tokens + math.ceil(#sec / div)
         if tokens >= max_tokens then break end
     end
-    
+
     table.insert(parts, "</handoff_memo>")
     return table.concat(parts, "\n")
 end
 
 function M:clear_history_for_stage(strategy)
     if strategy == "none" or strategy == nil then return end
-    
+
     if strategy == "full" then
         self.history = {}
         self.thoughts = {}
@@ -715,14 +717,14 @@ end
         self.images = utils.load_images_from_dir(dir_path)
         self.images_loaded = (#self.images > 0)
     end
-    
+
     function M:add_image(base64_data, mime_type)
         if not base64_data or base64_data == "" then return end
         mime_type = mime_type or "image/png"
         table.insert(self.images, { base64_data = base64_data, mime_type = mime_type })
         self.images_loaded = true
     end
-    
+
     function M:update_summary(new_summary)
     self.task_summary = utils.trim(new_summary)
     self:add_action("SUMMARY_UPDATE", "Updated task summary")
@@ -975,7 +977,7 @@ function M:inject_handoff_files(agent_name)
     if not next(files_to_pass) then return end
     local parts = {}
     local history = self:get_history(agent_name)
-    
+
     for path, _ in pairs(files_to_pass) do
         local content = self.knowledge_base[path]
         if content then
@@ -987,7 +989,7 @@ function M:inject_handoff_files(agent_name)
                     break
                 end
             end
-            
+
             if not is_in_history then
                 local status = "READ_ONLY"
                 if self.pinned_files[path] then status = "PINNED"

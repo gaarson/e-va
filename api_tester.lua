@@ -59,9 +59,9 @@ for agent_name, profile in pairs(agents_to_test) do
     -- ==========================================
     log_step("TEST 1/3", "Synchronous Payload (Non-Streaming)")
     log_debug("Sending standard POST request with stream=false...")
-    
+
     local res_sync, err_sync = llm.send_request(profile, test_messages, { override_params = { stream = false, max_tokens = 100 } })
-    
+
     if not res_sync then
         print("\27[31m[FAIL]\27[0m Network/Parsing error: " .. tostring(err_sync))
     else
@@ -81,11 +81,11 @@ for agent_name, profile in pairs(agents_to_test) do
     log_step("TEST 2/3", "SSE Chunk Assembly (Streaming)")
     log_debug("Sending POST request with stream=true...")
     log_debug("Waiting for the first chunk to arrive on the TCP socket...\n")
-    
+
     local stream_buffer = ""
     local chunk_count = 0
     local start_time = os.time()
-    
+
     local res_stream, err_stream = llm.send_request(profile, test_messages, {
         override_params = { stream = true, max_tokens = 100 },
         on_token = function(token)
@@ -96,12 +96,12 @@ for agent_name, profile in pairs(agents_to_test) do
             stream_buffer = stream_buffer .. token
         end
     })
-    
+
     local end_time = os.time()
     local duration = end_time - start_time
-    
+
     log_step("STREAMING FINISHED", string.format("Received %d chunks in ~%d seconds.", chunk_count, duration))
-    
+
     if not res_stream then
         print("\27[31m[FAIL]\27[0m Streaming connection failed or timed out: " .. tostring(err_stream))
     else
@@ -121,7 +121,7 @@ for agent_name, profile in pairs(agents_to_test) do
     -- ==========================================
     log_step("TEST 3/3", "Strict Parameter Validation")
     log_debug("Sending raw config.lua parameters without overrides to check for API rejections...")
-    
+
     local res_strict, err_strict = llm.send_request(profile, test_messages)
 
     if not res_strict then

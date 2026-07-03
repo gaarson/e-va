@@ -12,22 +12,22 @@ function M.analyze_and_optimize(ctx, config)
     end
 
     logger.info("[OPTIMIZER] Starting background context analysis...")
-    
+
     -- 1. Собираем сжатый слепок контекста
     local loaded_files = {}
     for path, _ in pairs(ctx.knowledge_base) do table.insert(loaded_files, path) end
-    
+
     local recent_actions = {}
     local start_idx = math.max(1, #ctx.last_actions - 5)
     for i = start_idx, #ctx.last_actions do
         table.insert(recent_actions, ctx.last_actions[i].summary)
     end
-    
+
     local pinned_list = {}
     for k, _ in pairs(ctx.pinned_files or {}) do table.insert(pinned_list, k) end
 
     local thoughts_text = ctx:get_recent_thoughts_text()
-    
+
     local context_brief = string.format(
         "TASK SUMMARY: %s\nCURRENT STEP: %d/%d\nLOADED FILES: %s\nRECENT ACTIONS: %s\nPINNED: %s\n",
         ctx.task_summary or "None",
@@ -38,7 +38,7 @@ function M.analyze_and_optimize(ctx, config)
         table.concat(pinned_list, ", "),
         thoughts_text
     )
-    
+
     -- 2. Формируем промпт для Оптимизатора
     local prompt = string.format([[
 You are an autonomous Context Optimization Agent. Your job is to analyze the current state of the main agent's memory and optimize it to prevent token overflow and maintain focus.
@@ -63,17 +63,17 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
         { role = "system", content = "You are a Context Optimization AI. Output ONLY valid JSON." },
         { role = "user", content = prompt }
     }
-    
+
     -- 3. Асинхронный (не стримящий) вызов к отдельной модели
     local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
         return
     end
-    
+
     local content = llm_handler.extract_content(res)
     if not content then return end
-    
+
     -- 4. Парсинг JSON (аналогично delegate_plan.lua)
     local json_match = utils.trim(content:gsub("`+", ""))
     local status, payload = pcall(function() return json:decode(json_match) end)
@@ -84,7 +84,7 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
             ctx:update_summary(payload.new_summary)
             logger.info("[OPTIMIZER] Updated summary.")
         end
-        
+
         if payload.files_to_remove and type(payload.files_to_remove) == "table" then
             for _, f in ipairs(payload.files_to_remove) do
                 if ctx.knowledge_base[f] then
@@ -95,7 +95,7 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
                 end
             end
         end
-        
+
         if payload.files_to_pin and type(payload.files_to_pin) == "table" then
             for _, f in ipairs(payload.files_to_pin) do
                 if ctx.knowledge_base[f] then
@@ -104,7 +104,7 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
                 end
             end
         end
-        
+
         logger.info("[OPTIMIZER] Cycle complete.")
     else
         local debug_snip = json_match:sub(1, 100) .. "..."
@@ -124,7 +124,7 @@ function M.extract_and_optimize_prompt(ctx, config)
     if ctx.prompt_history and #ctx.prompt_history > 0 then
         current_prompt = ctx.prompt_history[#ctx.prompt_history]
     end
-    
+
     if not current_prompt then
         logger.warn("[OPTIMIZER] No prompt found in prompt_history.")
         return nil
@@ -168,7 +168,7 @@ Return the optimized prompt as plain text without any markdown formatting or ext
 
     -- 4. Clean up the response (remove markdown code blocks if present)
     local optimized_prompt = utils.trim(content:gsub("`+", ""))
-    
+
     logger.info("[OPTIMIZER] Prompt optimization complete.")
     return optimized_prompt
 end
@@ -207,20 +207,20 @@ Return the summary as plain text without any markdown formatting or extra text.
         { role = "system", content = "You are a Thought Summarization AI. Output ONLY the concise summary." },
         { role = "user", content = prompt }
     }
-    
+
     -- Non-streaming call to the optimizer model
     local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
         return nil
     end
-    
+
     local content = llm_handler.extract_content(res)
     if not content then return nil end
-    
+
     -- Clean up the response
     local summary = utils.trim(content:gsub("`+", ""))
-    
+
     if #summary > 0 then
         logger.info("[OPTIMIZER] Summarized unclosed thought.")
         return summary

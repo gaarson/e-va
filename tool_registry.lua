@@ -54,7 +54,7 @@ function M.execute(action_string, ctx, agent_name)
     if not is_tool_allowed(agent_cfg, cmd_name) then
         return { output = "\n[SECURITY DENY]: Agent '" .. agent_name .. "' is not authorized to use tool '" .. cmd_name .. "'.", signal = nil }
     end
-    
+
     local status, res = pcall(tool.exec, args, ctx, agent_name)
     if not status then
         logger.error("Tool execution FATAL (" .. cmd_name .. ")", res)

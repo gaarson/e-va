@@ -166,97 +166,97 @@ function M.close()
         log_file:close()
         log_file = nil
 
-        -- Remove shutdown guard so __gc doesn't try to close again on Lua exit after explicit close() call. 
-        -- However if close() was called explicitly we don't want __gc to do anything harmful. 
-        -- Setting _shutdown_guard to nil allows it to be GC'd harmlessly since __gc checks log_file which is nil. 
-        rawset(M, "_shutdown_guard", nil) 
-    end 
-end 
+        -- Remove shutdown guard so __gc doesn't try to close again on Lua exit after explicit close() call.
+        -- However if close() was called explicitly we don't want __gc to do anything harmful.
+        -- Setting _shutdown_guard to nil allows it to be GC'd harmlessly since __gc checks log_file which is nil.
+        rawset(M, "_shutdown_guard", nil)
+    end
+end
 
--- Context logging (FIXED: append mode instead of overwrite) 
+-- Context logging (FIXED: append mode instead of overwrite)
 
-function M.log_context(turn, phase, content) 
-    local filename = string.format("%s/turn_%03d_%s.log", log_dir, turn, phase) 
-    local f = io.open(filename, "a") 
-    if f then 
-        f:write(content) 
-        f:close() 
-    else 
-        io.stderr:write(string.format("[LOGGER FATAL] Failed to write log to: %s\n", filename)) 
-    end 
-end 
+function M.log_context(turn, phase, content)
+    local filename = string.format("%s/turn_%03d_%s.log", log_dir, turn, phase)
+    local f = io.open(filename, "a")
+    if f then
+        f:write(content)
+        f:close()
+    else
+        io.stderr:write(string.format("[LOGGER FATAL] Failed to write log to: %s\n", filename))
+    end
+end
 
--- Pretty message logging (unchanged signature and behavior) 
+-- Pretty message logging (unchanged signature and behavior)
 
-function M.log_messages_pretty(messages, turn, agent_name, ctx) 
+function M.log_messages_pretty(messages, turn, agent_name, ctx)
     local colors = {
-        system    = "\27[35m",  -- magenta 
-        user      = "\27[32m",  -- green 
-        assistant = "\27[36m",  -- cyan 
+        system    = "\27[35m",  -- magenta
+        user      = "\27[32m",  -- green
+        assistant = "\27[36m",  -- cyan
         end_c     = "\27[0m"
     }
 
     print("\n")
-    print(string.format("\27[1m[MESSAGES] Turn %d | Agent: %s | Total: %d msg(s)\27[0m", turn, agent_name, #messages)) 
+    print(string.format("\27[1m[MESSAGES] Turn %d | Agent: %s | Total: %d msg(s)\27[0m", turn, agent_name, #messages))
 
     for i, msg in ipairs(messages) do
         local role = msg.role or "unknown"
         local color = colors[role] or "\27[37m"
 
-        local content = msg.content 
+        local content = msg.content
         if type(content) == "table" then
             local json = require("JSON")
             content = json:encode(content, 2)
         end
-        content = tostring(content) 
+        content = tostring(content)
 
-        print(string.format( 
-            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)", 
-            i, color .. role, ctx:estimate_tokens(content))) 
+        print(string.format(
+            "\27[1m[%d]\27[0m \27[1m%s\27[0m \27[90m(%d tokens)",
+            i, color .. role, ctx:estimate_tokens(content)))
 
-        io.write(string.format("%s%s\27[0m\n", color, content)) 
-        io.flush()  
-    end 
+        io.write(string.format("%s%s\27[0m\n", color, content))
+        io.flush()
+    end
 
-    print("\n") 
-end 
+    print("\n")
+end
 
-function M.log_final_dump(ctx, turn, agent_name) 
-    local messages = {} 
-    
-    -- Get system prompt if available 
-    local system_prompt_result = pcall(function() return ctx:get_system_prompt() end) 
-    local system_prompt = "" 
-    if system_prompt_result then 
-        system_prompt_result = select(2, pcall(function() return ctx:get_system_prompt() end)) 
-        -- Actually let's just try directly with pcall result handling properly 
-    end 
-    
-    -- Simpler approach that matches original behavior 
-    system_prompt = "" 
-    if ctx.get_system_prompt then 
-        local ok, prompt_val = pcall(ctx.get_system_prompt, ctx) 
-        if ok and prompt_val and prompt_val ~= "" then 
-            system_prompt = prompt_val 
-            table.insert(messages, { role = "system", content = system_prompt }) 
-        end 
-    end 
-    
-    -- Get full history for the agent 
-    if ctx.get_history then 
-        local ok, history_val = pcall(ctx.get_history, ctx, agent_name) 
-        if ok and history_val then 
-            for _, msg in ipairs(history_val) do 
-                table.insert(messages, msg) 
-            end 
-        end 
-    end 
-    
-    if #messages > 0 then 
-        M.log_messages_pretty(messages, turn, agent_name, ctx) 
-    else 
-        print("\n\27[33m[LOGGER] No messages to dump for agent: " .. tostring(agent_name) .. "\27[0m\n") 
-    end 
-end 
+function M.log_final_dump(ctx, turn, agent_name)
+    local messages = {}
+
+    -- Get system prompt if available
+    local system_prompt_result = pcall(function() return ctx:get_system_prompt() end)
+    local system_prompt = ""
+    if system_prompt_result then
+        system_prompt_result = select(2, pcall(function() return ctx:get_system_prompt() end))
+        -- Actually let's just try directly with pcall result handling properly
+    end
+
+    -- Simpler approach that matches original behavior
+    system_prompt = ""
+    if ctx.get_system_prompt then
+        local ok, prompt_val = pcall(ctx.get_system_prompt, ctx)
+        if ok and prompt_val and prompt_val ~= "" then
+            system_prompt = prompt_val
+            table.insert(messages, { role = "system", content = system_prompt })
+        end
+    end
+
+    -- Get full history for the agent
+    if ctx.get_history then
+        local ok, history_val = pcall(ctx.get_history, ctx, agent_name)
+        if ok and history_val then
+            for _, msg in ipairs(history_val) do
+                table.insert(messages, msg)
+            end
+        end
+    end
+
+    if #messages > 0 then
+        M.log_messages_pretty(messages, turn, agent_name, ctx)
+    else
+        print("\n\27[33m[LOGGER] No messages to dump for agent: " .. tostring(agent_name) .. "\27[0m\n")
+    end
+end
 
 return M

@@ -23,10 +23,10 @@ typedef struct {
 
 static int l_spawn_mcp(lua_State *L) {
     const char *cmd = luaL_checkstring(L, 1);
-    
+
     int pipe_in[2];
     int pipe_out[2];
-    
+
     if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0) {
         lua_pushnil(L);
         lua_pushstring(L, "System Error: Failed to create pipes");
@@ -47,7 +47,7 @@ static int l_spawn_mcp(lua_State *L) {
         dup2(pipe_out[1], STDOUT_FILENO);
         close(pipe_in[0]);
         close(pipe_out[1]);
-        
+
         execl("/bin/sh", "sh", "-c", cmd, NULL);
         _exit(127);
     }
@@ -69,7 +69,7 @@ static int l_spawn_mcp(lua_State *L) {
 static int l_mcp_write(lua_State *L) {
     MCP_Process *proc = (MCP_Process*)luaL_checkudata(L, 1, MCP_PROC_MT);
     const char *payload = luaL_checkstring(L, 2);
-    
+
     if (proc->in) {
         fprintf(proc->in, "%s\n", payload);
         fflush(proc->in);
@@ -90,9 +90,9 @@ static int l_mcp_read(lua_State *L) {
 
     char *line = NULL;
     size_t len = 0;
-    
+
     ssize_t read_bytes = getline(&line, &len, proc->out);
-    
+
     if (read_bytes != -1) {
         lua_pushlstring(L, line, read_bytes);
         free(line);

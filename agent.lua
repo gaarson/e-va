@@ -282,7 +282,7 @@ local function execute_pipeline()
         logger.info(string.format("\n=== PIPELINE STAGE [%d/%d]: %s ===", current_stage_idx, #config.PIPELINE, tostring(stage.stage)))
 
         local stage_complete = false
-        
+
         -- Очищаем локальную историю для новой стадии (но не базу знаний)
         -- Это соответствует требованию "с чистого листа, но с общей базой знаний"
         for name, _ in pairs(ctx.history) do
@@ -295,7 +295,7 @@ local function execute_pipeline()
             turn = turn + 1
 
             if stage.mode == "interactive" then
-                local target_agent = "ARCHITECT"
+                target_agent = "ARCHITECT"
                 last_active_agent = target_agent
                 if type(stage.agent) == "string" then target_agent = stage.agent
                 elseif type(stage.agents) == "table" and type(stage.agents[1]) == "string" then target_agent = stage.agents[1]
@@ -420,21 +420,21 @@ local function execute_pipeline()
                 ctx:set_handoff_memo(memo)
                 ctx:clear_history_for_stage(config.HANDOFF.clear_history)
                 print(string.format("\n\27[36m[HANDOFF] Generated memo for agent '%s'. Strategy: %s\27[0m", last_active_agent, config.HANDOFF.clear_history))
-                
+
                 -- НОВЫЙ: Подгружаем файлы из плана
                 if config.HANDOFF.auto_load_plan_files then
                     ctx:get_handoff_files()
                 end
-                
+
                 -- НОВЫЙ: Инжектируем файлы в контекст следующего этапа
                 if config.HANDOFF.pass_knowledge_base or config.HANDOFF.pass_pinned_files or config.HANDOFF.pass_requested_files then
                     local next_agent = config.PIPELINE[current_stage_idx + 1] and config.PIPELINE[current_stage_idx + 1].agents[1] or "CODER"
                     ctx:inject_handoff_files(next_agent)
                 end
             end
-            
+
             current_stage_idx = current_stage_idx + 1
-            
+
             -- Loop-back mechanism: if we've exceeded the pipeline, search backwards for an interactive stage
             if current_stage_idx > #config.PIPELINE then
                 local interactive_idx = nil
@@ -444,7 +444,7 @@ local function execute_pipeline()
                         break
                     end
                 end
-                
+
                 if interactive_idx then
                     logger.info(string.format("[LOOP-BACK] Pipeline completed. Resuming at interactive stage #%d: %s", interactive_idx, config.PIPELINE[interactive_idx].stage))
                     current_stage_idx = interactive_idx
@@ -514,6 +514,7 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
         end
     end
 
+    logger.info('ALA', initial_msg)
     ctx:add_message(first_agent, "user", initial_msg)
 
     local original_max = nil
@@ -570,13 +571,13 @@ if not restored then
         -- Validate bootstrap prerequisites
         local has_url = arch_agent.url or os.getenv("LLM_URL")
         local has_model = arch_agent.model or os.getenv("LLM_MODEL")
-        
+
         if not has_url then
             logger.error("[BOOTSTRAP] FATAL: No LLM URL found in config.AGENTS.ARCHITECT or env var LLM_URL.")
             print("\n\27[31m[FATAL] Cannot bootstrap: Missing LLM URL. Set config.AGENTS.ARCHITECT.url or export LLM_URL.\27[0m")
             os.exit(1)
         end
-        
+
         if not has_model then
             logger.error("[BOOTSTRAP] FATAL: No LLM Model found in config.AGENTS.ARCHITECT or env var LLM_MODEL.")
             print("\n\27[31m[FATAL] Cannot bootstrap: Missing LLM Model. Set config.AGENTS.ARCHITECT.model or export LLM_MODEL.\27[0m")
@@ -603,36 +604,6 @@ if not restored then
 
         ctx = ContextFlow.new(config.CONTEXT_FLOW, config)
 
-        local function detect_lint_command()
-            local root = config.PROJECT_ROOT
-
-            -- Check for Node.js project
-            if utils.read_file_range(root .. "/package.json") then
-                return "npm run lint || npm test || echo 'No lint/test script in package.json'"
-            end
-
-            -- Check for Rust project
-            if utils.read_file_range(root .. "/Cargo.toml") then
-                return "cargo clippy -- -D warnings || cargo test || echo 'No lint/test configured'"
-            end
-
-            -- Check for Go project
-            if utils.read_file_range(root .. "/go.mod") then
-                return "go vet ./... || go test ./... || echo 'No lint/test configured'"
-            end
-
-            -- Check for Makefile-based project
-            if utils.read_file_range(root .. "/Makefile") then
-                return "make lint || make test || echo 'No lint/test target in Makefile'"
-            end
-
-            -- Fallback
-            return "echo 'No standard project manifest found (package.json/Cargo.toml/go.mod/Makefile)'"
-        end
-
-        local lint_cmd = detect_lint_command()
-
-        ctx:add_message("BOOTSTRAPPER", "user", trigger_msg)
         execute_pipeline()
 
     elseif instruction or target_agent then

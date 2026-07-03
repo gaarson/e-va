@@ -147,8 +147,8 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            -- url = "http://192.168.0.102:8000/v1/chat/completions",
-            url = "https://zo-diak.com/ai/v1/chat/completions",
+            -- url = "https://zo-diak.com/ai/v1/chat/completions",
+            url = "http://192.168.0.102:8000/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",
@@ -173,8 +173,8 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = "https://zo-diak.com/ai/v1/chat/completions",
-            -- url = "http://192.168.0.102:8000/v1/chat/completions",
+            url = "http://192.168.0.102:8000/v1/chat/completions",
+            -- url = "https://zo-diak.com/ai/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",

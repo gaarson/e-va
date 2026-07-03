@@ -23,15 +23,15 @@ static int fuzzy_streq(const char *s1, size_t len1, const char *s2, size_t len2)
     while (i < len1 && j < len2) {
         while (i < len1 && isspace((unsigned char)s1[i])) i++;
         while (j < len2 && isspace((unsigned char)s2[j])) j++;
-        
+
         if (i == len1 || j == len2) break;
         if (s1[i] != s2[j]) return 0;
         i++; j++;
     }
-    
+
     while (i < len1 && isspace((unsigned char)s1[i])) i++;
     while (j < len2 && isspace((unsigned char)s2[j])) j++;
-    
+
     return (i == len1 && j == len2);
 }
 
@@ -55,7 +55,7 @@ static int l_find_unique_fuzzy_block(lua_State *L) {
     luaL_checktype(L, 2, LUA_TTABLE);
 
     size_t content_count = 0, search_count = 0;
-    
+
     StringRef *content = extract_string_array(L, 1, &content_count);
     StringRef *search = extract_string_array(L, 2, &search_count);
 

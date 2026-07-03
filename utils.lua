@@ -38,10 +38,10 @@ end
 function M.load_config(filepath)
     local chunk, err = loadfile(filepath)
     if not chunk then return nil, err end
-    
+
     local ok, res = pcall(chunk)
     if not ok then return nil, "Execution error: " .. tostring(res) end
-    
+
     if type(res) == "table" then
         -- Поддержка легаси/корневого формата с M.get()
         if type(res.get) == "function" then
@@ -49,7 +49,7 @@ function M.load_config(filepath)
         end
         return res
     end
-    
+
     return nil, "Config must return a table"
 end
 
@@ -287,12 +287,12 @@ function M.explore_directory(root_path, target_subpath, max_depth)
 
     for line in out:gmatch("[^\r\n]+") do
         if count >= max_files then break end
-        
+
         local rel = M.normalize_path(root_path, line)
         if rel ~= "" and rel ~= full_target then
             local full_path = root_path .. "/" .. rel
             local safe_full_path = M.shell_quote(full_path)
-            
+
             local is_dir = os.execute(string.format("test -d %s", safe_full_path)) == 0
 
             if is_dir then
