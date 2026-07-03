@@ -36,7 +36,7 @@ M.DEFAULT_CONFIG = {
         strict_parsing = true,
         max_retries = 3,
         auto_squash_on_mutation = true,
-        continuation_prompt = "[SYSTEM]: Continue your analysis. Execute the next command or ask a question if clarification is needed.",
+        continuation_prompt = "ok",
         reinforcement_interval = 5, -- Каждые N ходов напоминаем о плане
         allow_consecutive_assistant = false, -- Некоторые API требуют чередования ролей
     },
@@ -316,7 +316,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
             })
         end
 
-        for i = #messages, 1, -1 do
+        for i = 1, #messages do
             if messages[i].role == "user" then
                 messages[i].content = {
                     { type = "text", text = messages[i].content },
@@ -332,30 +332,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         table.insert(messages, { role = "user", content = self.flow_config.command_flow.continuation_prompt })
     end
 
-    tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
-    if tools_manifest and tools_manifest ~= "" then
-        if #messages > 0 and messages[#messages].role == "user" then
-            if type(messages[#messages].content) == "table" then
-                -- Если последнее сообщение содержит изображения (мультимодальный формат), ищем текстовую часть
-                for _, part in ipairs(messages[#messages].content) do
-                    if part.type == "text" then
-                        part.text = part.text .. "\n\n" .. tools_manifest
-                        break
-                    end
-                end
-            else
-                -- Обычное текстовое сообщение
-                messages[#messages].content = messages[#messages].content .. "\n\n" .. tools_manifest
-            end
-        else
-            -- Если последнее сообщение не от user (например, assistant), создаем новое
-            table.insert(messages, { role = "user", content = tools_manifest })
-        end
-    end
-
     local total_tokens = estimate(system_prompt) + current_cost + recency_cost + manifest_cost
-
-    logger.log_messages_pretty(messages, 1, agent_name, self)
 
     return {
         messages = messages,
@@ -420,9 +397,9 @@ end
 
 function M:get_system_prompt(agent_cfg)
     local prompt_text = self:load_prompt(agent_cfg.prompt_file)
-    -- local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
+    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
     local directives = self:get_engine_directives(agent_cfg)
-    return prompt_text .. "\n" .. directives
+    return prompt_text .. "\n" .. directives .. "\n" .. tools_manifest
 end
 
 function M:get_engine_directives(agent_cfg)

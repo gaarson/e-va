@@ -282,7 +282,7 @@ function M.explore_directory(root_path, target_subpath, max_depth)
     p:close()
 
     local files = {}
-    local max_files = 50 
+    local max_files = 200
     local count = 0
 
     for line in out:gmatch("[^\r\n]+") do

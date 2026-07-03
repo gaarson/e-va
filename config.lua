@@ -9,7 +9,7 @@ function M.get()
     cfg.MCP_SERVERS = {}
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 120000,
+        MAX_CONTEXT = 160000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
@@ -22,7 +22,7 @@ function M.get()
             max_history_messages = 200,
             max_history_tokens = 50000,
             squash_threshold_messages = 150,
-            squash_threshold_tokens = 70000,
+            squash_threshold_tokens = 120000,
             dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },
@@ -37,7 +37,7 @@ function M.get()
             strict_parsing = true,
             max_retries = 3,
             auto_squash_on_mutation = true,
-            continuation_prompt = "[SYSTEM]: Continue your analysis...",
+            continuation_prompt = "ok",
             reinforcement_interval = 5,
         },
         token_estimation = {
@@ -94,19 +94,19 @@ function M.get()
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 16384,
-            temperature = 0.1,
-            -- top_p = 0.80,
-            top_k = 60,
+            temperature = 0.2,
+            top_p = 0.95,
+            top_k = 45,
             -- min_p = 0.02,
             -- chat_template_kwargs = {enable_thinking = 'True'},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
-            repetition_penalty = 1.05
+            -- repetition_penalty = 1.05
         },
         ENGINEERING = {
             max_tokens = 16384,
             temperature = 0.1,
-            -- top_p = 0.95,
+            top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
             -- chat_template_kwargs = {enable_thinking = false},
@@ -147,8 +147,8 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            -- url = "https://zo-diak.com/ai/v1/chat/completions",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
+            url = "https://zo-diak.com/ai/v1/chat/completions",
+            -- url = "http://192.168.0.102:8000/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",
@@ -173,8 +173,8 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
-            -- url = "https://zo-diak.com/ai/v1/chat/completions",
+            -- url = "http://192.168.0.102:8000/v1/chat/completions",
+            url = "https://zo-diak.com/ai/v1/chat/completions",
             token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             model = "Qwen3.5-27B-AWQ",

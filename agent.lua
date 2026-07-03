@@ -470,8 +470,8 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
     local readme_content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. readme_path)
     if readme_content then
         ctx:add_file(readme_path, readme_content)
-        ctx:pin_file(readme_path)
         table.insert(docs_loaded, readme_path)
+        initial_msg = initial_msg .. "\n\n<file_context path=\"" .. readme_path .. "\" status=\"PINNED\">\n" .. readme_content:gsub("\n", "\n\t") .. "\n</file_context>"
     end
 
     if ctx.file_tree then
@@ -499,8 +499,7 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
         local content = utils.read_file_range(config.PROJECT_ROOT .. "/" .. norm_start)
         if content then
             ctx:add_file(norm_start, content)
-            ctx:pin_file(norm_start)
-            initial_msg = initial_msg .. "\n(Note: I loaded target file '"..norm_start.."' for you)"
+            initial_msg = initial_msg .. "\n\n<file_context path=\"" .. norm_start .. "\" status=\"TARGET\">\n" .. content:gsub("\n", "\n\t") .. "\n</file_context>"
         end
     end
 
@@ -514,7 +513,6 @@ local function setup_and_run_task(task_file, task_instruction, max_turns)
         end
     end
 
-    logger.info('ALA', initial_msg)
     ctx:add_message(first_agent, "user", initial_msg)
 
     local original_max = nil
