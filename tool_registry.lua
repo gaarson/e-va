@@ -71,9 +71,7 @@ function M.generate_tool_manifest(allowed_tools)
 
     local doc = {
         "## SYSTEM DIRECTIVE: TOOLCHAIN INTERFACE",
-        "You must interact with the environment using strict XML tags.",
         "> **PARSING ORDER**: Commands are executed from the **END** of your response. Always place your final/most important command block at the very end of your text.",
-        "",
         "CRITICAL: Do NOT invent tools. Only the following tools are available to your profile:\n"
     }
 
@@ -107,6 +105,8 @@ function M.generate_tool_manifest(allowed_tools)
         local usage_example = item.tool.usage
         table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s\n", item.name, item.tool.desc, usage_example))
     end
+
+    table.insert(doc, "### VISUAL CONTEXT & SCREENSHOTS\nThe system automatically scans the pictures directory at the start of every turn. To show the LLM a screenshot, diagram, or log:\n1. Save the image file to the configured pictures directory (default: .e-va-conf/pictures/).\n2. You can use tools like mcp_browser_take_screenshot (with filePath argument) or shell commands to save images there.\n3. All images in this folder will be automatically attached to the prompt on the **next turn**, allowing the model to visually inspect UI states or errors.")
 
     -- table.insert(doc, "CRITICAL RULE: You MUST execute `||| COMMAND |||\ntask_complete\n||| END_COMMAND |||` when your instructions are fulfilled to advance the pipeline.")
 

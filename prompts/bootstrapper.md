@@ -8,7 +8,7 @@ To design an effective pipeline, you MUST understand how the E-va engine operate
 
 ### A. Context Management & Memory
 
-* The framework uses XML tags (`<file_context>`, `<file_target>`) to manage memory.
+* The framework uses tags (`<file_context>`, `<file_target>`) to manage memory.
 * **Priority Eviction**: Memory is strictly limited. Files are loaded based on priority: Target File > Pinned Files > Most Recently Used.
 * **Pinning**: Core interfaces or global configs should be pinned (`<cmd>pin:file</cmd>`) by Architect agents to prevent eviction.
 * **Rule**: Teach your generated agents to ALWAYS use `<cmd>outline:path</cmd>` before `<cmd>read_file:path</cmd>`. Reading full files unnecessarily destroys the token budget.

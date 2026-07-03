@@ -95,8 +95,7 @@ CLI парсер E-va представляет собой state machine, под�
 1. **`[SYSTEM MEMORY]`**: Краткие выжимки прошлых действий (результаты `shell`, squashed patches).
 2. **`<file_context status="PINNED">`**: Критические интерфейсы, "прибитые" командой `pin`. Не подлежат удалению из контекста.
 3. **`<file_context status="RECENTLY_MODIFIED">`**: Файлы, которые агент только что изменил.
-4. **`<file_context status="READ_ONLY">`**: Фоновый контекст (вытесняется первым при нехватке токенов).
-5. **`<file_target>`**: **(Positional Inversion)** — Целевой рабочий файл всегда помещается в самый *конец* промпта (ближе всего к attention heads модели при генерации ответа).
+4. **`<file_target>`**: **(Positional Inversion)** — Целевой рабочий файл всегда помещается в самый *конец* промпта (ближе всего к attention heads модели при генерации ответа).
 
 Если файл не влезает в лимит (`MAX_CONTEXT`), он заменяется на `<file_context path="..." status="OMITTED_OUT_OF_MEMORY" />`.
 

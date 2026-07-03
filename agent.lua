@@ -350,7 +350,7 @@ local function execute_pipeline()
                         ctx:add_message(target_agent, "user", user_input)
                         local sig = run_agent_turn(target_agent, config.AGENTS[target_agent], turn)
                         local auto_loop_count = 0
-                        local MAX_AUTO_LOOP = 10
+                        local MAX_AUTO_LOOP = 420
                         
                         -- Auto-loop: keep running agent while it executes commands (AUTO_LOOP signal)
                         while sig == "AUTO_LOOP" and auto_loop_count < MAX_AUTO_LOOP do
@@ -434,6 +434,24 @@ local function execute_pipeline()
             end
             
             current_stage_idx = current_stage_idx + 1
+            
+            -- Loop-back mechanism: if we've exceeded the pipeline, search backwards for an interactive stage
+            if current_stage_idx > #config.PIPELINE then
+                local interactive_idx = nil
+                for i = #config.PIPELINE, 1, -1 do
+                    if config.PIPELINE[i].mode == "interactive" then
+                        interactive_idx = i
+                        break
+                    end
+                end
+                
+                if interactive_idx then
+                    logger.info(string.format("[LOOP-BACK] Pipeline completed. Resuming at interactive stage #%d: %s", interactive_idx, config.PIPELINE[interactive_idx].stage))
+                    current_stage_idx = interactive_idx
+                else
+                    logger.info("[PIPELINE] No interactive stage found. Terminating pipeline.")
+                end
+            end
         end
       end
     print("\n\27[32m[SYSTEM] Pipeline execution finished entirely.\27[0m")
@@ -576,7 +594,7 @@ if not restored then
                 max_tokens = 8192,
             },
             prompt_file = "prompts/bootstrapper.md",
-            allowed_tools = { "explore_tree", "read_file", "search", "create_file", "shell", "task_complete" }
+            allowed_tools = {"shell"}
         }
 
         config.PIPELINE = {
@@ -613,21 +631,6 @@ if not restored then
         end
 
         local lint_cmd = detect_lint_command()
-        local trigger_msg = string.format([[
-1. Explore the project.
-2. Generate .e-va-conf/config.lua.
-3. For each task in TASKS, assign a reasonable 'max_turns' (e.g., 5 for simple removals, 15 for logic fixes).
-4. Generate MD prompts for your agents.
-Use 
-||| COMMAND |||
-task_complete
-||| END_COMMAND ||| 
-when the scaffold is ready.
-]], lint_cmd)
-
-        if instruction and instruction ~= "" then
-            trigger_msg = trigger_msg .. "\n\n[USER CONTEXT]: " .. instruction
-        end
 
         ctx:add_message("BOOTSTRAPPER", "user", trigger_msg)
         execute_pipeline()

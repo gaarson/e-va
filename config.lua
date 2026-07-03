@@ -9,20 +9,20 @@ function M.get()
     cfg.MCP_SERVERS = {}
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 250000,
+        MAX_CONTEXT = 120000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
         CHARS_PER_TOKEN = 3.5,
-        MCP_MAX_OUTPUT_TOKENS = 64000,
+        MCP_MAX_OUTPUT_TOKENS = 16000,
     }
 
     cfg.CONTEXT_FLOW = {
         storage = {
             max_history_messages = 200,
-            max_history_tokens = 160000,
+            max_history_tokens = 50000,
             squash_threshold_messages = 150,
-            squash_threshold_tokens = 120000,
+            squash_threshold_tokens = 70000,
             dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },
@@ -30,8 +30,8 @@ function M.get()
             mode = "append_to_last_user", -- Меняйте на "separate_message" для моделей с коротким контекстом
             recency_block_enabled = true,
             search_digest_enabled = true,
-            max_recency_tokens = 12000,
-            max_search_digest_tokens = 12000,
+            max_recency_tokens = 20000,
+            max_search_digest_tokens = 20000,
         },
         command_flow = {
             strict_parsing = true,
@@ -83,7 +83,7 @@ function M.get()
     cfg.TASKS = {}
 
     cfg.CREATE_BACKUPS = false
-    cfg.PICTURES_DIR = nil -- e.g., '.e-va-conf/pictures'
+    cfg.PICTURES_DIR = ".e-va-conf/pictures"
 
     local BASE_PARAMS = {
         stream = true,
