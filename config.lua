@@ -9,7 +9,7 @@ function M.get()
     cfg.MCP_SERVERS = {}
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 160000,
+        MAX_CONTEXT = 225000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
@@ -22,7 +22,7 @@ function M.get()
             max_history_messages = 200,
             max_history_tokens = 50000,
             squash_threshold_messages = 150,
-            squash_threshold_tokens = 120000,
+            squash_threshold_tokens = 180000,
             dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },
@@ -131,11 +131,11 @@ function M.get()
     -- Добавь в возвращаемую таблицу cfg:
     cfg.OPTIMIZER_AGENT = {
         name = "OPTIMIZER",
-        -- url = "https://zo-diak.com/ai/v1/chat/completions",
-        url = "http://192.168.0.102:8000/v1/chat/completions",
-        -- model = "Qwen3.5-27B-AWQ",
-        model = "gemma4-12B",
+        url = "https://zo-diak.com/ai/v1/chat/completions",
+        -- url = "http://192.168.0.102:8000/v1/chat/completions",
         token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+        -- is_reasoning = true,
+        model = "Qwen3.5-27B-AWQ",
         -- is_reasoning = true,
         params = {
             stream = true,
