@@ -5,6 +5,41 @@ local logger = require("logger")
 local providers = require("llm_providers")
 local context_optimizer = require("context_optimizer")
 
+-- Request deduplication: track in-flight requests to prevent duplicate submissions
+local _in_flight_requests = {}
+local _DEDUP_WINDOW = 30 -- seconds: consider requests within this window as potential duplicates
+local _DEDUP_CLEANUP_INTERVAL = 60 -- seconds: purge entries older than this
+
+local function _request_hash(profile, messages, options)
+    -- Generate a deterministic hash from the request payload components
+    local h = ""
+    h = h .. (profile.model or "") .. "|"
+    h = h .. (profile.url or "") .. "|"
+    h = h .. (options and options.temperature or "") .. "|"
+    h = h .. (options and options.max_tokens or "") .. "|"
+    -- Hash the messages content (role + content for each message)
+    if messages then
+        for _, msg in ipairs(messages) do
+            h = h .. (msg.role or "") .. ":" .. (msg.content or "") .. "#"
+        end
+    end
+    -- Simple hash: sum of byte values modulo a large prime, formatted as hex
+    local sum = 0
+    for i = 1, #h do
+        sum = (sum + string.byte(h, i)) % 4294967295
+    end
+    return string.format("%08x", sum)
+end
+
+local function _cleanup_in_flight()
+    local now = require("socket").gettime()
+    for hash, entry in pairs(_in_flight_requests) do
+        if now - entry.timestamp > _DEDUP_CLEANUP_INTERVAL then
+            _in_flight_requests[hash] = nil
+        end
+    end
+end
+
 function M.send_request(profile, messages, options)
     options = options or {}
     local on_token_cb = options.on_token
@@ -12,6 +47,28 @@ function M.send_request(profile, messages, options)
     if not profile or not profile.url then
         return nil, "Invalid Profile"
     end
+
+    -- DEDUPLICATION CHECK: prevent identical in-flight requests
+    local socket = require("socket")
+    local req_hash = _request_hash(profile, messages, options)
+    local now = socket.gettime()
+
+    -- Periodic cleanup of stale entries
+    if not M._last_cleanup or now - M._last_cleanup > _DEDUP_CLEANUP_INTERVAL then
+        _cleanup_in_flight()
+        M._last_cleanup = now
+    end
+
+    if _in_flight_requests[req_hash] then
+        local elapsed = now - _in_flight_requests[req_hash].timestamp
+        if elapsed < _DEDUP_WINDOW then
+            logger.warn(string.format("[DEDUP] Blocked duplicate request (hash=%s, age=%.1fs). URL: %s", req_hash, elapsed, profile.url))
+            return nil, "DUPLICATE_REQUEST_BLOCKED"
+        end
+    end
+
+    -- Mark request as in-flight
+    _in_flight_requests[req_hash] = { timestamp = now, profile_url = profile.url }
 
     local provider_name = profile.provider or "openai"
     local provider = providers.get(provider_name)
@@ -50,6 +107,8 @@ function M.send_request(profile, messages, options)
         if status == "400" and context_optimizer.is_context_exceeded(err_body) then
             return nil, { type = 'CONTEXT_EXCEEDED', raw = 'HTTP 400', body = err_body }
         end
+        -- Dedup: remove from tracking on error
+        _in_flight_requests[req_hash] = nil
         return nil, "HTTP " .. status
     end
 
@@ -66,6 +125,8 @@ function M.send_request(profile, messages, options)
             logger.info(string.format('[USAGE] Prompt: %d tok, Completion: %d tok, P-Speed: %.1f t/s, C-Speed: %.1f t/s', pt, ct, ps, cs))
         end
 
+        -- Dedup: remove from tracking on completion
+        _in_flight_requests[req_hash] = nil
         return response
     end
 
@@ -77,12 +138,14 @@ function M.send_request(profile, messages, options)
     local in_reasoning = false
     local was_interrupted = false
     local last_part = nil
+    local first_token_received = false
     
     -- TIMEOUT DETECTION: Track last activity timestamp
-    local socket = require("socket")
-    local last_activity_time = socket.gettime()
     local STREAM_TIMEOUT = 120 -- seconds (2 minutes of silence = likely stuck)
     local is_timeout = false
+    local last_activity_time = socket.gettime()
+
+    logger.info("[STREAM] Starting SSE chunk iteration. Timeout threshold: " .. STREAM_TIMEOUT .. "s")
 
     -- Setup ESC key monitor
     if patcher_core.setup_esc_monitor then
@@ -90,8 +153,17 @@ function M.send_request(profile, messages, options)
     end
 
     for chunk in stream:each_chunk() do
-        -- Update activity timestamp on each chunk
-        last_activity_time = socket.gettime()
+        -- Check for timeout BEFORE processing chunk (detects gaps between chunks)
+        -- print("\n[RAW CHUNK LENGTH]: ", #chunk)
+
+        local now = socket.gettime()
+        if (now - last_activity_time) > STREAM_TIMEOUT then
+            is_timeout = true
+            logger.warn(string.format("[STREAM] Timeout after %.1f seconds of inactivity. Breaking stream loop.", now - last_activity_time))
+            break
+        end
+        last_activity_time = now
+
         -- Check for ESC key or SIGINT
         local esc_pressed = patcher_core.consume_esc and patcher_core.consume_esc()
         local sigint_pressed = patcher_core.consume_sigint and patcher_core.consume_sigint()
@@ -139,10 +211,14 @@ function M.send_request(profile, messages, options)
                             if on_token_cb then on_token_cb(c_reason) end
                         end
                         full_reason = full_reason .. c_reason
+                        if not first_token_received then
+                            first_token_received = true
+                            logger.info("[STREAM] First token received")
+                        end
                     elseif c_text and c_text ~= "" then
                         if in_reasoning then
                             in_reasoning = false
-                            local token = "\n</think>\n" .. c_text
+                            local token = "\n\n" .. c_text
                             full_content = full_content .. token
                             if on_token_cb then on_token_cb(token) end
                         else
@@ -150,6 +226,10 @@ function M.send_request(profile, messages, options)
                             if on_token_cb then on_token_cb(c_text) end
                         end
                         full_text = full_text .. c_text
+                        if not first_token_received then
+                            first_token_received = true
+                            logger.info("[STREAM] First token received")
+                        end
                     end
                 end
             end
@@ -160,6 +240,11 @@ function M.send_request(profile, messages, options)
     if patcher_core.teardown_esc_monitor then
         patcher_core.teardown_esc_monitor()
     end
+
+    logger.info(string.format("[STREAM] Chunk iteration complete. Total content length: %d, full_text length: %d, timeout=%s", #full_content, #full_text, tostring(is_timeout)))
+
+    -- Dedup: remove from tracking on stream completion
+    _in_flight_requests[req_hash] = nil
 
     if last_part and last_part.usage then
         local u = last_part.usage

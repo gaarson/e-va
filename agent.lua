@@ -208,14 +208,20 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                 else break end
             end
         end
-        io.flush()
+        io.stdout:flush()
     end
 
     while true do
+        logger.info(string.format('[STREAM] Sending request to %s, model=%s, stream=true', agent_cfg.url, agent_cfg.model))
         for attempt = 1, max_retries do
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
             if response_data then break end
-            if type(err) == 'table' and err.type == 'CONTEXT_EXCEEDED' then
+            if err == 'DUPLICATE_REQUEST_BLOCKED' then
+                logger.warn(string.format("[DEDUP] Duplicate request blocked on attempt %d. Waiting %ds before retry...", attempt, retry_delay))
+                -- Wait longer to allow the in-flight request to complete
+                os.execute("sleep " .. tostring(math.max(retry_delay, 5)))
+                retry_delay = retry_delay * 2
+            elseif type(err) == 'table' and err.type == 'CONTEXT_EXCEEDED' then
                 local new_val = context_optimizer.shrink_max_tokens(agent_cfg, config.AGENT_DEFAULTS.min_max_tokens or 1024)
                 logger.info(string.format('[CONTEXT OPTIMIZATION] Reduced max_tokens to %d', new_val))
             else
@@ -245,6 +251,9 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         if in_thought then io.write(print_buf .. "\27[0m") else io.write(print_buf) end
     end
     io.write("\n")
+    io.stdout:flush()
+
+    logger.info(string.format('[STREAM] Response received. Content length: %d, full_text length: %d', #(content or ''), #(response_data and response_data.full_text or '')))
 
     if not response_data then
         logger.error("FATAL: Network unreachable after " .. max_retries .. " attempts.", err)
@@ -281,7 +290,13 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             -- Re-request with same messages
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
             
-            if not response_data then
+            if err == 'DUPLICATE_REQUEST_BLOCKED' then
+                logger.warn("[EMPTY RESPONSE] Duplicate request blocked during empty retry. Waiting extra time...")
+                os.execute("sleep 5")
+                empty_retry_delay = math.max(empty_retry_delay, 10)
+                -- Don't count this as a failed retry, just loop again
+                empty_retries = empty_retries - 1
+            elseif not response_data then
                 logger.error("FATAL: Network unreachable after empty response retry.", err)
                 return "ERROR"
             end
