@@ -364,7 +364,7 @@ function M:get_recency_block()
                     end
                 end
                 table.insert(parts, string.format("<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>",
-                    path, content:gsub("\n", "\n\t")))
+                    path, content))
             end
         end
     end
@@ -420,19 +420,23 @@ ENGINE DIRECTIVES:
 ==================================================]], rule)
 end
 
-function M:load_prompt(path)
-    if not path then return "You are an AI assistant." end
-    local paths = {
-        self.config.PROJECT_ROOT .. "/.e-va-conf/" .. path,
-        self.config.PROJECT_ROOT .. "/" .. path,
-        os.getenv("AGENT_HOME") .. "/" .. path
-    }
-    for _, p in ipairs(paths) do
-        local c = utils.read_file_range(p)
-        if c then return c end
-    end
-    return "You are an AI assistant."
-end
+	function M:load_prompt(path)
+	    if not path then return "You are an AI assistant." end
+	    local paths = {}
+	    -- Support absolute paths: try directly first
+	    if path:sub(1, 1) == "/" then
+	        table.insert(paths, path)
+	    end
+	    table.insert(paths, self.config.PROJECT_ROOT .. "/.e-va-conf/" .. path)
+	    table.insert(paths, self.config.PROJECT_ROOT .. "/" .. path)
+	    local agent_home = os.getenv("AGENT_HOME")
+	    if agent_home then table.insert(paths, agent_home .. "/" .. path) end
+	    for _, p in ipairs(paths) do
+	        local c = utils.read_file_range(p)
+	        if c then return c end
+	    end
+	    return "You are an AI assistant."
+	end
 
 function M:get_plan_text()
     if not self.execution_plan or #self.execution_plan == 0 then return "" end
@@ -717,7 +721,7 @@ function M:get_file_context(file_info)
     if not content then return "" end
     local raw_lines = utils.read_lines_raw(content)
     local content_display = table.concat(raw_lines, "\n")
-    local indented_content = "\t" .. content_display:gsub("\n", "\n\t")
+    local indented_content = content_display
     local status = "READ_ONLY"
     if file_info.is_target then status = "TARGET"
     elseif file_info.is_pinned then status = "PINNED"
@@ -852,13 +856,13 @@ end
 function M:build_system_state_xml()
     local xml = "<system_state>"
     if self.task_summary and self.task_summary ~= "" then
-        xml = xml .. "\n  <task_summary>\t" .. self.task_summary:gsub("\n", "\n\t") .. "\n  </task_summary>"
+        xml = xml .. "\n  <task_summary>" .. self.task_summary .. "\n  </task_summary>"
     end
     if self.execution_plan and #self.execution_plan > 0 then
-        xml = xml .. "\n  <execution_plan>\t" .. self:get_plan_text():gsub("\n", "\n\t") .. "\n  </execution_plan>"
+        xml = xml .. "\n  <execution_plan>" .. self:get_plan_text() .. "\n  </execution_plan>"
     end
     if #self.last_actions > 0 then
-        xml = xml .. "\n  <last_actions>\t" .. self:get_actions_text():gsub("\n", "\n\t") .. "\n  </last_actions>"
+        xml = xml .. "\n  <last_actions>" .. self:get_actions_text() .. "\n  </last_actions>"
     end
     return xml .. "\n</system_state>"
 end
@@ -867,7 +871,7 @@ function M:get_recency_tool_outputs()
     if not self.recent_tool_outputs or #self.recent_tool_outputs == 0 then return "" end
     local parts = {"\n<recent_tool_outputs>"}
     for _, tool_out in ipairs(self.recent_tool_outputs) do
-        table.insert(parts, string.format("\n  <tool_output name=\"%s\">\n%s\n  </tool_output>", tool_out.tool, (tool_out.output or ""):gsub("\n", "\n  ")))
+        table.insert(parts, string.format("\n  <tool_output name=\"%s\">\n%s\n  </tool_output>", tool_out.tool, (tool_out.output or "")))
     end
     table.insert(parts, "\n</recent_tool_outputs>")
     return table.concat(parts)
@@ -973,7 +977,7 @@ function M:inject_handoff_files(agent_name)
                 elseif self.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
                 table.insert(parts, string.format(
                     "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
-                    path, status, content:gsub("\n", "\n\t")
+                    path, status, content
                 ))
             end
         end

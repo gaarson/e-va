@@ -62,9 +62,25 @@ local function resolve_task_instruction(task, config, utils, logger)
 end
 local restored = false
 
-if utils.read_file_range(STATE_FILE) then
-    local content = utils.read_file_range(STATE_FILE)
-    if ctx:load_from_snapshot(content) then restored = true end
+-- STEP 4: Prompt user if previous session state exists
+local state_file_exists = utils.read_file_range(STATE_FILE) ~= nil
+if state_file_exists then
+    io.write("\n\27[33m[SYSTEM] Previous session found. Continue (y) or start new (n)?\27[0m ")
+    io.flush()
+    local user_choice = io.read("*l")
+    if user_choice and (user_choice:lower() == "y" or user_choice:lower() == "yes") then
+        local content = utils.read_file_range(STATE_FILE)
+        if content and ctx:load_from_snapshot(content) then
+            restored = true
+            print("\n\27[32m[SYSTEM] Restored previous session.\27[0m")
+        else
+            print("\n\27[31m[SYSTEM] Failed to restore session. Starting fresh.\27[0m")
+        end
+    else
+        -- User chose not to continue: delete state file and start fresh
+        os.remove(STATE_FILE)
+        print("\n\27[36m[SYSTEM] Discarded previous session. Starting fresh.\27[0m")
+    end
 end
 
 tools.init(config)
@@ -241,9 +257,55 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         content = response_data.choices[1].message.content
     end
 
-    if content == "" then
-        logger.warn("Empty response from LLM")
-        return nil
+    -- Handle empty response: retry with backoff
+    if content == "" or utils.trim(content) == "" then
+        logger.warn("[EMPTY RESPONSE] LLM returned empty content. Attempting recovery...")
+        
+        -- Check if this might be a server-side issue (e.g., immediate [DONE])
+        if response_data.full_text and response_data.full_text == "" then
+            logger.warn("[EMPTY RESPONSE] Server sent [DONE] immediately without generating any tokens.")
+        end
+        
+        -- Retry up to 3 times with exponential backoff
+        local empty_retries = 0
+        local max_empty_retries = 3
+        local empty_retry_delay = 2
+        
+        while empty_retries < max_empty_retries do
+            empty_retries = empty_retries + 1
+            logger.info(string.format("[EMPTY RESPONSE] Retrying (attempt %d/%d) in %d seconds...", empty_retries, max_empty_retries, empty_retry_delay))
+            print(string.format("\27[33m[SYSTEM] Empty response received. Retrying in %d seconds...\27[0m", empty_retry_delay))
+            os.execute("sleep " .. tostring(empty_retry_delay))
+            empty_retry_delay = empty_retry_delay * 2
+            
+            -- Re-request with same messages
+            response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
+            
+            if not response_data then
+                logger.error("FATAL: Network unreachable after empty response retry.", err)
+                return "ERROR"
+            end
+            
+            -- Extract content again
+            content = ""
+            if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
+                content = response_data.choices[1].message.content
+            end
+            
+            if content and utils.trim(content) ~= "" then
+                logger.info("[EMPTY RESPONSE] Recovery successful on retry " .. empty_retries)
+                break
+            else
+                logger.warn("[EMPTY RESPONSE] Retry " .. empty_retries .. " also returned empty content.")
+            end
+        end
+        
+        -- If all retries failed, return error
+        if not content or utils.trim(content) == "" then
+            logger.error("[EMPTY RESPONSE] Failed after " .. max_empty_retries .. " retries. Giving up.")
+            print("\27[31m[SYSTEM] LLM consistently returning empty responses. Please check your LLM server.\27[0m")
+            return "ERROR"
+        end
     end
 
     -- 2. Передаем ответ в новый модуль контекста
@@ -367,11 +429,16 @@ local function execute_pipeline()
                         if sig == "PIPELINE_NEXT_STAGE" then
                             print("\n\27[33m[SYSTEM] Agent requested next stage. Type '/go' to proceed.\27[0m")
                         elseif sig == "ERROR" then
-                            print("\n\27[31m[SYSTEM] Error occurred during agent turn. Please try again.\27[0m")
-                        else
-                            -- CONVERSATION (nil) or exhausted auto-loop: prompt user
+                            -- ERROR: LLM failed (including empty response exhaustion). 
+                            -- Remove the user message we just added so it doesn't get lost, and prompt again.
+                            ctx:drop_last_message(target_agent)
+                            print("\n\27[31m[SYSTEM] Received empty/error response from LLM. Your message was not consumed. Please try again.\27[0m")
+                            -- Do NOT increment turn, loop back to io.read()
+                        elseif sig == nil then
+                            -- CONVERSATION (nil): normal chat response, no command executed
                             turn = turn + 1
                         end
+                        -- AUTO_LOOP already handled above
                     end
                 end
             elseif stage.mode == "parallel" then

@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -O3 -Wall -Wextra -fPIC -I/usr/include/lua5.1
-LDFLAGS = -shared
+LDFLAGS = -shared -lpthread
 
 all: patcher_core.so ipc_mcp.so
 

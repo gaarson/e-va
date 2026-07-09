@@ -6,6 +6,10 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <termios.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 
 #if LUA_VERSION_NUM < 502
 
@@ -151,10 +155,121 @@ static int l_consume_sigint(lua_State *L) {
     return 1;
 }
 
+/* --- ESC KEY MONITOR THREAD --- */
+static volatile sig_atomic_t esc_flag = 0;
+static pthread_t esc_thread_id;
+static volatile int esc_monitor_active = 0;
+static int esc_tty_fd = -1;
+
+static void handle_sigusr1(int sig) {
+    (void)sig;
+    /* No-op handler just to wake the thread from pause/select if needed */
+}
+
+static void *esc_monitor_routine(void *arg) {
+    (void)arg;
+    
+    /* Open /dev/tty for direct terminal access, fallback to stdin */
+    esc_tty_fd = open("/dev/tty", O_RDONLY);
+    if (esc_tty_fd < 0) {
+        esc_tty_fd = dup(STDIN_FILENO);
+    }
+    
+    if (esc_tty_fd < 0 || !isatty(esc_tty_fd)) {
+        /* Not a terminal, nothing to monitor */
+        if (esc_tty_fd >= 0) close(esc_tty_fd);
+        esc_tty_fd = -1;
+        return NULL;
+    }
+
+    /* Set non-blocking mode via fcntl */
+    int flags = fcntl(esc_tty_fd, F_GETFL, 0);
+    fcntl(esc_tty_fd, F_SETFL, flags | O_NONBLOCK);
+
+    /* Monitor loop: poll with select() every 100ms */
+    while (esc_monitor_active) {
+        fd_set rfds;
+        struct timeval tv;
+        FD_ZERO(&rfds);
+        FD_SET(esc_tty_fd, &rfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000; // poll every 100ms
+
+        int ret = select(esc_tty_fd + 1, &rfds, NULL, NULL, &tv);
+        if (ret > 0) {
+            unsigned char buf[16];
+            ssize_t n = read(esc_tty_fd, buf, sizeof(buf));
+            for (ssize_t i = 0; i < n; i++) {
+                if (buf[i] == 0x1B) {
+                    /* ESC key detected */
+                    esc_flag = 1;
+                    kill(getpid(), SIGUSR1);
+                    goto done;
+                }
+            }
+        }
+    }
+done:
+    
+    if (esc_tty_fd >= 0) {
+        close(esc_tty_fd);
+        esc_tty_fd = -1;
+    }
+    
+    return NULL;
+}
+
+static int l_setup_esc_monitor(lua_State *L) {
+    /* Setup SIGUSR1 handler */
+    struct sigaction sa;
+    sa.sa_handler = handle_sigusr1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGUSR1, &sa, NULL);
+    
+    /* Start the ESC monitor thread */
+    esc_flag = 0;
+    esc_monitor_active = 1;
+    
+    int rc = pthread_create(&esc_thread_id, NULL, esc_monitor_routine, NULL);
+    if (rc != 0) {
+        esc_monitor_active = 0;
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_consume_esc(lua_State *L) {
+    lua_pushboolean(L, esc_flag);
+    esc_flag = 0;
+    return 1;
+}
+
+static int l_teardown_esc_monitor(lua_State *L) {
+    (void)L;
+    esc_monitor_active = 0;
+    
+    /* Wake the thread if it's blocked on read */
+    if (esc_tty_fd >= 0) {
+        pthread_kill(esc_thread_id, SIGUSR1);
+    }
+    
+    /* Wait for thread to finish */
+    pthread_join(esc_thread_id, NULL);
+    
+    return 0;
+}
+
 static const struct luaL_Reg patcher_core_funcs[] = {
     {"find_unique_fuzzy_block", l_find_unique_fuzzy_block},
     {"setup_sigint", l_setup_sigint},
     {"consume_sigint", l_consume_sigint},
+    {"setup_esc_monitor", l_setup_esc_monitor},
+    {"consume_esc", l_consume_esc},
+    {"teardown_esc_monitor", l_teardown_esc_monitor},
     {NULL, NULL}
 };
 

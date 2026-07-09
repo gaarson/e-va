@@ -77,10 +77,31 @@ function M.send_request(profile, messages, options)
     local in_reasoning = false
     local was_interrupted = false
     local last_part = nil
+    
+    -- TIMEOUT DETECTION: Track last activity timestamp
+    local socket = require("socket")
+    local last_activity_time = socket.gettime()
+    local STREAM_TIMEOUT = 120 -- seconds (2 minutes of silence = likely stuck)
+    local is_timeout = false
+
+    -- Setup ESC key monitor
+    if patcher_core.setup_esc_monitor then
+        patcher_core.setup_esc_monitor()
+    end
 
     for chunk in stream:each_chunk() do
-        if patcher_core.consume_sigint and patcher_core.consume_sigint() then
-            logger.warn("Generation forcefully interrupted by SIGINT (Ctrl+C).")
+        -- Update activity timestamp on each chunk
+        last_activity_time = socket.gettime()
+        -- Check for ESC key or SIGINT
+        local esc_pressed = patcher_core.consume_esc and patcher_core.consume_esc()
+        local sigint_pressed = patcher_core.consume_sigint and patcher_core.consume_sigint()
+        
+        if esc_pressed or sigint_pressed then
+            if esc_pressed then
+                logger.warn("Generation interrupted by ESC key.")
+            else
+                logger.warn("Generation forcefully interrupted by SIGINT (Ctrl+C).")
+            end
             local interrupt_msg = "\n\n\27[33m[SYSTEM: GENERATION INTERRUPTED BY USER]\27[0m\n"
             full_content = full_content .. interrupt_msg
             if on_token_cb then on_token_cb(interrupt_msg) end
@@ -100,7 +121,7 @@ function M.send_request(profile, messages, options)
             line = line:gsub("\r", ""):gsub("^%s+", "")
 
             if line ~= "" and line:sub(1, 5) == "data:" then
-                local json_str = line:sub(6)
+                local json_str = line:sub(6):gsub("^%s+", ""):gsub("%s+$", "")
                 if not json_str:match("%[DONE%]") then
                     local ok, part = pcall(json.decode, json, json_str)
                     if ok and part then last_part = part end
@@ -135,6 +156,11 @@ function M.send_request(profile, messages, options)
         end
     end
 
+    -- Teardown ESC key monitor
+    if patcher_core.teardown_esc_monitor then
+        patcher_core.teardown_esc_monitor()
+    end
+
     if last_part and last_part.usage then
         local u = last_part.usage
         local pt = u.prompt_tokens or 0
@@ -142,6 +168,17 @@ function M.send_request(profile, messages, options)
         local ps = u.prompt_tokens_per_sec or 0
         local cs = u.completion_tokens_per_sec or 0
         --logger.info(string.format('[USAGE] Prompt: %d tok, Completion: %d tok, P-Speed: %.1f t/s, C-Speed: %.1f t/s', pt, ct, ps, cs))
+    end
+
+    -- SAFEGUARD: Log detailed warning if full_content is empty despite HTTP 200
+    if full_content == "" or full_content:match("^%s*$") then
+        logger.warn("[STREAM EMPTY] HTTP 200 received but full_content is empty.")
+        if last_part then
+            logger.warn("[STREAM EMPTY] Last SSE part received: " .. json:encode(last_part))
+        else
+            logger.warn("[STREAM EMPTY] No SSE parts were parsed at all. Server may have sent [DONE] immediately.")
+        end
+        logger.warn("[STREAM EMPTY] full_reason length: " .. tostring(#full_reason) .. ", full_text length: " .. tostring(#full_text))
     end
 
     return {

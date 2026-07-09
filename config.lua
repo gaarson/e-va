@@ -96,12 +96,12 @@ function M.get()
             max_tokens = 16384,
             temperature = 0.2,
             top_p = 0.95,
-            top_k = 45,
+            top_k = 60,
             -- min_p = 0.02,
-            -- chat_template_kwargs = {enable_thinking = 'True'},
+            chat_template_kwargs = {enable_thinking = true},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
-            -- repetition_penalty = 1.05
+            repetition_penalty = 1.05
         },
         ENGINEERING = {
             max_tokens = 16384,
@@ -134,7 +134,7 @@ function M.get()
         url = "https://zo-diak.com/ai/v1/chat/completions",
         -- url = "http://192.168.0.102:8000/v1/chat/completions",
         token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-        -- is_reasoning = true,
+        is_reasoning = true,
         model = "Qwen3.5-27B-AWQ",
         -- is_reasoning = true,
         params = {
