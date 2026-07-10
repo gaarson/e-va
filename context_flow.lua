@@ -366,20 +366,29 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         end
     end
 
-    -- AUTO-PURGE: clear images after injection if configured
-    if self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.auto_purge_after_turn then
-        self.images = {}
-        self.images_loaded = false
-        self.last_sent_image_hashes = {}
-    end
+    -- AUTO-PURGE removed: images now persist across turns (auto_purge_after_turn = false in config)
+    -- Use M:purge_images() explicitly if you need to clear images
 
     -- Фикс для API: если последний assistant, добавляем continuation
     if #messages > 1 and messages[#messages].role == "assistant" then
         table.insert(messages, { role = "user", content = self.flow_config.command_flow.continuation_prompt })
     end
 
-    -- TOKEN ESTIMATION: image_cost already computed above (before auto-purge)
-    local total_tokens = estimate(system_prompt) + current_cost + recency_cost + manifest_cost + image_cost
+    -- TOKEN ESTIMATION: Use OpenAI resolution-based pricing hybrid approach
+    local total_image_tokens = 0
+    if self.images_loaded and #self.images > 0 then
+        for _, img in ipairs(self.images) do
+            local b64_len = #(img.base64_data or "")
+            -- OpenAI vision: low res (<50KB base64) = 85 tokens, high res = ~0.004 tokens/byte
+            if b64_len < 50 * 1024 then
+                total_image_tokens = total_image_tokens + 85
+            else
+                total_image_tokens = total_image_tokens + math.ceil(b64_len * tokens_per_byte)
+            end
+        end
+    end
+
+    local total_tokens = estimate(system_prompt) + current_cost + recency_cost + manifest_cost + total_image_tokens
 
     return {
         messages = messages,
@@ -746,14 +755,43 @@ end
             return
         end
         local raw_images = utils.load_images_from_dir(dir_path)
-        local max_bytes = (self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.max_images_base64_bytes) or (8 * 1024 * 1024)
+        local max_bytes = (self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.max_images_base64_bytes) or (4 * 1024 * 1024)
+        local max_age_hours = (self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.max_image_age_hours) or 24
 
-        -- Sort by base64 size descending so we can drop largest first if needed
-        table.sort(raw_images, function(a, b) return (#(a.base64_data or "")) > (#(b.base64_data or "")) end)
+        -- Filter by age: skip images older than max_age_hours
+        local now = os.time()
+        local age_seconds = max_age_hours * 3600
+        local aged_filtered = {}
+        for _, img in ipairs(raw_images) do
+            local safe_path = utils.shell_quote(img.path)
+            local mod_time = 0
+            -- Try stat to get modification time
+            local cmd = string.format("stat -c %%Y %s 2>/dev/null", safe_path)
+            local p = io.popen(cmd)
+            if p then
+                local t = p:read("*l")
+                p:close()
+                if t then mod_time = tonumber(t) or 0 end
+            end
+            if mod_time > 0 and (now - mod_time) > age_seconds then
+                logger.info(string.format("[IMAGE] Skipping old image %s (age: %.1f hours)", img.path, (now - mod_time) / 3600))
+            else
+                table.insert(aged_filtered, img)
+                -- Attach mod_time for sorting
+                img.mod_time = mod_time
+            end
+        end
+
+        -- Sort by modification time descending (newest first)
+        table.sort(aged_filtered, function(a, b)
+            local ta = a.mod_time or 0
+            local tb = b.mod_time or 0
+            return ta > tb
+        end)
 
         local total_b64 = 0
         local filtered = {}
-        for _, img in ipairs(raw_images) do
+        for _, img in ipairs(aged_filtered) do
             local sz = #(img.base64_data or "")
             if total_b64 + sz <= max_bytes then
                 table.insert(filtered, img)
@@ -820,6 +858,12 @@ function M:estimate_tokens(text)
     if not text then return 0 end
     local divisor = self.flow_config.token_estimation.chars_per_token or 3.5
     return math.ceil(#text / divisor)
+end
+
+function M:purge_images()
+    self.images = {}
+    self.images_loaded = false
+    self.last_sent_image_hashes = {}
 end
 
 function M:get_recent_thoughts_text()

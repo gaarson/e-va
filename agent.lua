@@ -212,7 +212,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     end
 
     while true do
-        logger.info(string.format('[STREAM] Sending request to %s, model=%s, stream=true', agent_cfg.url, agent_cfg.model))
+        logger.info(string.format('\n[STREAM] Sending request to model=%s, stream=true', agent_cfg.model))
         for attempt = 1, max_retries do
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
             if response_data then break end

@@ -149,7 +149,7 @@ function M.send_request(profile, messages, options)
     local is_timeout = false
     local last_activity_time = socket.gettime()
 
-    logger.info("[STREAM] Starting SSE chunk iteration. Timeout threshold: " .. STREAM_TIMEOUT .. "s")
+    -- logger.info("[STREAM] Starting SSE chunk iteration. Timeout threshold: " .. STREAM_TIMEOUT .. "s")
 
     -- Setup ESC key monitor
     if patcher_core.setup_esc_monitor then
@@ -216,8 +216,8 @@ function M.send_request(profile, messages, options)
                         end
                         full_reason = full_reason .. c_reason
                         if not first_token_received then
-                            first_token_received = true
                             logger.info("[STREAM] First token received")
+                            first_token_received = true
                         end
                     elseif c_text and c_text ~= "" then
                         if in_reasoning then

@@ -79,7 +79,7 @@ local function register(registry)
             res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")"
         end
 
-        local MAX_LOG_SIZE = 1000000
+        local MAX_LOG_SIZE = 10000
         if #res > MAX_LOG_SIZE then
             res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE)
         end
