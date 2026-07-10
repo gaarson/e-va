@@ -32,6 +32,7 @@ local ContextFlow = require("context_flow")
 local registry = require("tool_registry")
 local tools = require("tools")
 local os = require("os")
+local multi_stage_executor = require("multi_stage_executor")
 
 local ctx = ContextFlow.new(config.CONTEXT_FLOW, config)
 local STATE_FILE = config.PROJECT_ROOT .. "/.e-va-conf/.state.json"
@@ -144,7 +145,151 @@ if not instruction then
     end
 end
 
+local function run_agent_turn_multi_stage(agent_name, agent_cfg, turn)
+    local multi_exec = multi_stage_executor.new(ctx, agent_name, {
+        max_iterations = agent_cfg.multi_stage_max_iterations or 3
+    })
+
+    -- Получаем задачу из последнего сообщения пользователя
+    local last_user_msg = nil
+    local history = ctx.history[agent_name] or {}
+    for i = #history, 1, -1 do
+        if history[i].role == "user" then
+            last_user_msg = history[i].content
+            break
+        end
+    end
+
+    if not last_user_msg or utils.trim(last_user_msg) == "" then
+        logger.warn("[MULTI-STAGE] No user message found to start task.")
+        return nil
+    end
+
+    local task_description = last_user_msg
+    local project_context = ctx.file_tree or ""
+
+    logger.info(string.format("[MULTI-STAGE] Starting multi-stage execution for agent: %s", agent_name))
+
+    -- Шаг 1: INTENT
+    local step = multi_exec:start_task(task_description, project_context)
+
+    while step.stage ~= "done" and step.stage ~= "error" do
+        if step.stage == "intent" or step.stage == "generate" or step.stage == "review" then
+            -- Строим контекст с промптом от executor
+            local limits = config.LIMITS
+            local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
+
+            -- Временно заменяем последнее сообщение пользователя на промпт от executor
+            local original_msg = last_user_msg
+            if history[#history].role == "user" then
+                history[#history].content = step.prompt
+            else
+                table.insert(history, { role = "user", content = step.prompt })
+                original_msg = step.prompt
+            end
+
+            local context_data = ctx:build_context(agent_name, agent_cfg, available_tokens)
+            local messages = context_data.messages
+
+            logger.info(string.format("[MULTI-STAGE %s] Sending prompt to LLM...", step.stage))
+
+            io.write(string.format("\n\27[35m>>> AI (%s) [%s]:\27[0m ", agent_name, step.stage))
+            local print_buf = ""
+            local in_thought = agent_cfg.is_reasoning or false
+            local tag_open = "<think>"
+            local tag_close = "</thinking>"
+
+            if in_thought then io.write("\27[90m") end
+
+            local response_data, err
+            local max_retries, retry_delay = 5, 5
+
+            local on_token_fn = function(t)
+                print_buf = print_buf .. t
+                while #print_buf > 0 do
+                    if not in_thought then
+                        local s, e = print_buf:find(tag_open)
+                        if s then
+                            io.write(print_buf:sub(1, s - 1) .. "\27[90m" .. tag_open)
+                            print_buf = print_buf:sub(e + 1)
+                            in_thought = true
+                        elseif #print_buf > #tag_open then
+                            local safe_len = #print_buf - #tag_open
+                            io.write(print_buf:sub(1, safe_len))
+                            print_buf = print_buf:sub(safe_len + 1)
+                        else break end
+                    else
+                        local s, e = print_buf:find(tag_close)
+                        if s then
+                            io.write(print_buf:sub(1, s - 1) .. tag_close .. "\27[0m")
+                            print_buf = print_buf:sub(e + 1)
+                            in_thought = false
+                        elseif #print_buf > #tag_close then
+                            local safe_len = #print_buf - #tag_close
+                            io.write(print_buf:sub(1, safe_len))
+                            print_buf = print_buf:sub(safe_len + 1)
+                        else break end
+                    end
+                end
+                io.stdout:flush()
+            end
+
+            response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
+
+            if print_buf ~= "" then
+                if in_thought then io.write(print_buf .. "\27[0m") else io.write(print_buf) end
+            end
+            io.write("\n")
+            io.stdout:flush()
+
+            if not response_data then
+                logger.error("FATAL: Network unreachable.", err)
+                step = { stage = "error", message = "Network error" }
+                break
+            end
+
+            local content = ""
+            if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
+                content = response_data.choices[1].message.content
+            end
+
+            -- Восстанавливаем оригинальное сообщение
+            if history[#history].role == "user" then
+                history[#history].content = original_msg
+            end
+
+            step = multi_exec:feed_response(content)
+
+        elseif step.stage == "execute" then
+            -- Выполняем инструмент
+            logger.info(string.format("[MULTI-STAGE EXECUTE] Tool: %s", step.tool))
+
+            local cmd = step.tool .. ":" .. step.payload
+            local res = registry.execute(cmd, ctx, agent_name)
+
+            step = multi_exec:feed_execution_result(res.output or "")
+
+            -- Добавляем результат в историю
+            if res.output then
+                ctx:add_message(agent_name, "user", utils.sanitize_for_json(res.output))
+            end
+        end
+    end
+
+    if step.stage == "done" then
+        logger.info(string.format("[MULTI-STAGE] Task completed in %d iterations.", step.iterations))
+        save_state()
+        return "AUTO_LOOP"
+    else
+        logger.error(string.format("[MULTI-STAGE] Error: %s", step.message))
+        return "ERROR"
+    end
+end
+
 local function run_agent_turn(agent_name, agent_cfg, turn)
+    if agent_cfg.use_multi_stage then
+        return run_agent_turn_multi_stage(agent_name, agent_cfg, turn)
+    end
     ctx.consecutive_recoveries = 0
     local synced_files = ctx:sync_files()
     if #synced_files > 0 then

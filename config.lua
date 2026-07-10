@@ -153,6 +153,24 @@ function M.get()
             max_tokens = 2048
         }
     }
+
+    -- MULTI-STAGE EXECUTOR CONFIGURATION:
+    -- To enable multi-stage execution (Intent -> Generate -> Execute -> Review loop) for an agent,
+    -- add these fields to the agent's config table:
+    --
+    --   use_multi_stage = true,                  -- Enable multi-stage mode
+    --   multi_stage_max_iterations = 3,          -- Max review/revise cycles (default: 3)
+    --
+    -- Example:
+    --   CODER = {
+    --       ...
+    --       use_multi_stage = true,
+    --       multi_stage_max_iterations = 5,
+    --   }
+    --
+    -- Multi-stage mode requires the agent to have tools registered in tool_registry.lua.
+    -- The executor will guide the agent through: INTENT planning -> PAYLOAD generation -> EXECUTION -> REVIEW.
+
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
@@ -189,6 +207,8 @@ function M.get()
             model = "Qwen3.5-27B-AWQ",
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
+            use_multi_stage = true,
+            multi_stage_max_iterations = 5,
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch", 
