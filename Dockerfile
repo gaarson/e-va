@@ -66,6 +66,7 @@ COPY . /opt/e-va
 # Build C extensions
 WORKDIR /opt/e-va
 RUN make
+
 RUN chmod +x /opt/e-va/e-va
 
 # Устанавливаем chrome-devtools-mcp
@@ -81,6 +82,8 @@ VOLUME ["/workspace/.e-va-conf"]
 
 RUN echo "chromeuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/chromeuser \
     && chmod 0440 /etc/sudoers.d/chromeuser
+
+RUN mkdir -p /opt/e-va/logs && chown chromeuser:chromeuser /opt/e-va/logs
 
 USER chromeuser
 

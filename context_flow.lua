@@ -439,12 +439,14 @@ end
 	end
 
 function M:get_plan_text()
-    if not self.execution_plan or #self.execution_plan == 0 then return "" end
-    local t = "\n=== EXECUTION PLAN ===\n"
-    for i, task in ipairs(self.execution_plan) do
-        local mark = (i < self.current_task_index) and "[x]" or (i == self.current_task_index) and "[>]" or "[ ]"
-        t = t .. string.format("%s Step %d: %s -> %s\n", mark, i, tostring(task.file or "?"), tostring(task.instruction or "?"))
-    end return t end
+  if not self.execution_plan or #self.execution_plan == 0 then return "" end
+  local t = ""
+  for i, task in ipairs(self.execution_plan) do
+      local mark = (i < self.current_task_index) and "[x]" or (i == self.current_task_index) and "[>]" or "[ ]"
+      t = t .. string.format("%s Step %d: %s -> %s\n", mark, i, tostring(task.file or "?"), tostring(task.instruction or "?"))
+  end
+  return t
+end
 
 function M:get_actions_text()
     if #self.last_actions == 0 then return "" end

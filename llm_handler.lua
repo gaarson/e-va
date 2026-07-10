@@ -20,7 +20,11 @@ local function _request_hash(profile, messages, options)
     -- Hash the messages content (role + content for each message)
     if messages then
         for _, msg in ipairs(messages) do
-            h = h .. (msg.role or "") .. ":" .. (msg.content or "") .. "#"
+            local content = msg.content or ""
+            if type(content) == "table" then
+                content = json:encode(content)
+            end
+            h = h .. (msg.role or "") .. ":" .. content .. "#"
         end
     end
     -- Simple hash: sum of byte values modulo a large prime, formatted as hex
@@ -241,7 +245,6 @@ function M.send_request(profile, messages, options)
         patcher_core.teardown_esc_monitor()
     end
 
-    logger.info(string.format("[STREAM] Chunk iteration complete. Total content length: %d, full_text length: %d, timeout=%s", #full_content, #full_text, tostring(is_timeout)))
 
     -- Dedup: remove from tracking on stream completion
     _in_flight_requests[req_hash] = nil
@@ -265,6 +268,8 @@ function M.send_request(profile, messages, options)
         end
         logger.warn("[STREAM EMPTY] full_reason length: " .. tostring(#full_reason) .. ", full_text length: " .. tostring(#full_text))
     end
+
+    -- logger.info(string.format("[STREAM] Chunk iteration complete. Total content length: %d, full_text length: %d, timeout=%s", #full_content, #full_text, tostring(is_timeout)))
 
     return {
         choices = {
