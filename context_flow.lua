@@ -168,6 +168,7 @@ function M.new(flow_config, full_config)
     self.handoff_memo = nil
     self.images = {}
     self.images_loaded = false
+    self.last_sent_image_hashes = {}
     self.test_failures = 0
     self.consecutive_recoveries = 0
     self.file_tree = nil
@@ -304,27 +305,72 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
 
     -- print(string.format("[DEBUG] Recency Block content: %s", recency)) 
 
-    -- Инъекция изображений (OpenAI Format)
-    if self.images_loaded and #self.images > 0 then
-        local formatted_images = {}
-        for _, img in ipairs(self.images) do
-            table.insert(formatted_images, {
-                type = "image_url",
-                image_url = {
-                    url = "data:" .. img.mime_type .. ";base64," .. img.base64_data
-                }
-            })
-        end
+    -- Инъекция изображений (OpenAI Format) with deduplication
+    local image_cost = 0
+    local tokens_per_byte = (self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.tokens_per_base64_byte) or 0.004
 
-        for i = 1, #messages do
-            if messages[i].role == "user" then
-                messages[i].content = {
-                    { type = "text", text = messages[i].content },
-                    unpack(formatted_images)
-                }
-                break
+    if self.images_loaded and #self.images > 0 then
+        -- Filter out images already sent (dedup by hash)
+        local new_images = {}
+        for _, img in ipairs(self.images) do
+            local h = img.hash or ""
+            if h == "" or not self.last_sent_image_hashes[h] then
+                table.insert(new_images, img)
             end
         end
+
+        if #new_images > 0 then
+            -- Compute image token cost BEFORE auto-purge clears self.images
+            for _, img in ipairs(new_images) do
+                image_cost = image_cost + utils.estimate_image_tokens(img, tokens_per_byte)
+            end
+
+            local formatted_images = {}
+            for _, img in ipairs(new_images) do
+                table.insert(formatted_images, {
+                    type = "image_url",
+                    image_url = {
+                        url = "data:" .. img.mime_type .. ";base64," .. img.base64_data
+                    }
+                })
+            end
+
+            local injected = false
+            for i = 1, #messages do
+                if messages[i].role == "user" then
+                    messages[i].content = {
+                        { type = "text", text = messages[i].content },
+                        unpack(formatted_images)
+                    }
+                    injected = true
+                    break
+                end
+            end
+
+            -- EDGE CASE: if no user-role message found, prepend one
+            if not injected then
+                table.insert(messages, 1, {
+                    role = "user",
+                    content = {
+                        { type = "text", text = "[SYSTEM: Images attached]" },
+                        unpack(formatted_images)
+                    }
+                })
+            end
+
+            -- Update last_sent_image_hashes with newly sent images
+            for _, img in ipairs(new_images) do
+                local h = img.hash or ""
+                if h ~= "" then self.last_sent_image_hashes[h] = true end
+            end
+        end
+    end
+
+    -- AUTO-PURGE: clear images after injection if configured
+    if self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.auto_purge_after_turn then
+        self.images = {}
+        self.images_loaded = false
+        self.last_sent_image_hashes = {}
     end
 
     -- Фикс для API: если последний assistant, добавляем continuation
@@ -332,7 +378,8 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         table.insert(messages, { role = "user", content = self.flow_config.command_flow.continuation_prompt })
     end
 
-    local total_tokens = estimate(system_prompt) + current_cost + recency_cost + manifest_cost
+    -- TOKEN ESTIMATION: image_cost already computed above (before auto-purge)
+    local total_tokens = estimate(system_prompt) + current_cost + recency_cost + manifest_cost + image_cost
 
     return {
         messages = messages,
@@ -574,6 +621,7 @@ function M:reset()
     self.handoff_memo = nil
     self.images = {}
     self.images_loaded = false
+    self.last_sent_image_hashes = {}
     self.test_failures = 0
     self.consecutive_recoveries = 0
     self.file_tree = nil
@@ -697,14 +745,41 @@ end
             self.images_loaded = false
             return
         end
-        self.images = utils.load_images_from_dir(dir_path)
+        local raw_images = utils.load_images_from_dir(dir_path)
+        local max_bytes = (self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.max_images_base64_bytes) or (8 * 1024 * 1024)
+
+        -- Sort by base64 size descending so we can drop largest first if needed
+        table.sort(raw_images, function(a, b) return (#(a.base64_data or "")) > (#(b.base64_data or "")) end)
+
+        local total_b64 = 0
+        local filtered = {}
+        for _, img in ipairs(raw_images) do
+            local sz = #(img.base64_data or "")
+            if total_b64 + sz <= max_bytes then
+                table.insert(filtered, img)
+                total_b64 = total_b64 + sz
+            else
+                logger.info(string.format("[IMAGE] Skipping image %s (%d bytes) — exceeds base64 budget %d", img.path, sz, max_bytes))
+            end
+        end
+
+        self.images = filtered
         self.images_loaded = (#self.images > 0)
     end
 
     function M:add_image(base64_data, mime_type)
         if not base64_data or base64_data == "" then return end
         mime_type = mime_type or "image/png"
-        table.insert(self.images, { base64_data = base64_data, mime_type = mime_type })
+        local max_imgs = (self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.max_images_per_turn) or 10
+        if #self.images >= max_imgs then
+            logger.warn(string.format("[IMAGE] Image cap reached (%d). Rejecting new image.", max_imgs))
+            return
+        end
+        -- Compute inline hash for deduplication
+        local sum = 0
+        for i = 1, #base64_data do sum = (sum + string.byte(base64_data, i)) % 4294967295 end
+        local hash = string.format("%08x_%d", sum, #base64_data)
+        table.insert(self.images, { base64_data = base64_data, mime_type = mime_type, hash = hash })
         self.images_loaded = true
     end
 

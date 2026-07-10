@@ -230,4 +230,93 @@ Return the summary as plain text without any markdown formatting or extra text.
     end
 end
 
+function M.generate_continuation_prompt(ctx, config)
+    local opt_agent = config.OPTIMIZER_AGENT
+    if not opt_agent then
+        logger.warn("[OPTIMIZER] SKIPPED: config.OPTIMIZER_AGENT is not defined.")
+        return nil
+    end
+
+    -- 1. Gather context: last assistant message, task summary, execution plan
+    local last_assistant = ""
+    if ctx.history and type(ctx.history) == "table" then
+        -- Walk backwards through history to find last assistant message
+        for i = #ctx.history, 1, -1 do
+            local msg = ctx.history[i]
+            if msg and msg.role == "assistant" and msg.content and #msg.content > 0 then
+                last_assistant = msg.content
+                break
+            end
+        end
+    end
+
+    local task_summary = ctx.task_summary or "No task summary available."
+
+    local plan_text = "No execution plan."
+    if ctx.execution_plan and #ctx.execution_plan > 0 then
+        plan_text = ""
+        for i, step in ipairs(ctx.execution_plan) do
+            plan_text = plan_text .. i .. ". " .. (step.description or step.summary or step) .. "\n"
+        end
+    end
+
+    local recent_actions = ""
+    if ctx.last_actions and #ctx.last_actions > 0 then
+        local actions_list = {}
+        local start_idx = math.max(1, #ctx.last_actions - 3)
+        for i = start_idx, #ctx.last_actions do
+            table.insert(actions_list, ctx.last_actions[i].summary or ctx.last_actions[i].command or "unknown action")
+        end
+        recent_actions = table.concat(actions_list, " | ")
+    end
+
+    logger.info("[OPTIMIZER] Generating smart continuation prompt...")
+
+    -- 2. Build prompt
+    local prompt = string.format([[
+You are a Continuation Prompt Generator. Analyze the current conversation state and generate a concise follow-up message to guide the main agent.
+
+TASK SUMMARY: %s
+CURRENT PLAN: %s
+RECENT ACTIONS: %s
+LAST ASSISTANT MESSAGE: %s
+
+Generate a single concise message (1-3 sentences) that:
+1. Acknowledges the current state
+2. Asks a specific question or gives a clear direction
+3. Helps the agent continue productively
+
+Output ONLY the message text, nothing else.
+]], task_summary, plan_text, recent_actions, last_assistant)
+
+    local messages = {
+        { role = "system", content = "You are a Continuation Prompt Generator. Output ONLY the concise follow-up message." },
+        { role = "user", content = prompt }
+    }
+
+    -- 3. Non-streaming call to optimizer model
+    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.3, max_tokens = 256 } })
+    if not res then
+        logger.warn("[OPTIMIZER] Failed to generate continuation prompt: " .. tostring(err))
+        return nil
+    end
+
+    local content = llm_handler.extract_content(res)
+    if not content then
+        logger.warn("[OPTIMIZER] No content in continuation prompt response.")
+        return nil
+    end
+
+    -- 4. Clean up
+    local continuation = utils.trim(content:gsub("`+", ""))
+
+    if #continuation > 0 then
+        logger.info("[OPTIMIZER] Generated continuation prompt: " .. continuation:sub(1, 80) .. "...")
+        return continuation
+    else
+        logger.warn("[OPTIMIZER] Empty continuation prompt returned.")
+        return nil
+    end
+end
+
 return M

@@ -85,6 +85,13 @@ function M.get()
     cfg.CREATE_BACKUPS = false
     cfg.PICTURES_DIR = ".e-va-conf/pictures"
 
+    cfg.IMAGE_CONFIG = {
+        max_images_per_turn = 10,
+        max_images_base64_bytes = 8 * 1024 * 1024,
+        auto_purge_after_turn = true,
+        tokens_per_base64_byte = 0.004
+    }
+
     local BASE_PARAMS = {
         stream = true,
         -- peculative_ngram = true,
@@ -98,7 +105,7 @@ function M.get()
             top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = true},
+            chat_template_kwargs = {enable_thinking = false},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
             repetition_penalty = 1.05
@@ -109,7 +116,7 @@ function M.get()
             top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
-            -- chat_template_kwargs = {enable_thinking = false},
+            chat_template_kwargs = {enable_thinking = false},
             repetition_penalty = 1.05
             -- presence_penalty = 0.0
         }

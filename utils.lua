@@ -434,6 +434,27 @@ function M.sanitize_for_json(str)
     return table.concat(out)
 end
 
+-- Simple hash function for image deduplication (byte-based checksum, Lua 5.1 compatible)
+local function _compute_image_hash(data)
+    if not data or #data == 0 then return "" end
+    local sum = 0
+    local len = #data
+    -- Sample bytes for speed on large images (every 64th byte + first 256 bytes)
+    local step = 64
+    for i = 1, len do
+        if i <= 256 or i % step == 0 then
+            sum = (sum + string.byte(data, i)) % 4294967295
+        end
+    end
+    return string.format("%08x_%d", sum, len)
+end
+
+function M.estimate_image_tokens(img_table, tokens_per_byte)
+    if not img_table or not img_table.base64_data then return 0 end
+    tokens_per_byte = tokens_per_byte or 0.004
+    return math.ceil(#img_table.base64_data * tokens_per_byte)
+end
+
 function M.load_images_from_dir(dir_path)
     if not dir_path then return {} end
 
@@ -473,10 +494,12 @@ function M.load_images_from_dir(dir_path)
                 local data = f:read("*a")
                 f:close()
                 if data and #data > 0 then
+                    local hash = _compute_image_hash(data)
                     table.insert(images, {
                         path = line,
                         mime_type = mime,
-                        base64_data = M.base64_encode(data)
+                        base64_data = M.base64_encode(data),
+                        hash = hash
                     })
                 end
             end

@@ -253,74 +253,88 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     io.write("\n")
     io.stdout:flush()
 
-    logger.info(string.format('[STREAM] Response received. Content length: %d, full_text length: %d', #(content or ''), #(response_data and response_data.full_text or '')))
-
     if not response_data then
         logger.error("FATAL: Network unreachable after " .. max_retries .. " attempts.", err)
         return "ERROR"
     end
-    --
-    -- 1. Извлекаем текст ответа
+
+    -- 1. Extract response content FIRST (fix: was used before declaration on line 256)
     local content = ""
     if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
         content = response_data.choices[1].message.content
     end
 
-    -- Handle empty response: retry with backoff
+    logger.info(string.format('[STREAM] Response received. Content length: %d, full_text length: %d', #(content or ''), #(response_data and response_data.full_text or '')))
+
+    -- Handle empty response: smart retry with optimizer-generated continuation
     if content == "" or utils.trim(content) == "" then
         logger.warn("[EMPTY RESPONSE] LLM returned empty content. Attempting recovery...")
-        
+
         -- Check if this might be a server-side issue (e.g., immediate [DONE])
         if response_data.full_text and response_data.full_text == "" then
             logger.warn("[EMPTY RESPONSE] Server sent [DONE] immediately without generating any tokens.")
         end
-        
-        -- Retry up to 3 times with exponential backoff
-        local empty_retries = 0
-        local max_empty_retries = 3
-        local empty_retry_delay = 2
-        
-        while empty_retries < max_empty_retries do
-            empty_retries = empty_retries + 1
-            logger.info(string.format("[EMPTY RESPONSE] Retrying (attempt %d/%d) in %d seconds...", empty_retries, max_empty_retries, empty_retry_delay))
-            print(string.format("\27[33m[SYSTEM] Empty response received. Retrying in %d seconds...\27[0m", empty_retry_delay))
-            os.execute("sleep " .. tostring(empty_retry_delay))
-            empty_retry_delay = empty_retry_delay * 2
-            
-            -- Re-request with same messages
+
+        -- Retry 1: Blind retry with same messages (2s delay)
+        logger.info("[EMPTY RESPONSE] Retrying with same messages (attempt 1)...")
+        print("\27[33m[SYSTEM] Empty response received. Retrying in 2 seconds...\27[0m")
+        os.execute("sleep 2")
+
+        response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
+
+        if err == 'DUPLICATE_REQUEST_BLOCKED' then
+            logger.warn("[EMPTY RESPONSE] Duplicate request blocked during retry. Waiting extra time...")
+            os.execute("sleep 5")
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
-            
-            if err == 'DUPLICATE_REQUEST_BLOCKED' then
-                logger.warn("[EMPTY RESPONSE] Duplicate request blocked during empty retry. Waiting extra time...")
-                os.execute("sleep 5")
-                empty_retry_delay = math.max(empty_retry_delay, 10)
-                -- Don't count this as a failed retry, just loop again
-                empty_retries = empty_retries - 1
-            elseif not response_data then
-                logger.error("FATAL: Network unreachable after empty response retry.", err)
-                return "ERROR"
-            end
-            
-            -- Extract content again
+        end
+
+        if response_data then
             content = ""
             if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
                 content = response_data.choices[1].message.content
             end
-            
-            if content and utils.trim(content) ~= "" then
-                logger.info("[EMPTY RESPONSE] Recovery successful on retry " .. empty_retries)
-                break
+        end
+
+        -- Retry 2: Smart continuation via optimizer
+        if not content or utils.trim(content) == "" then
+            logger.warn("[EMPTY RESPONSE] Second attempt also empty. Generating smart continuation prompt...")
+
+            local smart_prompt = optimizer.generate_continuation_prompt(ctx, config)
+            if smart_prompt then
+                logger.info("[SMART CONTINUATION] Using optimizer-generated prompt: " .. smart_prompt:sub(1, 80) .. "...")
+                table.insert(messages, { role = "user", content = smart_prompt })
             else
-                logger.warn("[EMPTY RESPONSE] Retry " .. empty_retries .. " also returned empty content.")
+                -- Fallback to static continuation prompt from config
+                local fallback = (config.CONTEXT_FLOW and config.CONTEXT_FLOW.command_flow and config.CONTEXT_FLOW.command_flow.continuation_prompt) or "Please continue with the task."
+                logger.info("[SMART CONTINUATION] Optimizer unavailable, using fallback: " .. fallback)
+                table.insert(messages, { role = "user", content = fallback })
+            end
+
+            print("\27[33m[SYSTEM] Injecting continuation prompt. Retrying...\27[0m")
+            response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
+
+            if err == 'DUPLICATE_REQUEST_BLOCKED' then
+                logger.warn("[EMPTY RESPONSE] Duplicate request blocked during smart retry. Waiting...")
+                os.execute("sleep 5")
+                response_data, err = llm.send_request(agent_cfg, messages, { on_token = on_token_fn })
+            end
+
+            if response_data then
+                content = ""
+                if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
+                    content = response_data.choices[1].message.content
+                end
             end
         end
-        
-        -- If all retries failed, return error
+
+        -- Final check: if still empty after all attempts, return error
         if not content or utils.trim(content) == "" then
-            logger.error("[EMPTY RESPONSE] Failed after " .. max_empty_retries .. " retries. Giving up.")
+            logger.error("[EMPTY RESPONSE] Failed after all recovery attempts. Giving up.")
             print("\27[31m[SYSTEM] LLM consistently returning empty responses. Please check your LLM server.\27[0m")
             return "ERROR"
         end
+
+        logger.info("[EMPTY RESPONSE] Recovery successful!")
     end
 
     -- 2. Передаем ответ в новый модуль контекста

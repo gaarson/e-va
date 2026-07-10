@@ -160,6 +160,8 @@ static volatile sig_atomic_t esc_flag = 0;
 static pthread_t esc_thread_id;
 static volatile int esc_monitor_active = 0;
 static int esc_tty_fd = -1;
+static struct termios original_termios;
+static int termios_saved = 0;
 
 static void handle_sigusr1(int sig) {
     (void)sig;
@@ -180,6 +182,16 @@ static void *esc_monitor_routine(void *arg) {
         if (esc_tty_fd >= 0) close(esc_tty_fd);
         esc_tty_fd = -1;
         return NULL;
+    }
+
+    /* Save original termios settings and switch to raw mode */
+    if (tcgetattr(esc_tty_fd, &original_termios) == 0) {
+        termios_saved = 1;
+        struct termios raw = original_termios;
+        raw.c_lflag &= ~(ICANON | ECHO);
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 0;
+        tcsetattr(esc_tty_fd, TCSANOW, &raw);
     }
 
     /* Set non-blocking mode via fcntl */
@@ -210,6 +222,11 @@ static void *esc_monitor_routine(void *arg) {
         }
     }
 done:
+    
+    /* Restore original termios BEFORE closing the fd */
+    if (termios_saved && esc_tty_fd >= 0) {
+        tcsetattr(esc_tty_fd, TCSANOW, &original_termios);
+    }
     
     if (esc_tty_fd >= 0) {
         close(esc_tty_fd);

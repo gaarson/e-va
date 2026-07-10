@@ -2,7 +2,7 @@ local utils = require("utils")
 local os = require("os")
 
 local function register(registry)
-    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts (Mandatory for linters/tests)", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts. (1) Safe whitelist bypasses human approval: ls, cat, grep, rg, echo, pwd, ps, find, head, tail, whoami, make, test, npm, cargo. All other commands require human-in-the-loop confirmation. (2) 10-minute timeout (600s) enforced via timeout wrapper — long-running commands are killed. (3) Output truncation: logs exceeding 1,000,000 bytes are truncated to the last 1MB; early output may be lost for very verbose commands. (4) Circuit breaker: if test/build/check commands fail 3 consecutive times, a warning is injected telling the agent to stop blind patching and read the source code first. (5) Exit codes are captured and reported for silent commands. (6) Output is streamed in real-time to the terminal but returned as a single concatenated string to the agent.", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local cmd = utils.trim(args)
         local safe_prefixes = { "ls", "cat", "grep", "rg", "echo", "pwd", "ps", "find", "head", "tail", "whoami", "make", "test", "npm", "cargo" }
         local is_safe = false
