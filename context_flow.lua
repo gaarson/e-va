@@ -268,7 +268,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
     -- 1. Оцениваем размер обязательных блоков
     local recency = self:get_recency_block()
     local recency_cost = estimate(recency)
-    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
+    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools, agent_cfg)
     local manifest_cost = estimate(tools_manifest)
 
     -- 2. Рассчитываем реальный бюджет на историю
@@ -451,7 +451,7 @@ end
 
 function M:get_system_prompt(agent_cfg)
     local prompt_text = self:load_prompt(agent_cfg.prompt_file)
-    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools)
+    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools, agent_cfg)
     local directives = self:get_engine_directives(agent_cfg)
     return prompt_text .. "\n" .. directives .. "\n" .. tools_manifest
 end

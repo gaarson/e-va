@@ -143,7 +143,23 @@ local function register(registry)
 
         end
 
-    end)
+    end,
+    [[
+    
+    MULTI-STAGE GUIDE FOR `patch`:
+    
+    1. INTENT PHASE: In PAYLOAD_HINT, specify the EXACT file path, target lines/functions, and WHY the change is needed.
+    
+       Example: "Modify src/main.c lines 45-52: replace buffer size check with bounds validation."
+    
+    2. GENERATE PHASE: Output ONLY SEARCH/REPLACE diff blocks. SEARCH must have 2-4 lines of unchanged context.
+    
+       If revising, incorporate reviewer corrections - adjust SEARCH context or REPLACE content.
+    
+    3. CRITICAL: You MUST have read the target file before patching. Never guess file content.
+    
+    ]]
+)
 
 end
 

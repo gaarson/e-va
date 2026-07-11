@@ -70,6 +70,22 @@ local function register(registry)
         
         local output = string.format("\n[SYSTEM]: Batch patch complete. Successes: %d, Failures: %d\n%s", successes, failures, table.concat(results, "\n"))
         return { output = output, signal = successes > 0 and "MUTATION_SUCCESS" or nil }
-    end)
+    end,
+    [[
+    
+    MULTI-STAGE GUIDE FOR `batch_patch`:
+    
+    1. INTENT PHASE: In PAYLOAD_HINT, list ALL files to modify and the nature of each change.
+    
+       Example: "Patch 3 files: src/a.c (fix leak), src/b.c (add null check), src/c.h (update struct)."
+    
+    2. GENERATE PHASE: Output ONLY batch format with ---FILE--- separators. Each file gets SEARCH/REPLACE blocks.
+    
+       If revising, fix only failed patches - keep successful ones intact.
+    
+    3. CRITICAL: Every SEARCH block needs 2-4 lines of unchanged context. Order matters for dependencies.
+    
+    ]]
+)
 end
 return { register = register }

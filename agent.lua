@@ -267,7 +267,7 @@ local function run_agent_turn_multi_stage(agent_name, agent_cfg, turn)
             local cmd = step.tool .. ":" .. step.payload
             local res = registry.execute(cmd, ctx, agent_name)
 
-            step = multi_exec:feed_execution_result(res.output or "")
+            step = multi_exec:feed_execution_result(res)
 
             -- Добавляем результат в историю
             if res.output then
@@ -444,7 +444,23 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                     })
                     local task_desc = string.format("Execute command: %s\n\nContext from conversation:\n%s", parsed_cmd, last_user_msg)
                     local project_context = ctx.file_tree or ""
-                    local step = multi_exec:start_task(task_desc, project_context)
+                    -- Use start_task_with_intent to SKIP the INTENT phase and preserve the agent's original tool choice.
+
+                    -- This avoids wasting tokens re-planning and prevents the agent from choosing a different tool.
+
+                    local step = multi_exec:start_task_with_intent(
+
+                        task_desc,  -- task/goal description
+
+                        project_context,  -- project context
+
+                        tool_name,  -- pre-selected tool (from agent's original command)
+
+                        "Refine and execute the payload for this tool based on the task context.",  -- payload hint
+
+                        "Payload executes successfully without errors."  -- success criteria
+
+                    )
 
                     while step.stage ~= "done" and step.stage ~= "error" do
                         if step.stage == "intent" or step.stage == "generate" or step.stage == "review" then
@@ -536,7 +552,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                             local cmd = step.tool .. ":" .. step.payload
                             local res = registry.execute(cmd, ctx, agent_name)
 
-                            step = multi_exec:feed_execution_result(res.output or "")
+                            step = multi_exec:feed_execution_result(res)
 
                             if res.output then
                                 ctx:add_message(agent_name, "user", utils.sanitize_for_json(res.output))

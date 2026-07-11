@@ -38,12 +38,12 @@ function M.split_tool_and_args(action_string)
     return tool_name, args
 end
 
-function M.register(name, description, usage, handler)
+function M.register(name, description, usage, handler, multi_stage_doc)
     if type(handler) ~= "function" then
         logger.error("Failed to register tool: " .. name .. " (handler must be a function)")
         return
     end
-    M.tools[name] = { desc = description, usage = usage, exec = handler }
+    M.tools[name] = { desc = description, usage = usage, exec = handler, multi_stage_doc = multi_stage_doc }
 end
 
 local function is_tool_allowed(agent_cfg, tool_name)
@@ -90,7 +90,14 @@ function M.execute(action_string, ctx, agent_name)
     return res
 end
 
-function M.generate_tool_manifest(allowed_tools)
+function M.generate_tool_manifest(allowed_tools, agent_cfg)
+    agent_cfg = agent_cfg or {}
+    local multi_stage_tools = {}
+    if agent_cfg.multi_stage_tools then
+        for _, t in ipairs(agent_cfg.multi_stage_tools) do
+            multi_stage_tools[t] = true
+        end
+    end
     if not allowed_tools or #allowed_tools == 0 then
         return "\n[SYSTEM WARNING]: You have NO tools assigned. You can only analyze context and chat."
     end
@@ -129,7 +136,22 @@ function M.generate_tool_manifest(allowed_tools)
 
     for _, item in ipairs(tools_to_list) do
         local usage_example = item.tool.usage
-        table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s\n", item.name, item.tool.desc, usage_example))
+        local is_ms = multi_stage_tools[item.name] == true
+
+        local extra = ""
+
+        if is_ms and item.tool.multi_stage_doc then
+
+            extra = "\n**MULTI-STAGE BEHAVIOR**: " .. item.tool.multi_stage_doc
+
+        elseif is_ms then
+
+            extra = "\n**MULTI-STAGE BEHAVIOR**: This tool routes through Intent → Generate → Execute → Review cycle for quality control."
+
+        end
+
+        table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s%s\n", item.name, item.tool.desc, usage_example, extra))
+
     end
 
     table.insert(doc, "### VISUAL CONTEXT & SCREENSHOTS\nThe system automatically scans the pictures directory at the start of every turn. To show the LLM a screenshot, diagram, or log:\n1. Save the image file to the configured pictures directory (default: .e-va-conf/pictures/).\n2. You can use tools like mcp_browser_take_screenshot (with filePath argument) or shell commands to save images there.\n3. All images in this folder will be automatically attached to the prompt on the **next turn**, allowing the model to visually inspect UI states or errors.")
