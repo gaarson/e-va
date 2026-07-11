@@ -155,3 +155,25 @@ When you write prompts for the agents (e.g., `architect.md`), you MUST include:
 3. **The MUC Rule (For Coders)**: Explicitly state: *"Your `<<<<<<< SEARCH` blocks MUST include 1-2 lines of unchanged surrounding code to ensure unique matches."*
 4. **Verification**: Tell implementation agents to ALWAYS run a `||| COMMAND |||\nshell:...\n||| END COMMAND |||` (compiler/linter/test) immediately after a `||| COMMAND |||\npatch\n||| END COMMAND |||` to verify their mutation in the same turn.
 5. **Anti-Hallucination Mandate**: Tell agents explicitly: *"DO NOT use `<tool_call>` or `<function>` tags under any circumstances. You must use `||| COMMAND |||\n`."*
+
+
+## 5. SELECTIVE MULTI-STAGE EXECUTION (NEW)
+
+
+Each agent config can include:
+
+```lua
+
+use_selective_multi_stage = true,
+
+multi_stage_tools = { "patch", "create_file", "delegate_plan" },
+
+```
+
+Tools listed in `multi_stage_tools` will go through an Intent → Generate → Review cycle before execution. All other tools execute directly. This improves quality for destructive operations while keeping simple tools fast.
+
+
+When writing child agent prompts, add a section like:
+
+> "Some tools trigger a multi-stage pipeline (Intent → Generate → Review). When the system asks for an <INTENT> block, comply precisely. All other tools execute directly."
+

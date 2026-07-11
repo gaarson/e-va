@@ -4,7 +4,144 @@ local json = require("JSON")
 local logger = require("logger")
 local utils = require("utils")
 
+
+-- Caching state for non-blocking optimization
+
+M._last_optimization = {
+
+    timestamp = 0,
+
+    context_size = 0,
+
+    result = nil
+
+}
+
+
+
+
+-- Pending optimizations queue (non-blocking lazy processing)
+
+M.pending_optimizations = {}
+
+
+function M.process_pending(ctx, config)
+
+    while #M.pending_optimizations > 0 do
+
+        local task = table.remove(M.pending_optimizations, 1)
+
+        task(ctx, config)
+
+    end
+
+end
+
+
+M._OPTIMIZE_THRESHOLD = 0.10  -- Only re-run if context grew by >10%
+
+
+-- Helper: compute approximate context size
+
+local function _compute_context_size(ctx)
+
+    local size = 0
+
+    if ctx.knowledge_base then
+
+        for _, content in pairs(ctx.knowledge_base) do
+
+            size = size + #(content or "")
+
+        end
+
+    end
+
+    if ctx.history then
+
+        for _, agent_msgs in pairs(ctx.history) do
+
+            if type(agent_msgs) == "table" then
+
+                for _, msg in ipairs(agent_msgs) do
+
+                    size = size + #(msg.content or "")
+
+                end
+
+            end
+
+        end
+
+    end
+
+    return size
+
+end
+
+
+-- Non-blocking wrapper: runs optimization in a coroutine
+
+local function _run_optimization_async(ctx, config)
+
+    local co = coroutine.create(function()
+
+        M._do_analyze_and_optimize(ctx, config)
+
+    end)
+
+    local ok, err = coroutine.resume(co)
+
+    if not ok then
+
+        logger.error("[OPTIMIZER] Coroutine failed: " .. tostring(err))
+
+    end
+
+    return co
+
+end
+
+
+
 function M.analyze_and_optimize(ctx, config)
+
+    -- CACHING: Skip if context hasn't grown significantly since last optimization
+
+    local current_size = _compute_context_size(ctx)
+
+    local last = M._last_optimization
+
+    
+
+    if last.timestamp > 0 and last.context_size > 0 then
+
+        local growth_ratio = (current_size - last.context_size) / last.context_size
+
+        if growth_ratio <= M._OPTIMIZE_THRESHOLD then
+
+            logger.info(string.format("[OPTIMIZER] SKIPPED: Context growth %.1f%% <= %.1f%% threshold", 
+
+                growth_ratio * 100, M._OPTIMIZE_THRESHOLD * 100))
+
+            return
+
+        end
+
+    end
+
+
+    -- Run optimization asynchronously in a coroutine
+
+    _run_optimization_async(ctx, config)
+
+end
+
+
+-- Internal: actual optimization logic (runs in coroutine)
+
+function M._do_analyze_and_optimize(ctx, config)
+
     local opt_agent = config.OPTIMIZER_AGENT
     if not opt_agent then 
         logger.warn("[OPTIMIZER] SKIPPED: config.OPTIMIZER_AGENT is not defined.")
@@ -106,6 +243,16 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
         end
 
         logger.info("[OPTIMIZER] Cycle complete.")
+        
+
+        -- Cache the result
+
+        M._last_optimization.timestamp = os.time()
+
+        M._last_optimization.context_size = _compute_context_size(ctx)
+
+        M._last_optimization.result = payload
+
     else
         local debug_snip = json_match:sub(1, 100) .. "..."
         logger.warn("[OPTIMIZER] Failed to parse JSON response. Engine saw: " .. debug_snip)
@@ -238,14 +385,21 @@ function M.generate_continuation_prompt(ctx, config)
     end
 
     -- 1. Gather context: last assistant message, task summary, execution plan
+    -- NOTE: ctx.history is keyed by agent_name (e.g. ctx.history["ARCHITECT"]), NOT a flat array.
+    -- We must iterate over all agent histories to find the most recent assistant message.
     local last_assistant = ""
     if ctx.history and type(ctx.history) == "table" then
-        -- Walk backwards through history to find last assistant message
-        for i = #ctx.history, 1, -1 do
-            local msg = ctx.history[i]
-            if msg and msg.role == "assistant" and msg.content and #msg.content > 0 then
-                last_assistant = msg.content
-                break
+        for _, agent_msgs in pairs(ctx.history) do
+            if type(agent_msgs) == "table" then
+                for i = #agent_msgs, 1, -1 do
+                    local msg = agent_msgs[i]
+                    if msg and msg.role == "assistant" and msg.content and #msg.content > 0 then
+                        if #msg.content > #last_assistant then
+                            last_assistant = msg.content
+                        end
+                        break -- only need the last assistant msg per agent
+                    end
+                end
             end
         end
     end

@@ -5,6 +5,39 @@ local logger = require("logger")
 local utils = require("utils")
 local inspect = require('inspect')
 
+--- Robust tool_name:args splitter.
+--- Finds the FIRST ':' separator. tool_name must be alphanumeric+underscore+dot only.
+--- Returns (tool_name, args) or (nil, error_msg).
+function M.split_tool_and_args(action_string)
+    if not action_string or type(action_string) ~= "string" then
+        return nil, "Action string is nil or not a string"
+    end
+    local idx = action_string:find(":")
+    if not idx then
+        -- No colon: entire string is the tool name, no args
+        local name = utils.trim(action_string)
+        if name == "" then
+            return nil, "Empty action string"
+        end
+        -- Validate tool name: alphanumeric, underscore, dot, hyphen only
+        if not name:match("^[A-Za-z0-9_%.%-]+$") then
+            return nil, string.format("Invalid tool name '%s': contains whitespace or special characters.", name)
+        end
+        return name, ""
+    end
+    local tool_name = utils.trim(action_string:sub(1, idx - 1))
+    local args = action_string:sub(idx + 1)
+
+    if tool_name == "" then
+        return nil, "Empty tool name before ':' separator"
+    end
+    -- Validate tool name: alphanumeric, underscore, dot, hyphen only
+    if not tool_name:match("^[A-Za-z0-9_%.%-]+$") then
+        return nil, string.format("Invalid tool name '%s': contains whitespace or special characters.", tool_name)
+    end
+    return tool_name, args
+end
+
 function M.register(name, description, usage, handler)
     if type(handler) ~= "function" then
         logger.error("Failed to register tool: " .. name .. " (handler must be a function)")
@@ -32,19 +65,11 @@ end
 
 function M.execute(action_string, ctx, agent_name)
     local config = ctx.config
-    -- print(inspect(config))
     local agent_cfg = config.AGENTS[agent_name]
 
-    local cmd_name, args = action_string:match("^([^:]+):?(.*)")
+    local cmd_name, cmd_args = M.split_tool_and_args(action_string)
     if not cmd_name then
-        cmd_name = action_string
-        args = ""
-    end
-
-    cmd_name = utils.trim(cmd_name)
-
-    if cmd_name == "" then
-        return { output = "\n[ERROR]: Malformed command syntax. Use ||| COMMAND |||\ntool:args\n||| END_COMMAND |||", signal = nil }
+        return { output = "\n[ERROR]: Malformed command syntax: " .. tostring(cmd_args) .. ". Use ||| COMMAND |||\ntool:args\n||| END_COMMAND |||", signal = nil }
     end
 
     local tool = M.tools[cmd_name]
@@ -55,7 +80,8 @@ function M.execute(action_string, ctx, agent_name)
         return { output = "\n[SECURITY DENY]: Agent '" .. agent_name .. "' is not authorized to use tool '" .. cmd_name .. "'.", signal = nil }
     end
 
-    local status, res = pcall(tool.exec, args, ctx, agent_name)
+    -- FIX: pass cmd_args as the first argument, as tool handlers expect (args, ctx, agent_name)
+    local status, res = pcall(tool.exec, cmd_args, ctx, agent_name)
     if not status then
         logger.error("Tool execution FATAL (" .. cmd_name .. ")", res)
         return { output = "\n[FATAL ERROR IN TOOL " .. cmd_name .. "]: " .. tostring(res), signal = nil }

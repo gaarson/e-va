@@ -306,7 +306,6 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
     -- print(string.format("[DEBUG] Recency Block content: %s", recency)) 
 
     -- Инъекция изображений (OpenAI Format) with deduplication
-    local image_cost = 0
     local tokens_per_byte = (self.config.IMAGE_CONFIG and self.config.IMAGE_CONFIG.tokens_per_base64_byte) or 0.004
 
     if self.images_loaded and #self.images > 0 then
@@ -320,11 +319,6 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         end
 
         if #new_images > 0 then
-            -- Compute image token cost BEFORE auto-purge clears self.images
-            for _, img in ipairs(new_images) do
-                image_cost = image_cost + utils.estimate_image_tokens(img, tokens_per_byte)
-            end
-
             local formatted_images = {}
             for _, img in ipairs(new_images) do
                 table.insert(formatted_images, {
@@ -374,16 +368,20 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
         table.insert(messages, { role = "user", content = self.flow_config.command_flow.continuation_prompt })
     end
 
-    -- TOKEN ESTIMATION: Use OpenAI resolution-based pricing hybrid approach
+    -- TOKEN ESTIMATION: Count only NEW images (respecting dedup via last_sent_image_hashes)
     local total_image_tokens = 0
     if self.images_loaded and #self.images > 0 then
         for _, img in ipairs(self.images) do
-            local b64_len = #(img.base64_data or "")
-            -- OpenAI vision: low res (<50KB base64) = 85 tokens, high res = ~0.004 tokens/byte
-            if b64_len < 50 * 1024 then
-                total_image_tokens = total_image_tokens + 85
-            else
-                total_image_tokens = total_image_tokens + math.ceil(b64_len * tokens_per_byte)
+            local h = img.hash or ""
+            -- Only count images that will actually be sent (not already sent)
+            if h == "" or not self.last_sent_image_hashes[h] then
+                local b64_len = #(img.base64_data or "")
+                -- OpenAI vision: low res (<50KB base64) = 85 tokens, high res = ~0.004 tokens/byte
+                if b64_len < 50 * 1024 then
+                    total_image_tokens = total_image_tokens + 85
+                else
+                    total_image_tokens = total_image_tokens + math.ceil(b64_len * tokens_per_byte)
+                end
             end
         end
     end
@@ -459,22 +457,43 @@ function M:get_system_prompt(agent_cfg)
 end
 
 function M:get_engine_directives(agent_cfg)
+
     local has_delegate = false
+
     local has_complete = false
+
     for _, t in ipairs(agent_cfg.allowed_tools or {}) do
+
         if t == "delegate_plan" or t == "*" then has_delegate = true end
+
         if t == "task_complete" or t == "*" then has_complete = true end
+
     end
+
     local rule = has_delegate and has_complete and "Use `task_complete` to advance." or
+
                  has_delegate and "Use `delegate_plan` to advance." or
+
                  has_complete and "Use `task_complete` to finish." or "Analyze and respond."
-    return string.format([[
-==================================================
-ENGINE DIRECTIVES:
-1. PIPELINE: %s
-2. ONE COMMAND PER TURN. Use batch tools if needed.
-==================================================]], rule)
+
+
+    -- Multi-stage info
+
+    local multi_stage_note = ""
+
+    if agent_cfg.use_selective_multi_stage and agent_cfg.multi_stage_tools and #agent_cfg.multi_stage_tools > 0 then
+
+        local tool_list = table.concat(agent_cfg.multi_stage_tools, ", ")
+
+        multi_stage_note = string.format("\n3. MULTI-STAGE: Tools [%s] go through Intent->Generate->Review. Others execute directly.", tool_list)
+
+    end
+
+
+    return string.format("\n==================================================\nENGINE DIRECTIVES:\n1. PIPELINE: %s\n2. ONE COMMAND PER TURN. Use batch tools if needed.%s\n==================================================", rule, multi_stage_note)
+
 end
+
 
 	function M:load_prompt(path)
 	    if not path then return "You are an AI assistant." end

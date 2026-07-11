@@ -182,8 +182,10 @@ function M.get()
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
+            -- use_selective_multi_stage = true,
+            -- multi_stage_tools = { "delegate_plan" },
             allowed_tools = {
-              "read_file", 
+              "read_file",
               -- "read_files", 
               "read_chunk", 
               "search", 
@@ -207,8 +209,8 @@ function M.get()
             model = "Qwen3.5-27B-AWQ",
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
-            use_multi_stage = true,
-            multi_stage_max_iterations = 5,
+            use_selective_multi_stage = true,
+            multi_stage_tools = { "patch", "create_file", "batch_patch", "delegate_plan" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch", 

@@ -90,3 +90,16 @@ static void process_input(const char *data) {
 | **Never** leave SEARCH empty or with only changed lines | Match becomes ambiguous → `[PATCH FAILED]` |
 | Multiple patches in one command are applied sequentially — later patches see the result of earlier ones | Plan order carefully |
 
+
+
+## 5. MULTI-STAGE EXECUTION BEHAVIOR
+
+Some tools you use trigger a **multi-stage execution pipeline** internally for quality control:
+
+- **`patch`**, **`create_file`**, **`batch_patch`**, **`delegate_plan`**: These route through Intent → Generate → Review cycle. The system may ask you to formulate an `<INTENT>` block first, then generate the raw payload, then review the result. Follow the instructions in those prompts precisely.
+
+- All other tools (`read_file`, `read_chunk`, `search`, `shell`, `rollback`, etc.) execute **directly** without multi-stage overhead.
+
+
+**IMPORTANT**: When writing commands for multi-stage tools, output them normally in `||| COMMAND |||` blocks. The system will handle the multi-stage routing automatically. Do NOT manually write `<INTENT>` blocks unless the system explicitly asks you to.
+

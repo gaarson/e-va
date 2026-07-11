@@ -24,68 +24,115 @@ end
 
 -- Вспомогательная функция для экранирования спецсимволов Lua (magic characters)
 local function escape_pattern(str)
-    return str:gsub("[%(%)%.%%%+%-%*%?%[%^%$]", "%%%1")
+    -- Добавлен |, так как в паттернах Lua это оператор альтернативы (OR), а не разделитель
+    return str:gsub("[%(%)%.%%%+%-%*%?%[%^%$%|]", "%%%1")
 end
 
--- Парсинг: ищем ровно один блок между маркерами, игнорируя markdown и мусор
+-- Парсинг: строгий поиск маркеров на отдельных строках
+-- Парсинг: строгий поиск маркеров на отдельных строках
+-- FIX: Only strip markdown fences that wrap the ENTIRE command block,
+-- never strip backticks that appear inside the payload.
 function M:parse_command(text)
     if not text or type(text) ~= "string" then return nil, "Empty response" end
 
-    -- 1. Очистка от Markdown-оберток (например, ```json ... ``` или просто ```)
-    -- Сначала убираем открывающие теги с названием языка (например ```bash\n)
-    text = text:gsub("```%w*\n", "")
-    -- Затем убираем оставшиеся обратные кавычки
-    text = text:gsub("```", "")
+    -- Normalize line endings only
+    text = text:gsub("\r\n", "\n")
 
-    local start_pat = escape_pattern(self.cmd_start)
-    local end_pat = escape_pattern(self.cmd_end)
+    local lines = {}
+    for line in text:gmatch("([^\n]*)") do
+        table.insert(lines, line)
+    end
 
-    local commands = {}
-    local current_pos = 1
+    local start_pat = "^%s*" .. escape_pattern(self.cmd_start) .. "%s*$"
+    local end_pat   = "^%s*" .. escape_pattern(self.cmd_end)   .. "%s*$"
 
-    -- 2. Ищем блоки через точные индексы (надежнее, чем gmatch или match с .-)
-    while true do
-        local s_start, s_end = text:find(start_pat, current_pos)
-        if not s_start then break end
+    local start_idx = nil
+    local end_idx = nil
 
-        local e_start, e_end = text:find(end_pat, s_end + 1)
-        local cmd_body
+    -- Find first valid opening marker
+    for i = 1, #lines do
+        if lines[i]:match(start_pat) then
+            start_idx = i
+            break
+        end
+    end
 
-        if e_start then
-            -- Идеальный сценарий: найден закрывающий маркер
-            cmd_body = text:sub(s_end + 1, e_start - 1)
-            current_pos = e_end + 1
-        else
-            -- Fallback: закрывающего маркера нет.
-            -- Берем текст до двойного переноса строки (пустой строки), 
-            -- чтобы отсечь последующие рассуждения агента, если он забыл закрыть блок.
-            local remainder = text:sub(s_end + 1)
-            local empty_line_pos = remainder:find("\n%s*\n")
-            
-            if empty_line_pos then
-                cmd_body = remainder:sub(1, empty_line_pos - 1)
-            else
-                cmd_body = remainder
+    if not start_idx then
+        return nil, "No valid command block found. Markers must be on their own lines without extra text."
+    end
+
+    -- Find first valid closing marker AFTER the opening one
+    for i = start_idx + 1, #lines do
+        if lines[i]:match(end_pat) then
+            end_idx = i
+            break
+        end
+    end
+
+    if not end_idx then
+        return nil, "Missing closing command marker. Ensure end marker is on its own line."
+    end
+
+    -- Collect body lines strictly between markers
+    local cmd_lines = {}
+    for i = start_idx + 1, end_idx - 1 do
+        table.insert(cmd_lines, lines[i])
+    end
+
+    -- STRIP OUTER MARKDOWN FENCES ONLY:
+    -- Check if the body is wrapped in matching ``` ... ``` fences.
+    -- Simplified: no inner-backtick counting; safeguard against nested commands.
+    local function strip_outer_fences(lns)
+        -- (1) Find first non-empty line
+        local first = 1
+        while first <= #lns and lns[first]:match("^%s*$") do first = first + 1 end
+        -- (2) Find last non-empty line
+        local last = #lns
+        while last >= 1 and lns[last]:match("^%s*$") do last = last - 1 end
+
+        if first > last then return lns end -- all empty
+
+        local first_line = lns[first]
+        local last_line  = lns[last]
+
+        -- (3) Check if first line opens a fence and last line closes it
+        local open_fence = first_line:match("^%s*(`+)%s*$") or first_line:match("^%s*(`+)%s*%w*$")
+        local close_fence = last_line:match("^%s*(`+)%s*$")
+
+        if open_fence and close_fence then
+            -- (4) Verify backtick counts match
+            if #open_fence == #close_fence then
+                -- (5) SAFEGUARD: Check if ANY line between first and last contains ||| COMMAND |||
+                local has_nested_command = false
+                for i = first + 1, last - 1 do
+                    if lns[i]:match("||| COMMAND |||") then
+                        has_nested_command = true
+                        break
+                    end
+                end
+                if not has_nested_command then
+                    -- (6) Remove the first and last fence lines
+                    local stripped = {}
+                    for i = 1, first - 1 do stripped[#stripped + 1] = lns[i] end
+                    for i = first + 1, last - 1 do stripped[#stripped + 1] = lns[i] end
+                    for i = last + 1, #lns do stripped[#stripped + 1] = lns[i] end
+                    return stripped
+                end
             end
-            current_pos = #text + 1 -- Завершаем поиск, так как дошли до конца
         end
-
-        cmd_body = utils.trim(cmd_body)
-        if cmd_body ~= "" then
-            table.insert(commands, cmd_body)
-        end
+        return lns
     end
 
-    -- 3. Валидация количества и содержимого
-    if #commands == 0 then
-        return nil, "No valid command block found"
+    cmd_lines = strip_outer_fences(cmd_lines)
+
+    local cmd_body = table.concat(cmd_lines, "\n")
+    cmd_body = utils.trim(cmd_body)
+
+    if cmd_body == "" then
+        return nil, "Command body is empty."
     end
 
-    if #commands > 1 then
-        return nil, string.format("Multiple command blocks detected (%d). Only one allowed per turn.", #commands)
-    end
-
-    return commands[1], nil
+    return cmd_body, nil
 end
 
 -- Валидация: существует ли такой тул и разрешен ли он?

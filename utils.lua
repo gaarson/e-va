@@ -141,7 +141,7 @@ function M.list_files_recursive(root_path)
         local rel = M.normalize_path(root_path, line)
         if rel ~= "" then
             local full_path = root_path .. "/" .. rel
-            local lines_count = count_lines_fast(full_path)
+            local lines_count = M.count_lines_fast(full_path)
             table.insert(files, string.format("%s (%s lines)", rel, tostring(lines_count)))
         end
     end

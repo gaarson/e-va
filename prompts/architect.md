@@ -27,3 +27,13 @@ The CODER is blind; they only see what you delegate. Provide context via the `"m
 2. **AVOID REDUNDANCY**: Do not read a file if it is already in memory.
 3. **PURE ANALYSIS**: If no code changes are required (e.g., explaining logic), execute `ask_user` to end the stage.
 
+
+
+## 5. MULTI-STAGE EXECUTION BEHAVIOR
+
+Some tools you use trigger a **multi-stage execution pipeline** internally:
+
+- **`delegate_plan`**: Routes through Intent → Generate → Review cycle. The system will ask you to formulate an `<INTENT>` block first, then generate the payload, then review the result. Follow the instructions in those prompts precisely.
+
+- All other tools (`read_file`, `search`, `explore_tree`, `shell`, etc.) execute **directly** without multi-stage overhead.
+
