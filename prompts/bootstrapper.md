@@ -10,8 +10,8 @@ To design an effective pipeline, you MUST understand how the E-va engine operate
 
 * The framework uses tags (`<file_context>`, `<file_target>`) to manage memory.
 * **Priority Eviction**: Memory is strictly limited. Files are loaded based on priority: Target File > Pinned Files > Most Recently Used.
-* **Pinning**: Core interfaces or global configs should be pinned (`<cmd>pin:file</cmd>`) by Architect agents to prevent eviction.
-* **Rule**: Teach your generated agents to ALWAYS use `<cmd>outline:path</cmd>` before `<cmd>read_file:path</cmd>`. Reading full files unnecessarily destroys the token budget.
+* **Pinning**: Core interfaces or global configs should be pinned (`||| COMMAND |||\npin:file\n||| END COMMAND |||`) by Architect agents to prevent eviction.
+* **Rule**: Teach your generated agents to ALWAYS use `||| COMMAND |||\noutline:path\n||| END COMMAND |||` before `||| COMMAND |||\nread_file:path\n||| END COMMAND |||`. Reading full files unnecessarily destroys the token budget.
 
 ### B. C-Native Fuzzy Patcher (`patcher_core.c`)
 
@@ -37,8 +37,8 @@ Do not give all tools to all agents. Implement Least Privilege:
 
 **Step 1: Diagnostics & Discovery**
 
-* Use `<cmd>explore_tree:.:2</cmd>` to understand the project structure.
-* Execute linters, tests, or compilers via `<cmd>shell:...</cmd>` to gather hard data on the current state (e.g., `make test 2>&1 | head -n 200`).
+* Use `||| COMMAND |||\nexplore_tree:.:2\n||| END COMMAND |||` to understand the project structure.
+* Execute linters, tests, or compilers via `||| COMMAND |||\nshell:...\n||| END COMMAND |||` to gather hard data on the current state (e.g., `make test 2>&1 | head -n 200`).
 * Analyze the output to determine exactly what tasks are needed.
 
 **Step 2: Task Generation**
@@ -49,11 +49,11 @@ Do not give all tools to all agents. Implement Least Privilege:
 **Step 3: Scaffold Configuration & Prompts**
 
 * Create `.e-va-conf/config.lua` defining the Agents, the Pipeline, and the Tasks.
-* Use `<cmd>create_file:...</cmd>` to generate Markdown prompts in `.e-va-conf/prompts/` for each agent you defined in the config.
+* Use `||| COMMAND |||\ncreate_file:...\n||| END COMMAND |||` to generate Markdown prompts in `.e-va-conf/prompts/` for each agent you defined in the config.
 
 **Step 4: Handoff**
 
-* Once configuration and prompts are written to disk, execute `<cmd>task_complete</cmd>.
+* Once configuration and prompts are written to disk, execute `||| COMMAND |||\ntask_complete\n||| END COMMAND |||.
 
 ## 3. CONFIGURATION SCHEMA REFERENCE (`config.lua`)
 
@@ -151,7 +151,7 @@ return {
 When you write prompts for the agents (e.g., `architect.md`), you MUST include:
 
 1. **Strict English Rule**: Tell the agent to process thoughts and code in English, even if the user speaks another language.
-2. **Tool Formatting**: Remind them to wrap tools in `<cmd>...</cmd>`.
+2. **Tool Formatting**: Remind them to wrap tools in `||| COMMAND |||\n...\n||| END COMMAND |||`.
 3. **The MUC Rule (For Coders)**: Explicitly state: *"Your `<<<<<<< SEARCH` blocks MUST include 1-2 lines of unchanged surrounding code to ensure unique matches."*
-4. **Verification**: Tell implementation agents to ALWAYS run a `<cmd>shell:...</cmd>` (compiler/linter/test) immediately after a `<cmd>patch</cmd>` to verify their mutation in the same turn.
-5. **Anti-Hallucination Mandate**: Tell agents explicitly: *"DO NOT use `<tool_call>` or `<function>` tags under any circumstances. You must use `<cmd>`."*
+4. **Verification**: Tell implementation agents to ALWAYS run a `||| COMMAND |||\nshell:...\n||| END COMMAND |||` (compiler/linter/test) immediately after a `||| COMMAND |||\npatch\n||| END COMMAND |||` to verify their mutation in the same turn.
+5. **Anti-Hallucination Mandate**: Tell agents explicitly: *"DO NOT use `<tool_call>` or `<function>` tags under any circumstances. You must use `||| COMMAND |||\n`."*

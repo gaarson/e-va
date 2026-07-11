@@ -1,5 +1,5 @@
 local M = {}
-local utils   = require("utils")
+local utils    = require("utils")
 local registry = require("tool_registry")
 
 ------------------------------------------------------------------------
@@ -16,6 +16,33 @@ M.STATES = {
     COMPLETED         = "COMPLETED",
     ERROR             = "ERROR",
 }
+
+------------------------------------------------------------------------
+-- Helpers
+------------------------------------------------------------------------
+
+--- Безопасный шаблонизатор: заменяет {key} на значения из vars.
+--- Не интерпретирует '%' в значениях, не ломается на магических символах.
+local function render(template, vars)
+    return (template:gsub("{([%w_]+)}", function(key)
+        local v = vars[key]
+        if v == nil then return "{" .. key .. "}" end
+        return tostring(v)
+    end))
+end
+
+--- Извлечение поля из блока <INTENT>/<REVIEW>.
+--- Поддерживает многострочные значения.
+local function extract_field(block, name)
+    -- Вариант 1: поле, за которым идёт другое поле (UPPER_CASE:)
+    local pattern = name .. ":%s*([%s%S]-)%s*\n[%u_]+:"
+    local value = block:match(pattern)
+    if value then return utils.trim(value) end
+    -- Вариант 2: последнее поле в блоке
+    pattern = name .. ":%s*([%s%S]-)%s*$"
+    value = block:match(pattern)
+    return value and utils.trim(value) or ""
+end
 
 ------------------------------------------------------------------------
 -- Constructor
@@ -54,12 +81,15 @@ function M:parse_intent(text)
     end
 
     local intent = {
-        GOAL              = block:match("GOAL:%s*(.-)%s*\n") or "",
-        TOOL              = block:match("TOOL:%s*(.-)%s*\n") or "",
-        PAYLOAD_HINT      = block:match("PAYLOAD_HINT:%s*(.-)%s*\n") or "",
-        SUCCESS_CRITERIA  = block:match("SUCCESS_CRITERIA:%s*(.-)%s*$") or "",
-        raw               = utils.trim(block),
+        GOAL             = extract_field(block, "GOAL"),
+        TOOL             = extract_field(block, "TOOL"),
+        PAYLOAD_HINT     = extract_field(block, "PAYLOAD_HINT"),
+        SUCCESS_CRITERIA = extract_field(block, "SUCCESS_CRITERIA"),
+        raw              = utils.trim(block),
     }
+
+    -- TOOL — только первое слово
+    intent.TOOL = (intent.TOOL:match("^%S+") or "")
 
     if intent.GOAL == "" then return nil, "Intent missing GOAL field." end
     if intent.TOOL == "" then return nil, "Intent missing TOOL field." end
@@ -89,12 +119,10 @@ function M:parse_review(text)
 
     local correction = nil
     if verdict == "REVISE" then
-        correction = block:match("CORRECTION:%s*(.-)%s*</REVIEW>")
-                   or block:match("CORRECTION:%s*(.-)%s*$")
-        if not correction or utils.trim(correction) == "" then
+        correction = extract_field(block, "CORRECTION")
+        if correction == "" then
             return nil, "VERDICT is REVISE but CORRECTION block is empty."
         end
-        correction = utils.trim(correction)
     end
 
     return { verdict = verdict, correction = correction, raw = utils.trim(block) }, nil
@@ -112,21 +140,25 @@ function M:build_intent_prompt(task, project_context)
     end
     table.sort(tools_list)
 
-    return self.prompts.intent
-        :gsub("{task_description}", task or "")
-        :gsub("{project_context}", project_context or "")
-        :gsub("{available_tools_list}", table.concat(tools_list, "\n"))
+    return render(self.prompts.intent, {
+        task_description     = task or "",
+        project_context      = project_context or "",
+        available_tools_list = table.concat(tools_list, "\n"),
+    })
 end
 
 function M:build_generate_prompt()
-    return self.prompts.generate:gsub("{intent_text}", self.intent_raw or "")
+    return render(self.prompts.generate, {
+        intent_text = self.intent_raw or "",
+    })
 end
 
 function M:build_review_prompt()
-    return self.prompts.review
-        :gsub("{intent_text}", self.intent_raw or "")
-        :gsub("{payload_text}", self.payload or "")
-        :gsub("{execution_output}", self.last_result or "")
+    return render(self.prompts.review, {
+        intent_text      = self.intent_raw or "",
+        payload_text     = self.payload or "",
+        execution_output = self.last_result or "",
+    })
 end
 
 ------------------------------------------------------------------------
@@ -134,8 +166,8 @@ end
 ------------------------------------------------------------------------
 function M:start_task(task, project_context)
     self:reset()
-    self.task   = task
-    self.state  = M.STATES.INTENT_DRAFT
+    self.task      = task
+    self.state     = M.STATES.INTENT_DRAFT
     self.iteration = 1
     return { stage = "intent", prompt = self:build_intent_prompt(task, project_context) }
 end
@@ -174,7 +206,10 @@ function M:feed_response(llm_response)
             self.state = M.STATES.ERROR
             return {
                 stage = "error",
-                message = string.format("Failed to satisfy intent after %d iterations. Last correction: %s", self.iteration, review.correction)
+                message = string.format(
+                    "Failed to satisfy intent after %d iterations. Last correction: %s",
+                    self.iteration, review.correction
+                ),
             }
         end
 
@@ -192,7 +227,7 @@ function M:feed_execution_result(output)
     if self.state ~= M.STATES.COMMAND_READY then
         return { stage = "error", message = "Not in COMMAND_READY state." }
     end
-    self.last_result = output
+    self.last_result = (output == nil or output == "") and "<empty output>" or tostring(output)
     self.state       = M.STATES.REVIEWING
     return { stage = "review", prompt = self:build_review_prompt() }
 end
@@ -274,7 +309,8 @@ M.DEFAULT_GENERATE_PROMPT = [[
 
 НЕЛЬЗЯ:
 ✗ Писать "Вот моя команда:" / "Вот содержимое:"
-✗ Оборачивать в code fences✗ Добавлять комментарии до/после payload
+✗ Оборачивать в code fences
+✗ Добавлять комментарии до/после payload
 ✗ Использовать маркеры ||| COMMAND |||
 
 НУЖНО:
@@ -312,7 +348,6 @@ CHECKLIST:
 - [ ] <критерий 1>: PASS/FAIL — <комментарий>
 - [ ] <критерий 2>: PASS/FAIL — <комментарий>
 
-{Если REVISE — обязательно:}
 CORRECTION:
 <что конкретно не так>
 <как исправить — направление>

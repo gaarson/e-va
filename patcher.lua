@@ -36,7 +36,7 @@ function M.apply_patch(original_content, llm_response)
         end
 
         if search_block == replace_block then
-            table.insert(errors, "FAILED BLOCK: SEARCH and REPLACE blocks are EXACTLY identical. No changes needed. If the file is correct, output <cmd>task_complete</cmd>.")
+            table.insert(errors, "FAILED BLOCK: SEARCH and REPLACE blocks are EXACTLY identical. No changes needed. If the file is correct, output ||| COMMAND |||\ntask_complete\n||| END_COMMAND |||.")
             has_content = false
         end
 
