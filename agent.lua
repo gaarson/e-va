@@ -317,7 +317,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     local print_buf = ""
     local in_thought = agent_cfg.is_reasoning or false
     local tag_open = "<think>"
-    local tag_close = "</think>"
+    local tag_close = "</thinking>"
 
     if in_thought then io.write("\27[90m") end
 
@@ -442,24 +442,29 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                     local multi_exec = multi_stage_executor.new(ctx, agent_name, {
                         max_iterations = agent_cfg.multi_stage_max_iterations or 3
                     })
-                    local task_desc = string.format("Execute command: %s\n\nContext from conversation:\n%s", parsed_cmd, last_user_msg)
                     local project_context = ctx.file_tree or ""
+                    -- Build a rich task description that includes the original parsed command as a reference.
+                    -- This gives the GENERATE phase concrete content to refine rather than starting from scratch.
+                    local task_desc = string.format(
+                        "Original command issued by the agent:\n" ..
+                        "||| COMMAND |||\n%s\n||| END_COMMAND |||\n\n" ..
+                        "Context from conversation:\n%s\n\n" ..
+                        "Refine and re-execute this command. Preserve the tool choice and intent, but ensure the payload is correct and complete.",
+                        parsed_cmd, last_user_msg
+                    )
+                    -- Derive success criteria from the tool name and command context
+                    local success_criteria = string.format(
+                        "Tool '%s' executes successfully without errors. The payload is syntactically valid and produces the expected result.",
+                        tool_name
+                    )
                     -- Use start_task_with_intent to SKIP the INTENT phase and preserve the agent's original tool choice.
-
                     -- This avoids wasting tokens re-planning and prevents the agent from choosing a different tool.
-
                     local step = multi_exec:start_task_with_intent(
-
-                        task_desc,  -- task/goal description
-
-                        project_context,  -- project context
-
-                        tool_name,  -- pre-selected tool (from agent's original command)
-
-                        "Refine and execute the payload for this tool based on the task context.",  -- payload hint
-
-                        "Payload executes successfully without errors."  -- success criteria
-
+                        task_desc,           -- task/goal description
+                        project_context,     -- project context
+                        tool_name,           -- pre-selected tool (from agent's original command)
+                        "Refine and execute the payload for this tool based on the task context. Use the original command as a starting point.",  -- payload hint
+                        success_criteria     -- dynamic success criteria
                     )
 
                     while step.stage ~= "done" and step.stage ~= "error" do

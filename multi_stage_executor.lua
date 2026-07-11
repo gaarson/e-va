@@ -183,7 +183,37 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `delegate_plan`:
 
 -- Helpers
 ------------------------------------------------------------------------
-
+--- Sanitize LLM-generated payload: strip markdown fences, thinking tags,
+--- common preamble phrases, and leading/trailing whitespace.
+local function sanitize_payload(raw)
+    if not raw then return "" end
+    local s = utils.trim(raw)
+    -- Strip markdown code fences (```lang ... ```)
+    s = s:gsub("^%s*```[%w%-]*\n?", "")
+    s = s:gsub("\n?```%s*$", "")
+    -- Strip <think> ... </thinking> or <thinking> ... </thinking> blocks
+    s = s:gsub("<%!%-%-.*?%-%->", "")  -- HTML comments just in case
+    s = s:gsub("<thinking>.-</thinking>", "")
+    s = s:gsub("</thinking>.-<thinking>", "")
+    -- Strip common preamble phrases (case-insensitive)
+    local preambles = {
+        "^here is the payload%s*:?",
+        "^here is the command%s*:?",
+        "^here is the content%s*:?",
+        "^command%s*:?",
+        "^payload%s*:?",
+        "^content%s*:?",
+        "^the payload is%s*:?",
+        "^the command is%s*:?",
+    }
+    for _, pat in ipairs(preambles) do
+        s = s:gsub(pat, "", 1)
+    end
+    -- Strip ||| COMMAND ||| ... ||| END_COMMAND ||| wrappers
+    s = s:gsub("^%s*|||%s*COMMAND%s*|||%s*\n?", "")
+    s = s:gsub("\n?|||%s*END_COMMAND%s*|||%s*$", "")
+    return utils.trim(s)
+end
 --- Безопасный шаблонизатор: заменяет {key} на значения из vars.
 --- Не интерпретирует '%' в значениях, не ломается на магических символах.
 local function render(template, vars)
@@ -194,17 +224,46 @@ local function render(template, vars)
     end))
 end
 
---- Извлечение поля из блока <INTENT>/<REVIEW>.
---- Поддерживает многострочные значения.
+--- Robust line-by-line field extractor for <INTENT>/<REVIEW> blocks.
+--- Splits the block into lines, iterates through them, and matches lines
+--- starting with 'FIELDNAME:' (case-insensitive prefix match). Continuation
+--- lines (lines not matching 'WORD:') are accumulated into the current field.
+--- Handles arbitrary field order, blank lines, and trailing content.
 local function extract_field(block, name)
-    -- Вариант 1: поле, за которым идёт другое поле (UPPER_CASE:)
-    local pattern = name .. ":%s*([%s%S]-)%s*\n[%u_]+:"
-    local value = block:match(pattern)
-    if value then return utils.trim(value) end
-    -- Вариант 2: последнее поле в блоке
-    pattern = name .. ":%s*([%s%S]-)%s*$"
-    value = block:match(pattern)
-    return value and utils.trim(value) or ""
+    if not block or not name then return "" end
+    local target_upper = name:upper()
+    local lines = {}
+    for line in block:gmatch("[^\r\n]+") do
+        table.insert(lines, line)
+    end
+    local results = {}
+    local current_key = nil
+    local current_value = {}
+    for i = 1, #lines do
+        local line = lines[i]
+        -- Check if this line starts a new field: WORD: (possibly with leading whitespace)
+        local field_match = line:match("^%s*([A-Za-z_][A-Za-z0-9_]*)%s*:%s*(.*)")
+        if field_match then
+            -- Save previous field
+            if current_key then
+                results[current_key:upper()] = table.concat(current_value, "\n")
+            end
+            current_key = field_match:upper()
+            current_value = { field_match }
+        else
+            -- Continuation line
+            if current_key then
+                table.insert(current_value, line)
+            end
+        end
+    end
+    -- Save last field
+    if current_key then
+        results[current_key:upper()] = table.concat(current_value, "\n")
+    end
+    local val = results[target_upper]
+    if val == nil then return "" end
+    return utils.trim(val)
 end
 
 ------------------------------------------------------------------------
@@ -403,7 +462,7 @@ function M:feed_response(llm_response)
     end
 
     if self.state == M.STATES.INTENT_READY or self.state == M.STATES.REVISING then
-        self.payload = llm_response
+        self.payload = sanitize_payload(llm_response)
         self.state   = M.STATES.COMMAND_READY
         return { stage = "execute", tool = self.intent.TOOL, payload = self.payload }
     end
@@ -453,6 +512,33 @@ end
 ------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
+--- Sanitize LLM-generated payload: strip markdown fences, thinking tags,
+--- common preamble phrases, and leading/trailing whitespace.
+local function sanitize_payload(raw)
+    if not raw then return "" end
+    local s = utils.trim(raw)
+    -- Remove markdown code fences (```lang ... ```)
+    s = s:gsub("^%s*```[%w_-]*\n?", "")
+    s = s:gsub("\n?```%s*$", "")
+    -- Remove <think> ... </thinking> or <thinking> ... </thinking> blocks
+    s = s:gsub("<!%-%-.*?%-%->", "")  -- HTML comments just in case
+    s = (s:gsub("<thinking>.-</thinking>", ""):gsub("</thinking>", ""):gsub("<thinking>", ""))
+    s = (s:gsub("<think>.-</thinking>", ""):gsub("</thinking>", ""):gsub("", ""))
+    -- Remove common preamble phrases (case-insensitive)
+    local preambles = {
+        "^here is the payload%s*:?",
+        "^here is the content%s*:?",
+        "^here is my command%s*:?",
+        "^command%s*:?",
+        "^payload%s*:?",
+        "^output%s*:?",
+        "^result%s*:?",
+    }
+    for _, pat in ipairs(preambles) do
+        s = s:gsub(pat, "", 1)
+    end
+    return utils.trim(s)
+end
 function M:_merge_correction(correction)
     return self.intent_raw
         .. "\n\n<REVISION iteration=\"" .. self.iteration .. "\">\n"
