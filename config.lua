@@ -45,7 +45,21 @@ function M.get()
             system_prompt_estimate = 6000,
             reserved_output = 5000,
         },
-
+        -- Compression configuration
+        compression = {
+            enabled = true,
+            zone1_size = 10,        -- Recent messages: verbatim
+            zone2_size = 20,        -- Middle messages: light compression
+            max_tool_output_bytes = 2048,
+            compress_thinking_blocks = true,
+            preserve_errors = true,
+            llm_summarization = {
+                enabled = true,
+                min_message_length = 5000,  -- Only summarize very long messages with LLM
+                rate_limit_seconds = 30,
+                max_summaries_per_turn = 3,
+            },
+        },
         model_profiles = {
             reasoning = {
                 context_injection = { mode = "separate_message" },
@@ -218,8 +232,8 @@ function M.get()
             model = "Qwen3.5-27B-AWQ",
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
-            -- use_selective_multi_stage = true,
-            -- multi_stage_tools = { "patch", "create_file" },
+            use_selective_multi_stage = true,
+            multi_stage_tools = { "create_file" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch",

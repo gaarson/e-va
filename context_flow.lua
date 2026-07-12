@@ -8,6 +8,7 @@ local json = require("JSON")
 local registry = require("tool_registry")
 local logger = require("logger")
 local inspect = require("inspect")
+local compressor = require("context_compressor")
 
 -- ============================================================================
 -- 1. ДЕФОЛТНАЯ КОНФИГУРАЦИЯ И СТРАТЕГИИ
@@ -46,6 +47,21 @@ M.DEFAULT_CONFIG = {
         chars_per_token = 3.5,
         system_prompt_estimate = 6000,
         reserved_output = 5000,
+    },
+    -- Компрессия контекста
+    compression = {
+        enabled = true,
+        zone1_size = 10,        -- Recent messages: verbatim
+        zone2_size = 20,        -- Middle messages: light compression
+        max_tool_output_bytes = 2048,
+        compress_thinking_blocks = true,
+        preserve_errors = true,
+        llm_summarization = {
+            enabled = true,
+            min_message_length = 5000,
+            rate_limit_seconds = 30,
+            max_summaries_per_turn = 3,
+        },
     },
     -- Профили моделей (переопределяют настройки выше)
     model_profiles = {
@@ -324,11 +340,54 @@ function M:prune_history(agent_name)
     local limits = self.flow_config.storage
     local agent_cfg = self.config.AGENTS[agent_name]
     local estimate = function(t) return self:estimate_tokens(t, agent_cfg) end
-    -- Apply importance-weighted pruning (smarter than fifo)
+    -- STEP 1: Apply compression BEFORE pruning (compresses thinking blocks, tool outputs)
+    if self.flow_config.compression and self.flow_config.compression.enabled then
+        self:compress_history(agent_name)
+    end
+    -- STEP 2: Apply importance-weighted pruning (smarter than fifo)
     M.PRUNE_STRATEGIES.importance_weighted(history, limits, estimate)
-    -- Squash large patches and outputs to save tokens
+    -- STEP 3: Squash large patches and outputs to save tokens
     M.PRUNE_STRATEGIES.squash_large_patches(history, limits, estimate)
     M.PRUNE_STRATEGIES.squash_large_outputs(history, limits, estimate)
+end
+-- Proactive compression of history messages
+function M:compress_history(agent_name)
+    local history = self:get_history(agent_name)
+    if #history == 0 then return 0 end
+    local cfg = self.flow_config.compression or {}
+    local zone1 = cfg.zone1_size or 10
+    local zone2 = cfg.zone2_size or 20
+    local total = #history
+    local compressed_count = 0
+    local tokens_saved = 0
+    -- Zone 3: Oldest messages (aggressive compression)
+    local zone3_end = math.max(1, total - zone1 - zone2)
+    for i = 1, zone3_end do
+        local msg = history[i]
+        if msg and msg.content and compressor.is_compressible(msg, cfg) then
+            local orig_len = #msg.content
+            compressor.compress_message(msg, cfg)
+            tokens_saved = tokens_saved + (orig_len - #msg.content)
+            compressed_count = compressed_count + 1
+        end
+    end
+    -- Zone 2: Middle messages (light compression)
+    local zone2_start = zone3_end + 1
+    local zone2_end = total - zone1
+    for i = zone2_start, zone2_end do
+        local msg = history[i]
+        if msg and msg.content and compressor.is_compressible(msg, cfg) then
+            local orig_len = #msg.content
+            compressor.compress_message(msg, cfg)
+            tokens_saved = tokens_saved + (orig_len - #msg.content)
+            compressed_count = compressed_count + 1
+        end
+    end
+    -- Zone 1: Most recent messages — keep verbatim (no compression)
+    if compressed_count > 0 then
+        logger.info(string.format("[COMPRESSION] Compressed %d messages, saved ~%d bytes", compressed_count, tokens_saved))
+    end
+    return compressed_count
 end
 
 function M:squash_last_mutation(agent_name)
