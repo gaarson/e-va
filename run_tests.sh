@@ -6,7 +6,19 @@ export LUA_PATH="$PROJECT_ROOT/?.lua;$PROJECT_ROOT/?/init.lua;$PROJECT_ROOT/lua_
 export LUA_CPATH="$PROJECT_ROOT/?.so;$PROJECT_ROOT/lua_modules/lib/lua/${LUA_VERSION}/?.so;;"
 
 echo ">>> Running tests with coverage..."
-./lua_modules/bin/busted --coverage "$@"
+if [ $# -eq 0 ]; then
+    # Auto-discover all __tests/ or __tests__/ directories
+    TEST_DIRS=$(find . -type d \( -name "__tests" -o -name "__tests__" \) | sort)
+    if [ -z "$TEST_DIRS" ]; then
+        echo ">>> No __tests/ directories found."
+        exit 1
+    fi
+    echo ">>> Discovered test directories:"
+    echo "$TEST_DIRS"
+    ./lua_modules/bin/busted --coverage $TEST_DIRS
+else
+    ./lua_modules/bin/busted --coverage "$@"
+fi
 TEST_STATUS=$?
 
 if [ $TEST_STATUS -eq 0 ]; then

@@ -20,7 +20,6 @@ M.STATES = {
 
 ------------------------------------------------------------------------
 
-
 ------------------------------------------------------------------------
 
 -- Tool-Specific Prompt Fragments
@@ -28,57 +27,29 @@ M.STATES = {
 ------------------------------------------------------------------------
 
 M.TOOL_GENERATE_HINTS = {
-
-
     patch = [[
-
-
 PAYLOAD FORMAT FOR `patch`:
+Output ONLY SEARCH/REPLACE diff blocks. DO NOT include the file path.
 
-
-IMPORTANT: If the prompt states "FILE PATH IS ALREADY PROVIDED: <path>",
-
-DO NOT repeat the file path. Output ONLY SEARCH/REPLACE diff blocks.
-
-Otherwise, include the file path as the first line.
-
-
+The file path is handled automatically by the system.
 <<<<<<< SEARCH
-
 <exact lines from the file, 2-4 lines of UNCHANGED context>
-
 <lines to replace>
-
 <more unchanged context>
-
 =======
-
 <exact same unchanged context lines>
-
 <new replacement lines>
-
 <same unchanged context lines>
-
 >>>>>>> REPLACE
 
-
 RULES:
-
 - SEARCH block MUST match the actual file content EXACTLY (character-for-character).
-
 - Include 2-4 lines of unchanged context around the change to make the match unique.
-
 - The unchanged context lines must appear IDENTICALLY in both SEARCH and REPLACE blocks.
-
 - Do NOT wrap in code fences. Do NOT add explanations.
-
+- Do NOT include the file path in your output.
 - If multiple changes in the same file, output multiple SEARCH/REPLACE blocks sequentially.
-
-
-]],
-
-    create_file = [[
-
+]], create_file = [[
 PAYLOAD FORMAT FOR `create_file`:
 
 Line 1: FILE PATH (relative or absolute)
@@ -92,10 +63,7 @@ RULES:
 - If the file already exists, it will be overwritten (backup created if configured).
 - Directories will be auto-created if they don't exist.
 
-]],
-
-    delegate_plan = [[
-
+]], delegate_plan = [[
 PAYLOAD FORMAT FOR `delegate_plan`:
 
 {
@@ -137,9 +105,7 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `patch`:
 - [ ] IF --- UNIFIED DIFF --- IS PRESENT IN THE EXECUTION RESULT:
      Verify the diff accurately represents the changes made.
      Confirm that removed lines (-) and added lines (+) match the intended modification.
-]],
-
-    create_file = [[
+]], create_file = [[
 
 TOOL-SPECIFIC REVIEW CHECKS FOR `create_file`:
 
@@ -149,9 +115,7 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `create_file`:
 - [ ] Are there no syntax errors in the created file?
 - [ ] If revision was requested, were the reviewer's corrections applied correctly?
 
-]],
-
-    delegate_plan = [[
+]], delegate_plan = [[
 
 TOOL-SPECIFIC REVIEW CHECKS FOR `delegate_plan`:
 
@@ -164,7 +128,6 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `delegate_plan`:
 - [ ] If revision was requested, were JSON syntax and content issues fixed?
 
 ]],
-
 }
 
 -- Helpers
@@ -203,7 +166,7 @@ local function sanitize_payload(raw)
         return result
     end
     s = strip_balanced_tags(s, "<thinking>", "</thinking>")
-    s = strip_balanced_tags(s, "<think>", "")
+    s = strip_balanced_tags(s, "<think>", "<//think>")
     -- Strip HTML comments (balanced only)
     s = strip_balanced_tags(s, "<!--", "-->")
     -- Strip common preamble phrases (case-insensitive)
@@ -362,6 +325,7 @@ function M:parse_intent(text)
     local intent = {
         GOAL             = extract_field(block, "GOAL"),
         TOOL             = extract_field(block, "TOOL"),
+        FILE_PATH        = extract_field(block, "FILE_PATH"),
         PAYLOAD_HINT     = extract_field(block, "PAYLOAD_HINT"),
         SUCCESS_CRITERIA = extract_field(block, "SUCCESS_CRITERIA"),
         raw              = utils.trim(block),
@@ -428,81 +392,21 @@ end
 
 
 function M:build_generate_prompt()
-
     local tool_name = self.intent and self.intent.TOOL or ""
-
     local tool_hint = M.TOOL_GENERATE_HINTS[tool_name] or ""
-
     local hint_block = ""
 
     if tool_hint ~= "" then
-
-        -- For patch tool, dynamically adjust hint based on whether file_path is pre-known
-
-        if tool_name == "patch" and self.file_path and self.file_path ~= "" then
-
-            tool_hint = string.format([=[
-
-PAYLOAD FORMAT FOR `patch`:
-
-
-FILE PATH IS ALREADY PROVIDED: %s
-
-DO NOT repeat the file path in your output.
-
-
-Output ONLY SEARCH/REPLACE diff blocks:
-
-
-<<<<<<< SEARCH
-
-<exact lines from the file, 2-4 lines of UNCHANGED context>
-
-<lines to replace>
-
-<more unchanged context>
-
-=======
-
-<exact same unchanged context lines>
-
-<new replacement lines>
-
-<same unchanged context lines>
-
->>>>>>> REPLACE
-
-
-RULES:
-
-- SEARCH block MUST match the actual file content EXACTLY (character-for-character).
-
-- Include 2-4 lines of unchanged context around the change to make the match unique.
-
-- The unchanged context lines must appear IDENTICALLY in both SEARCH and REPLACE blocks.
-
-- Do NOT wrap in code fences. Do NOT add explanations.
-
-- Do NOT include the file path. Output ONLY the SEARCH/REPLACE blocks.
-
-- If multiple changes in the same file, output multiple SEARCH/REPLACE blocks sequentially.
-
-]=], self.file_path)
-
-        end
-
+        -- NOTE: TOOL_GENERATE_HINTS.patch already instructs the LLM to never include
+        -- the file path. The executor handles file path injection automatically.
+        -- No dynamic override needed.
         hint_block = "\n\n" .. tool_hint
-
     end
 
     return render(self.prompts.generate, {
-
         intent_text = self.intent_raw or "",
-
         tool_specific_hint = hint_block,
-
     })
-
 end
 
 function M:build_review_prompt()
@@ -521,14 +425,7 @@ function M:build_review_prompt()
 end
 
 ------------------------------------------------------------------------
--- Public API
-------------------------------------------------------------------------
-
-
-------------------------------------------------------------------------
-
 -- Public API: Start with pre-filled intent (skip INTENT phase)
-
 ------------------------------------------------------------------------
 
 function M:start_task_with_intent(task, project_context, tool_name, payload_hint, success_criteria, file_path)
@@ -552,10 +449,11 @@ function M:start_task_with_intent(task, project_context, tool_name, payload_hint
     self.intent    = {
         GOAL             = task or "",
         TOOL             = tool_name,
+        FILE_PATH        = self.file_path or "",
         PAYLOAD_HINT     = payload_hint or "",
         SUCCESS_CRITERIA = success_criteria or "",
-        raw              = string.format("GOAL: %s\nTOOL: %s\nPAYLOAD_HINT: %s\nSUCCESS_CRITERIA: %s",
-            task or "", tool_name or "", payload_hint or "", success_criteria or ""),
+        raw              = string.format("GOAL: %s\nTOOL: %s\nFILE_PATH: %s\nPAYLOAD_HINT: %s\nSUCCESS_CRITERIA: %s",
+            task or "", tool_name or "", self.file_path or "", payload_hint or "", success_criteria or ""),
     }
     self.intent_raw = self.intent.raw
     self.state      = M.STATES.INTENT_READY
@@ -603,6 +501,10 @@ function M:feed_response(llm_response)
         end
         self.intent     = intent
         self.intent_raw = intent.raw
+        -- Capture file_path from intent for patch/create_file tools
+        if intent.TOOL == "patch" and intent.FILE_PATH and utils.trim(intent.FILE_PATH) ~= "" then
+            self.file_path = utils.trim(intent.FILE_PATH)
+        end
         self.state      = M.STATES.INTENT_READY
         return { stage = "generate", prompt = self:build_generate_prompt() }
     end
@@ -685,69 +587,64 @@ function M:feed_response(llm_response)
     return { stage = "error", message = "Unexpected state: " .. self.state }
 end
 function M:feed_execution_result(output)
-    if self.state ~= M.STATES.COMMAND_READY then
-        return { stage = "error", message = "Not in COMMAND_READY state." }
-    end
-    -- Extract output string and signal from result table
-    local output_str
-    local signal_str
-    if type(output) == "table" then
-        output_str = output.output ~= nil and tostring(output.output) or ""
-        signal_str = output.signal ~= nil and tostring(output.signal) or ""
-    elseif type(output) == "string" then
-        output_str = output
-        signal_str = ""
-    else
-        output_str = tostring(output or "")
-        signal_str = ""
-    end
-    -- Build base result string with signal if present
-    local result_parts = {}
-    if signal_str ~= "" then
-        table.insert(result_parts, string.format("[SIGNAL] %s", signal_str))
-    end
-    if output_str ~= "" then
-        table.insert(result_parts, string.format("[OUTPUT] %s", output_str))
-    end
-    local enriched_result = table.concat(result_parts, "\n")
-    if enriched_result == "" then
-        enriched_result = "<empty output>"
-    end
-    local tool_name = self.intent and self.intent.TOOL or ""
-    if tool_name == "patch" then
-        -- Extract file path(s) from the payload (may be nil if not set yet)
-        local file_paths_list = {}
-        if self.payload then
-        if tool_name == "patch" then
-            -- Use pre-known file_path if available, otherwise extract from payload
-            if self.file_path and self.file_path ~= "" then
-                file_paths_list[#file_paths_list + 1] = self.file_path
-            else
-                local first_line = self.payload:match("^[^\r\n]+")
-                if first_line and utils.trim(first_line) ~= "" then
-                    file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
-                end
-            end
-        end
-        -- Append file content from knowledge_base for each path
-        for _, fp in ipairs(file_paths_list) do
-            -- Normalize path for knowledge_base lookup
-            local normalized = fp
-            if not fp:match("^/") then
-                normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
-            end
-            local content = self.ctx.knowledge_base[normalized]
-            if content then
-                enriched_result = enriched_result .. string.format("\n\n<file_content_after_patch path=\"%s\">\n%s\n</file_content_after_patch>", normalized, content)
-            else
-                enriched_result = enriched_result .. string.format("\n\n[file_content_after_patch path=\"%s\"] File not found in knowledge_base.", normalized)
-            end
-        end
-    end
-    self.last_result = enriched_result
-    self.state       = M.STATES.REVIEWING
-    return { stage = "review", prompt = self:build_review_prompt() }
+  if self.state ~= M.STATES.COMMAND_READY then
+      return { stage = "error", message = "Not in COMMAND_READY state." }
   end
+  -- Extract output string and signal from result table
+  local output_str
+  local signal_str
+  if type(output) == "table" then
+      output_str = output.output ~= nil and tostring(output.output) or ""
+      signal_str = output.signal ~= nil and tostring(output.signal) or ""
+  elseif type(output) == "string" then
+      output_str = output
+      signal_str = ""
+  else
+      output_str = tostring(output or "")
+      signal_str = ""
+  end
+  -- Build base result string with signal if present
+  local result_parts = {}
+  if signal_str ~= "" then
+      table.insert(result_parts, string.format("[SIGNAL] %s", signal_str))
+  end
+  if output_str ~= "" then
+      table.insert(result_parts, string.format("[OUTPUT] %s", output_str))
+  end
+  local enriched_result = table.concat(result_parts, "\n")
+  if enriched_result == "" then
+      enriched_result = "<empty output>"
+  end
+  local tool_name = self.intent and self.intent.TOOL or ""
+  if tool_name == "patch" then
+      -- Extract file path: use pre-known file_path if available, otherwise extract from payload
+      local file_paths_list = {}
+      if self.file_path and self.file_path ~= "" then
+          file_paths_list[#file_paths_list + 1] = self.file_path
+      elseif self.payload then
+          local first_line = self.payload:match("^[^\r\n]+")
+          if first_line and utils.trim(first_line) ~= "" then
+              file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
+          end
+      end
+      -- Append file content from knowledge_base for each path
+      for _, fp in ipairs(file_paths_list) do
+          -- Normalize path for knowledge_base lookup
+          local normalized = fp
+          if not fp:match("^/") then
+              normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
+          end
+          local content = self.ctx.knowledge_base[normalized]
+          if content then
+              enriched_result = enriched_result .. string.format("\n\n<file_content_after_patch path=\"%s\">\n%s\n</file_content_after_patch>", normalized, content)
+          else
+              enriched_result = enriched_result .. string.format("\n\n[file_content_after_patch path=\"%s\"] File not found in knowledge_base.", normalized)
+          end
+      end
+  end
+  self.last_result = enriched_result
+  self.state       = M.STATES.REVIEWING
+  return { stage = "review", prompt = self:build_review_prompt() }
 end
 
 ------------------------------------------------------------------------
@@ -837,6 +734,7 @@ Response format (strict):
 <INTENT>
 GOAL: <what we want to achieve, 1-2 sentences>
 TOOL: <tool name from the list above>
+FILE_PATH: <exact file path for patch/create_file tools, empty if not applicable>
 PAYLOAD_HINT: <brief description of the command contents>
 SUCCESS_CRITERIA: <concrete, verifiable success criteria>
 </INTENT>
@@ -849,11 +747,12 @@ TOOL SELECTION GUIDELINES:
 Rules:
 1. GOAL — one specific goal, concrete.
 2. TOOL — must be from the list above. If none fit, use TOOL: NONE. Consider the guidelines above.
-3. PAYLOAD_HINT — enough detail to guide generation, but NOT the actual payload. Describe the structure and key elements.
-4. SUCCESS_CRITERIA — verifiable assertions, not vague statements like "everything works".
-5. Do NOT add anything outside the <INTENT>...</INTENT> tags.
-6. If the task is large, describe ONLY the FIRST step.
-7. If the task description includes a pre-existing command or context from a previous turn, USE IT.
+3. FILE_PATH — for `patch` and `create_file` tools, specify the EXACT file path. Leave empty for other tools.
+4. PAYLOAD_HINT — enough detail to guide generation, but NOT the actual payload. Describe the structure and key elements.
+5. SUCCESS_CRITERIA — verifiable assertions, not vague statements like "everything works".
+6. Do NOT add anything outside the <INTENT>...</INTENT> tags.
+7. If the task is large, describe ONLY the FIRST step.
+8. If the task description includes a pre-existing command or context from a previous turn, USE IT.
    Do not discard valuable context. Incorporate file paths, findings, and decisions already made.
 ]]
 

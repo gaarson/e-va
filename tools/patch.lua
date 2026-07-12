@@ -98,11 +98,9 @@ local function register(registry)
 
     1. INTENT PHASE: In PAYLOAD_HINT, specify the EXACT file path, target lines/functions, and WHY the change is needed.
        Example: "Modify src/main.c lines 45-52: replace buffer size check with bounds validation."
-    2. GENERATE PHASE: Output ONLY SEARCH/REPLACE diff blocks. SEARCH must have 2-4 lines of unchanged context.
-       IMPORTANT: When the file path is already known (provided via command argument), the prompt will state
-       "FILE PATH IS ALREADY PROVIDED: <path>". In this case, DO NOT repeat the file path in your output.
-       Output ONLY the SEARCH/REPLACE diff blocks. The system will inject the file path automatically.
-       If revising, incorporate reviewer corrections - adjust SEARCH context or REPLACE content.
+    2. GENERATE PHASE: Output ONLY SEARCH/REPLACE diff blocks. NEVER include the file path in your output.
+       The system automatically injects the file path from the command context.
+       SEARCH must have 2-4 lines of unchanged context.
     3. CRITICAL: You MUST have read the target file before patching. Never guess file content.
     ]])
 end
