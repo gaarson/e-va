@@ -209,7 +209,7 @@ local function _run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_use
             local response_data, err
             local max_retries, retry_delay = 5, 5
             response_data, err = llm.send_request(agent_cfg, messages, { on_token = printer })
-            utils.flush_stream_buffer()
+            utils.flush_stream_buffer(printer)
             if not response_data then
                 logger.error(string.format("[%s] FATAL: Network unreachable.", label), err)
                 step = { stage = "error", message = "Network error" }
@@ -312,7 +312,7 @@ local function run_llm_request(agent_cfg, messages, label)
             retry_delay = retry_delay * 3
         end
     end
-    utils.flush_stream_buffer()
+    utils.flush_stream_buffer(printer)
     if not response_data then
         logger.error(string.format("%sFATAL: Network unreachable after %d attempts.", prefix, max_retries), err)
         return nil, err
@@ -380,6 +380,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
     }))
     logger.info(string.format("[TURN %d] Agent: %s | Active Context Tokens: ~%d / %d", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
 
+    print(string.format("\n\27[90m[Turn %d | Agent: %s | Tokens: ~%d/%d]\27[0m", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
+
     io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", tostring(agent_name)))
     local printer = utils.stream_token_printer(agent_cfg)
     local response_data, err
@@ -402,7 +404,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                 logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
             end
             if attempt < max_retries then
-                print(string.format("\27[33m[SYSTEM] Retrying in %d seconds...\27[0m", retry_delay))
+                print(string.format("\n\27[33m[NETWORK RETRY %d/%d] Retrying in %d seconds...\27[0m", attempt, max_retries, retry_delay))
                 os.execute("sleep " .. tostring(retry_delay))
                 retry_delay = retry_delay * 3
             end
@@ -421,7 +423,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         else break end
     end
 
-    utils.flush_stream_buffer()
+    utils.flush_stream_buffer(printer)
     if not response_data then
         logger.error("FATAL: Network unreachable after " .. max_retries .. " attempts.", err)
         return "ERROR"
@@ -433,6 +435,13 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         content = response_data.choices[1].message.content
     end
 
+
+    -- HANDLE TIMED-OUT RESPONSES: If stream timed out but we got partial content,
+    -- log it and treat as valid (the model was generating but network stalled)
+    if response_data.timed_out then
+        logger.warn(string.format("[STREAM TIMEOUT] Partial response received (%d chars). Stream timed out but content is usable.", #(content or 0)))
+        print(string.format("\n\27[33m[WARNING] Stream timed out after %d chars of content. Response may be incomplete.\27[0m", #(content or 0)))
+    end
     -- logger.info(string.format('[STREAM] Response received. Content length: %d, full_text length: %d', #(content or ''), #(response_data and response_data.full_text or '')))
 
     -- SELECTIVE MULTI-STAGE ROUTING: Parse tool name from command block and route if needed
@@ -696,6 +705,7 @@ local function execute_pipeline()
     while current_stage_idx <= #config.PIPELINE and turn < MAX_TURNS do
         local stage = config.PIPELINE[current_stage_idx]
         logger.info(string.format("\n=== PIPELINE STAGE [%d/%d]: %s ===", current_stage_idx, #config.PIPELINE, tostring(stage.stage)))
+        print(string.format("\n\27[96m\27[1m=======================================================================\27[0m\n\27[93m [STAGE %d/%d] %s \27[0m\n\27[96m\27[1m=======================================================================\27[0m\n", current_stage_idx, #config.PIPELINE, tostring(stage.stage)))
 
         local stage_complete = false
 
@@ -773,6 +783,12 @@ local function execute_pipeline()
                             auto_loop_count = auto_loop_count + 1
                             turn = turn + 1
                             logger.info(string.format("[AUTO-LOOP %d/%d] Agent continuing execution...", auto_loop_count, MAX_AUTO_LOOP))
+
+                            if auto_loop_count % 10 == 0 then
+
+                                print(string.format("\n\27[90m[Auto-loop: %d iterations, Agent: %s]\27[0m", auto_loop_count, target_agent))
+
+                            end
                             sig = run_agent_turn(target_agent, config.AGENTS[target_agent], turn)
                         end
                         

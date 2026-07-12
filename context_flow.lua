@@ -174,25 +174,23 @@ M.PRUNE_STRATEGIES = {
                 local msg = history[i]
                 if not msg then break end
                 local c = msg.content or ""
-                if type(c) ~= "string" then c = tostring(c) end
                 local original_len = #c
-                
-                -- Squash large shell outputs (>2KB) — using plain string find to avoid pattern errors
-                if string.find(c, "[SHELL STDOUT/STDERR]:", 1, true) or string.find(c, "[SHELL STDOUT", 1, true) then
+                -- Squash large shell outputs (>2KB)
+                if c:match("^\\[SHELL OUTPUT\\]") or c:match("^\\[SHELL STDOUT") then
                     if original_len > 2048 then
                         local line_count = select(2, c:gsub("\n", "\n"))
                         msg.content = string.format("[OUTPUT SUMMARIZED: Shell output truncated (%d lines, %d bytes)]", line_count, original_len)
                         total = total - estimate_fn(c) + estimate_fn(msg.content)
                     end
                 -- Squash large search results (>1KB)
-                elseif string.find(c, "[SEARCH RESULTS for '", 1, true) or string.find(c, "=== SEARCH DIGEST ===", 1, true) then
+                elseif c:match("^\\[SEARCH RESULTS\\]") or c:match("^=== SEARCH DIGEST ===") then
                     if original_len > 1024 then
                         local line_count = select(2, c:gsub("\n", "\n"))
                         msg.content = string.format("[OUTPUT SUMMARIZED: Search results truncated (%d lines, %d bytes)]", line_count, original_len)
                         total = total - estimate_fn(c) + estimate_fn(msg.content)
                     end
-                -- Squash large generic tool outputs (>2KB) — fix: use %[\ instead of \\[
-                elseif c:match("^%[[A-Z]") then
+                -- Squash large tool outputs (>2KB)
+                elseif c:match("^\\[OUTPUT\\]") or c:match("^\\[RESULT\\]") then
                     if original_len > 2048 then
                         local line_count = select(2, c:gsub("\n", "\n"))
                         msg.content = string.format("[OUTPUT SUMMARIZED: Tool output truncated (%d lines, %d bytes)]", line_count, original_len)
@@ -202,7 +200,7 @@ M.PRUNE_STRATEGIES = {
                 if total <= limits.max_history_tokens then break end
             end
         end
-    end,
+    end
 }
 
 -- Стратегии инъекции контекста
@@ -663,22 +661,6 @@ function M:process_turn_response(agent_name, raw_content, executor)
 
     -- 1. Нет команды -> разговор
     if not cmd then
-        -- FIX: Treat truncation/format errors as RETRY, not CONVERSATION
-        local is_retryable = parse_err and (
-            parse_err:match("TRUNCATED") or 
-            parse_err:match("MALFORMED_COMMAND") or 
-            parse_err:match("empty")
-        )
-        
-        if is_retryable then
-            self.consecutive_recoveries = (self.consecutive_recoveries or 0) + 1
-            if self.consecutive_recoveries >= self.flow_config.command_flow.max_retries then
-                self:add_message(agent_name, "assistant", utils.trim(raw_content))
-                return { type = "ERROR", message = "Command parsing failed after " .. self.flow_config.command_flow.max_retries .. " attempts." }
-            end
-            return { type = "RETRY", message = string.format("Command rejected: %s. Output exactly one complete command block.", parse_err) }
-        end
-
         self:add_message(agent_name, "assistant", utils.trim(raw_content))
         return { type = "CONVERSATION", hint = parse_err }
     end

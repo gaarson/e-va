@@ -98,8 +98,12 @@ function M.send_request(profile, messages, options)
 
     req:set_body(body)
 
-    local headers, stream = req:go(600)
-    if not headers then return nil, "Connection failed during body transmission" end
+    local conn_timeout = (profile.params and profile.params.connection_timeout) or 30
+    local headers, stream = req:go(conn_timeout)
+    if not headers then
+        _in_flight_requests[req_hash] = nil
+        return nil, "Connection failed during body transmission"
+    end
 
     local status = headers:get(":status")
     if status ~= "200" then
@@ -145,7 +149,7 @@ function M.send_request(profile, messages, options)
     local first_token_received = false
     
     -- TIMEOUT DETECTION: Track last activity timestamp
-    local STREAM_TIMEOUT = 120 -- seconds (2 minutes of silence = likely stuck)
+    local STREAM_TIMEOUT = (profile.params and profile.params.stream_timeout) or 120 -- seconds, configurable via profile.params.stream_timeout
     local is_timeout = false
     local last_activity_time = socket.gettime()
 
@@ -282,7 +286,8 @@ function M.send_request(profile, messages, options)
         },
         full_reason = full_reason,
         full_text = full_text,
-        interrupted = was_interrupted
+        interrupted = was_interrupted,
+        timed_out = is_timeout
     }
 end
 

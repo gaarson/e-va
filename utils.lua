@@ -8,55 +8,168 @@ local MAX_FILE_SIZE = 8192 * 8192
 -- ANSI color switching, buffer flushing. Eliminates duplication in agent.lua.
 -- ============================================================================
 function M.stream_token_printer(agent_cfg)
+
     local print_buf = ""
+
     local in_thought = (agent_cfg and agent_cfg.is_reasoning) or false
-    local tag_open = "<think>"
+
+    local tag_open = "<thinking>"
+
     local tag_close = "</thinking>"
-    if in_thought then io.write("\27[90m") end
-    return function(t)
-        print_buf = print_buf .. t
-        while #print_buf > 0 do
-            if not in_thought then
-                local s, e = print_buf:find(tag_open)
-                if s then
-                    io.write(print_buf:sub(1, s - 1) .. "\27[90m" .. tag_open)
-                    print_buf = print_buf:sub(e + 1)
-                    in_thought = true
-                elseif #print_buf > #tag_open then
-                    local safe_len = #print_buf - #tag_open
-                    io.write(print_buf:sub(1, safe_len))
-                    print_buf = print_buf:sub(safe_len + 1)
-                else break end
+
+    if in_thought then io.write("[90m") end
+
+
+    local function flush_remaining()
+
+        if #print_buf > 0 then
+
+            if in_thought then
+
+                io.write(print_buf .. "[0m")
+
             else
-                local s, e = print_buf:find(tag_close)
-                if s then
-                    io.write(print_buf:sub(1, s - 1) .. tag_close .. "\27[0m")
-                    print_buf = print_buf:sub(e + 1)
-                    in_thought = false
-                elseif #print_buf > #tag_close then
-                    local safe_len = #print_buf - #tag_close
-                    io.write(print_buf:sub(1, safe_len))
-                    print_buf = print_buf:sub(safe_len + 1)
-                else break end
+
+                io.write(print_buf)
+
             end
+
+            print_buf = ""
+
         end
+
+        io.write("\n[0m")
+
         io.stdout:flush()
+
     end
+
+
+    local function on_token(t)
+
+        print_buf = print_buf .. t
+
+        while #print_buf > 0 do
+
+            if not in_thought then
+
+                local s, e = print_buf:find(tag_open)
+
+                if s then
+
+                    io.write(print_buf:sub(1, s - 1) .. "[90m" .. tag_open)
+
+                    print_buf = print_buf:sub(e + 1)
+
+                    in_thought = true
+
+                elseif #print_buf > #tag_open then
+
+                    local safe_len = #print_buf - #tag_open
+
+                    io.write(print_buf:sub(1, safe_len))
+
+                    print_buf = print_buf:sub(safe_len + 1)
+
+                else break end
+
+            else
+
+                local s, e = print_buf:find(tag_close)
+
+                if s then
+
+                    io.write(print_buf:sub(1, s - 1) .. tag_close .. "[0m")
+
+                    print_buf = print_buf:sub(e + 1)
+
+                    in_thought = false
+
+                elseif #print_buf > #tag_close then
+
+                    local safe_len = #print_buf - #tag_close
+
+                    io.write(print_buf:sub(1, safe_len))
+
+                    print_buf = print_buf:sub(safe_len + 1)
+
+                else break end
+
+            end
+
+        end
+
+        io.stdout:flush()
+
+    end
+
+
+    local printer = {
+
+        on_token = on_token,
+
+        flush = flush_remaining,
+
+    }
+
+    setmetatable(printer, { __call = function(_, t) on_token(t) end })
+
+    return printer
+
 end
+
 -- Flush any remaining buffered text after streaming completes.
 -- Returns the flushed text and whether we were inside a thought block.
-function M.flush_stream_buffer(print_buf, in_thought)
-    if not print_buf or print_buf == "" then return "", false end
-    local flushed = print_buf
-    if in_thought then
-        io.write(print_buf .. "\27[0m")
-    else
-        io.write(print_buf)
+-- Legacy-compatible flush: accepts a printer object or raw buf/state.
+
+local _last_printer = nil
+
+function M.flush_stream_buffer(printer_or_buf, in_thought_flag)
+
+    if type(printer_or_buf) == "table" and type(printer_or_buf.flush) == "function" then
+
+        _last_printer = printer_or_buf
+
+        printer_or_buf:flush()
+
+        return "", false
+
     end
-    io.write("\n")
+
+    if type(printer_or_buf) == "string" and #printer_or_buf > 0 then
+
+        if in_thought_flag then
+
+            io.write(printer_or_buf .. "[0m\n")
+
+        else
+
+            io.write(printer_or_buf .. "\n")
+
+        end
+
+        io.stdout:flush()
+
+        return printer_or_buf, in_thought_flag
+
+    end
+
+    if _last_printer and type(_last_printer.flush) == "function" then
+
+        _last_printer:flush()
+
+        return "", false
+
+    end
+
+    io.write("\n[0m")
+
     io.stdout:flush()
-    return flushed, in_thought
+
+    return "", false
+
 end
+
 
 function M.trim(s)
     if not s then return "" end
