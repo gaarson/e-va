@@ -433,7 +433,7 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         content = response_data.choices[1].message.content
     end
 
-    logger.info(string.format('[STREAM] Response received. Content length: %d, full_text length: %d', #(content or ''), #(response_data and response_data.full_text or '')))
+    -- logger.info(string.format('[STREAM] Response received. Content length: %d, full_text length: %d', #(content or ''), #(response_data and response_data.full_text or '')))
 
     -- SELECTIVE MULTI-STAGE ROUTING: Parse tool name from command block and route if needed
     if agent_cfg.use_selective_multi_stage and agent_cfg.multi_stage_tools then
@@ -496,38 +496,123 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
         end
     end
 
-    -- Handle empty response: smart retry with optimizer-generated continuation
+    -- Handle empty response: ENHANCED RECOVERY with semantic failure classification
     if content == "" or utils.trim(content) == "" then
-        logger.warn("[EMPTY RESPONSE] LLM returned empty content. Attempting recovery...")
-
-        -- Check if this might be a server-side issue (e.g., immediate [DONE])
-        if response_data.full_text and response_data.full_text == "" then
-            logger.warn("[EMPTY RESPONSE] Server sent [DONE] immediately without generating any tokens.")
+        logger.warn("[EMPTY RESPONSE] LLM returned empty content. Classifying failure and attempting targeted recovery...")
+        -- =====================================================================
+        -- FAILURE CLASSIFIER: Detect the root cause of empty response
+        -- =====================================================================
+        local failure_reason = "UNKNOWN"
+        local full_text = response_data and response_data.full_text or ""
+        local full_reason = response_data and response_data.full_reason or ""
+        local interrupted = response_data and response_data.interrupted or false
+        -- (a) Server-side immediate [DONE] — model produced zero tokens
+        if full_text == "" and full_reason == "" and not interrupted then
+            failure_reason = "SERVER_DONE_IMMEDIATE"
+            logger.warn("[FAILURE CLASSIFIER] Server sent [DONE] immediately without generating any tokens.")
+        -- (b) Context overflow — check if error indicates context exceeded
+        elseif err and type(err) == "table" and err.type == "CONTEXT_EXCEEDED" then
+            failure_reason = "CONTEXT_OVERFLOW"
+            logger.warn("[FAILURE CLASSIFIER] Context overflow detected.")
+        -- (c) Model refusal / safety filter — model generated reasoning but no text
+        elseif full_reason ~= "" and full_text == "" then
+            failure_reason = "MODEL_REFUSAL"
+            logger.warn("[FAILURE CLASSIFIER] Model generated reasoning but refused to produce output (possible safety filter).")
+        -- (d) Network timeout — stream timed out with no content
+        elseif err and (err == "HTTP 408" or err == "HTTP 504" or err:match("timeout") or err:match("TIMEOUT")) then
+            failure_reason = "NETWORK_TIMEOUT"
+            logger.warn("[FAILURE CLASSIFIER] Network timeout detected.")
+        -- (e) Interrupted by user — not really a failure, but handle gracefully
+        elseif interrupted then
+            failure_reason = "USER_INTERRUPT"
+            logger.warn("[FAILURE CLASSIFIER] Generation was interrupted by user.")
         end
-
-        -- Retry 1: Blind retry with same messages (2s delay)
-        logger.info("[EMPTY RESPONSE] Retrying with same messages (attempt 1)...")
-        print("\27[33m[SYSTEM] Empty response received. Retrying in 2 seconds...\27[0m")
-        os.execute("sleep 2")
-        local printer_retry = utils.stream_token_printer(agent_cfg)
-        response_data, err = llm.send_request(agent_cfg, messages, { on_token = printer_retry })
-        if err == 'DUPLICATE_REQUEST_BLOCKED' then
-            logger.warn("[EMPTY RESPONSE] Duplicate request blocked during retry. Waiting extra time...")
-            os.execute("sleep 5")
-            response_data, err = llm.send_request(agent_cfg, messages, { on_token = printer_retry })
-        end
-
-        if response_data then
-            content = ""
-            if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
-                content = response_data.choices[1].message.content
+        logger.info(string.format("[FAILURE CLASSIFIER] Classified as: %s", failure_reason))
+        -- =====================================================================
+        -- TARGETED RECOVERY STRATEGIES based on classified failure reason
+        -- =====================================================================
+        local recovery_attempts = 0
+        local MAX_RECOVERY_ATTEMPTS = 3
+        -- Helper: extract content from response_data
+        local function extract_content(rd)
+            if rd and rd.choices and rd.choices[1] and rd.choices[1].message then
+                return rd.choices[1].message.content
             end
+            return ""
         end
-
-        -- Retry 2: Smart continuation via optimizer
-        if not content or utils.trim(content) == "" then
-            logger.warn("[EMPTY RESPONSE] Second attempt also empty. Generating smart continuation prompt...")
-
+        -- Helper: send request with exponential backoff
+        local function send_with_retry(cfg, msgs, printer, base_delay)
+            local rd, e
+            rd, e = llm.send_request(cfg, msgs, { on_token = printer })
+            if e == 'DUPLICATE_REQUEST_BLOCKED' then
+                logger.warn("[EMPTY RESPONSE] Duplicate request blocked. Waiting " .. base_delay .. "s...")
+                os.execute("sleep " .. tostring(base_delay))
+                rd, e = llm.send_request(cfg, msgs, { on_token = printer })
+            end
+            return rd, e
+        end
+        -- ---- RECOVERY ATTEMPT 1: Context Overflow ----
+        if failure_reason == "CONTEXT_OVERFLOW" then
+            recovery_attempts = recovery_attempts + 1
+            logger.info(string.format("[RECOVERY %d/%d] CONTEXT_OVERFLOW: Aggressively pruning history before retry...", recovery_attempts, MAX_RECOVERY_ATTEMPTS))
+            -- Remove last 5 history messages to free up context
+            local history = ctx.history[agent_name] or {}
+            local removed_count = 0
+            local max_remove = 5
+            while removed_count < max_remove and #history > 3 do
+                table.remove(history)
+                removed_count = removed_count + 1
+            end
+            logger.info(string.format("[RECOVERY] Pruned %d messages from history.", removed_count))
+            -- Also shrink max_tokens if possible
+            local new_val = context_optimizer.shrink_max_tokens(agent_cfg, config.AGENT_DEFAULTS.min_max_tokens or 1024)
+            logger.info(string.format("[RECOVERY] Reduced max_tokens to %d", new_val))
+            -- Retry with reduced context
+            local printer_r1 = utils.stream_token_printer(agent_cfg)
+            response_data, err = send_with_retry(agent_cfg, messages, printer_r1, 3)
+            content = extract_content(response_data)
+        end
+        -- ---- RECOVERY ATTEMPT 1: Model Refusal ----
+        if failure_reason == "MODEL_REFUSAL" and (not content or utils.trim(content) == "") then
+            recovery_attempts = recovery_attempts + 1
+            logger.info(string.format("[RECOVERY %d/%d] MODEL_REFUSAL: Rephrasing last user message to avoid safety filter...", recovery_attempts, MAX_RECOVERY_ATTEMPTS))
+            -- Rephrase the last user message to be less likely to trigger refusal
+            if #messages >= 2 and messages[#messages].role == "user" then
+                local original_msg = messages[#messages].content
+                local rephrased = string.format(
+                    "[SYSTEM: Rephrased for clarity]\n" ..
+                    "Please assist with the following task. Provide a direct, practical response:\n\n%s",
+                    original_msg
+                )
+                messages[#messages].content = rephrased
+                logger.info("[RECOVERY] Rephrased last user message.")
+            end
+            local printer_r1 = utils.stream_token_printer(agent_cfg)
+            response_data, err = send_with_retry(agent_cfg, messages, printer_r1, 2)
+            content = extract_content(response_data)
+        end
+        -- ---- RECOVERY ATTEMPT 1: Network Timeout ----
+        if failure_reason == "NETWORK_TIMEOUT" and (not content or utils.trim(content) == "") then
+            recovery_attempts = recovery_attempts + 1
+            logger.info(string.format("[RECOVERY %d/%d] NETWORK_TIMEOUT: Retrying with increased delay (10s)...", recovery_attempts, MAX_RECOVERY_ATTEMPTS))
+            os.execute("sleep 10")
+            local printer_r1 = utils.stream_token_printer(agent_cfg)
+            response_data, err = send_with_retry(agent_cfg, messages, printer_r1, 10)
+            content = extract_content(response_data)
+        end
+        -- ---- RECOVERY ATTEMPT 1: Server Done Immediate or Unknown ----
+        if (failure_reason == "SERVER_DONE_IMMEDIATE" or failure_reason == "UNKNOWN") and (not content or utils.trim(content) == "") then
+            recovery_attempts = recovery_attempts + 1
+            logger.info(string.format("[RECOVERY %d/%d] %s: Blind retry with same messages (2s delay)...", recovery_attempts, MAX_RECOVERY_ATTEMPTS, failure_reason))
+            os.execute("sleep 2")
+            local printer_r1 = utils.stream_token_printer(agent_cfg)
+            response_data, err = send_with_retry(agent_cfg, messages, printer_r1, 2)
+            content = extract_content(response_data)
+        end
+        -- ---- RECOVERY ATTEMPT 2: Smart continuation via optimizer ----
+        if (not content or utils.trim(content) == "") and recovery_attempts < MAX_RECOVERY_ATTEMPTS then
+            recovery_attempts = recovery_attempts + 1
+            logger.info(string.format("[RECOVERY %d/%d] Previous recovery failed. Generating smart continuation prompt...", recovery_attempts, MAX_RECOVERY_ATTEMPTS))
             local smart_prompt = optimizer.generate_continuation_prompt(ctx, config)
             if smart_prompt then
                 logger.info("[SMART CONTINUATION] Using optimizer-generated prompt: " .. smart_prompt:sub(1, 80) .. "...")
@@ -538,32 +623,43 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                 logger.info("[SMART CONTINUATION] Optimizer unavailable, using fallback: " .. fallback)
                 table.insert(messages, { role = "user", content = fallback })
             end
-
-            print("\27[33m[SYSTEM] Injecting continuation prompt. Retrying...\27[0m")
-            local printer_smart = utils.stream_token_printer(agent_cfg)
-            response_data, err = llm.send_request(agent_cfg, messages, { on_token = printer_smart })
-            if err == 'DUPLICATE_REQUEST_BLOCKED' then
-                logger.warn("[EMPTY RESPONSE] Duplicate request blocked during smart retry. Waiting...")
-                os.execute("sleep 5")
-                response_data, err = llm.send_request(agent_cfg, messages, { on_token = printer_smart })
-            end
-
-            if response_data then
-                content = ""
-                if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
-                    content = response_data.choices[1].message.content
-                end
-            end
+            local printer_r2 = utils.stream_token_printer(agent_cfg)
+            response_data, err = send_with_retry(agent_cfg, messages, printer_r2, 3)
+            content = extract_content(response_data)
         end
-
-        -- Final check: if still empty after all attempts, return error
+        -- ---- RECOVERY ATTEMPT 3: Context reduction (remove last 5 history messages) ----
+        if (not content or utils.trim(content) == "") and recovery_attempts < MAX_RECOVERY_ATTEMPTS then
+            recovery_attempts = recovery_attempts + 1
+            logger.info(string.format("[RECOVERY %d/%d] Final attempt: Reducing context by removing last 5 history messages...", recovery_attempts, MAX_RECOVERY_ATTEMPTS))
+            local history = ctx.history[agent_name] or {}
+            local removed_count = 0
+            local max_remove = 5
+            while removed_count < max_remove and #history > 3 do
+                table.remove(history)
+                removed_count = removed_count + 1
+            end
+            logger.info(string.format("[RECOVERY] Pruned %d additional messages from history.", removed_count))
+            -- Also shrink max_tokens
+            local new_val = context_optimizer.shrink_max_tokens(agent_cfg, config.AGENT_DEFAULTS.min_max_tokens or 1024)
+            logger.info(string.format("[RECOVERY] Reduced max_tokens to %d", new_val))
+            -- Rebuild messages with reduced context
+            local limits = config.LIMITS
+            local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
+            local context_data = ctx:build_context(agent_name, agent_cfg, available_tokens)
+            messages = context_data.messages
+            local printer_r3 = utils.stream_token_printer(agent_cfg)
+            response_data, err = send_with_retry(agent_cfg, messages, printer_r3, 5)
+            content = extract_content(response_data)
+        end
+        -- =====================================================================
+        -- FINAL CHECK: If still empty after all attempts, return error
+        -- =====================================================================
         if not content or utils.trim(content) == "" then
-            logger.error("[EMPTY RESPONSE] Failed after all recovery attempts. Giving up.")
-            print("\27[31m[SYSTEM] LLM consistently returning empty responses. Please check your LLM server.\27[0m")
+            logger.error(string.format("[EMPTY RESPONSE] Failed after %d recovery attempts (reason: %s). Giving up.", recovery_attempts, failure_reason))
+            print(string.format("\27[31m[SYSTEM] LLM consistently returning empty responses (classified: %s). Please check your LLM server.\27[0m", failure_reason))
             return "ERROR"
         end
-
-        logger.info("[EMPTY RESPONSE] Recovery successful!")
+        logger.info(string.format("[EMPTY RESPONSE] Recovery successful after %d attempt(s)!", recovery_attempts))
     end
 
     -- 2. Передаем ответ в новый модуль контекста

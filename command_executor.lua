@@ -70,7 +70,12 @@ function M:parse_command(text)
     end
 
     if not end_idx then
-        return nil, "Missing closing command marker. Ensure end marker is on its own line."
+        -- FIX: Detect truncation vs formatting mistake
+        local is_truncated = not raw_content or raw_content:match("%a$") or raw_content:match("%.+$")
+        if is_truncated then
+            return nil, "TRUNCATED_RESPONSE: Generation cut off before '||| END_COMMAND |||'. Please complete the command block."
+        end
+        return nil, "MALFORMED_COMMAND: Missing closing marker '||| END_COMMAND |||'. Ensure markers are on their own lines."
     end
 
     -- Collect body lines strictly between markers

@@ -90,6 +90,28 @@ function M.execute(action_string, ctx, agent_name)
     return res
 end
 
+-- Manifest cache: persists across turns to avoid regenerating
+M._manifest_cache = {}
+M._manifest_cache_key = nil
+-- Get detailed tool info for a specific tool (lazy loading)
+function M.get_detailed_tool_info(tool_name, agent_cfg)
+    agent_cfg = agent_cfg or {}
+    local tool = M.tools[tool_name]
+    if not tool then return nil end
+    local is_ms = false
+    if agent_cfg.multi_stage_tools then
+        for _, t in ipairs(agent_cfg.multi_stage_tools) do
+            if t == tool_name then is_ms = true; break end
+        end
+    end
+    local extra = ""
+    if is_ms and tool.multi_stage_doc then
+        extra = "\n**MULTI-STAGE BEHAVIOR**: " .. tool.multi_stage_doc
+    elseif is_ms then
+        extra = "\n**MULTI-STAGE BEHAVIOR**: This tool routes through Intent → Generate → Execute → Review cycle for quality control."
+    end
+    return string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s%s", tool_name, tool.desc, tool.usage or "", extra)
+end
 function M.generate_tool_manifest(allowed_tools, agent_cfg)
     agent_cfg = agent_cfg or {}
     local multi_stage_tools = {}
@@ -101,21 +123,24 @@ function M.generate_tool_manifest(allowed_tools, agent_cfg)
     if not allowed_tools or #allowed_tools == 0 then
         return "\n[SYSTEM WARNING]: You have NO tools assigned. You can only analyze context and chat."
     end
-
+    -- Determine manifest mode: 'full' (legacy), 'compact' (default), 'minimal' (names only)
+    local mode = (agent_cfg.tool_manifest_mode or "full"):lower()
+    -- Cache key: based on allowed_tools and mode
+    local cache_key = table.concat(allowed_tools, ",") .. "|" .. mode
+    if M._manifest_cache_key == cache_key and M._manifest_cache[cache_key] then
+        return M._manifest_cache[cache_key]
+    end
     local doc = {
-        "## SYSTEM DIRECTIVE: TOOLCHAIN INTERFACE",
-        "> **PARSING ORDER**: Commands are executed from the **END** of your response. Always place your final/most important command block at the very end of your text.",
-        "CRITICAL: Do NOT invent tools. Only the following tools are available to your profile:\n"
+        "## TOOLCHAIN INTERFACE",
+        "> Commands execute from the **END** of your response. Place final command last.",
+        "Only these tools are available:\n"
     }
-
     local has_all = false
     for _, allowed in ipairs(allowed_tools) do
         if allowed == "*" then has_all = true end
     end
-
     local tools_to_list = {}
     if has_all then
-        table.insert(doc, "**(Admin privileges granted: ALL_TOOLS enabled)**\n")
         for name, tool in pairs(M.tools) do table.insert(tools_to_list, {name = name, tool = tool}) end
     else
         for _, pattern in ipairs(allowed_tools) do
@@ -131,39 +156,46 @@ function M.generate_tool_manifest(allowed_tools, agent_cfg)
             end
         end
     end
-
     table.sort(tools_to_list, function(a, b) return a.name < b.name end)
-
     for _, item in ipairs(tools_to_list) do
-        local usage_example = item.tool.usage
         local is_ms = multi_stage_tools[item.name] == true
-
-        local extra = ""
-
-        if is_ms and item.tool.multi_stage_doc then
-
-            extra = "\n**MULTI-STAGE BEHAVIOR**: " .. item.tool.multi_stage_doc
-
-        elseif is_ms then
-
-            extra = "\n**MULTI-STAGE BEHAVIOR**: This tool routes through Intent → Generate → Execute → Review cycle for quality control."
-
+        local ms_tag = is_ms and " [MS]" or ""
+        if mode == "minimal" then
+            -- Names only
+            table.insert(doc, string.format("- `%s`%s: %s", item.name, ms_tag, item.tool.desc or ""))
+        elseif mode == "compact" then
+            -- Compact: name + 1-line description + optional multi-stage tag
+            table.insert(doc, string.format("### Tool: `%s`%s\n**Description**: %s", item.name, ms_tag, item.tool.desc or ""))
+        else
+            -- Full (legacy): name + description + usage example + multi-stage info
+            local usage_example = item.tool.usage
+            local extra = ""
+            if is_ms and item.tool.multi_stage_doc then
+                extra = "\n**MULTI-STAGE BEHAVIOR**: " .. item.tool.multi_stage_doc
+            elseif is_ms then
+                extra = "\n**MULTI-STAGE BEHAVIOR**: This tool routes through Intent → Generate → Execute → Review cycle for quality control."
+            end
+            table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s%s\n", item.name, item.tool.desc, usage_example, extra))
         end
-
-        table.insert(doc, string.format("### Tool: `%s`\n**Description**: %s\n**Usage Example**:\n%s%s\n", item.name, item.tool.desc, usage_example, extra))
-
     end
-
-    table.insert(doc, "### VISUAL CONTEXT & SCREENSHOTS\nThe system automatically scans the pictures directory at the start of every turn. To show the LLM a screenshot, diagram, or log:\n1. Save the image file to the configured pictures directory (default: .e-va-conf/pictures/).\n2. You can use tools like mcp_browser_take_screenshot (with filePath argument) or shell commands to save images there.\n3. All images in this folder will be automatically attached to the prompt on the **next turn**, allowing the model to visually inspect UI states or errors.")
-
-    -- table.insert(doc, "CRITICAL RULE: You MUST execute `||| COMMAND |||\ntask_complete\n||| END_COMMAND |||` when your instructions are fulfilled to advance the pipeline.")
-
-    return table.concat(doc, "\n")
+    -- Add visual context note (only in compact/full modes)
+    if mode ~= "minimal" then
+        table.insert(doc, "\n### VISUAL CONTEXT\nImages in `.e-va-conf/pictures/` are auto-attached each turn.")
+    end
+    local result = table.concat(doc, "\n")
+    -- Cache the result
+    M._manifest_cache[cache_key] = result
+    M._manifest_cache_key = cache_key
+    return result
+end
+-- Clear manifest cache (call when tools change)
+function M.clear_manifest_cache()
+    M._manifest_cache = {}
+    M._manifest_cache_key = nil
 end
 
 M.is_tool_allowed = is_tool_allowed
 
 return M
-
 
 

@@ -30,6 +30,7 @@ M.DEFAULT_CONFIG = {
         search_digest_enabled = true,
         max_recency_tokens = 4000,
         max_search_digest_tokens = 2000,
+        stale_threshold_turns = 10, -- Pinned files not accessed in N turns are marked STALE and excluded from recency
     },
     -- Флоу выполнения команд
     command_flow = {
@@ -67,9 +68,76 @@ M.DEFAULT_CONFIG = {
 }
 
 -- Стратегии обрезки истории
+-- Importance scoring for messages (higher = more important to keep)
+M.IMPORTANCE_SCORES = {
+    TASK_DESCRIPTION = 100,
+    USER_QUESTION = 80,
+    ASSISTANT_REASONING = 40,
+    TOOL_OUTPUT = 20,
+    SQUASHED_MUTATION = 5,
+}
+-- Helper: assign importance score to a message based on its content/role
+local function _score_message(msg, idx, total)
+    if not msg then return 0 end
+    local role = msg.role or ""
+    local content = msg.content or ""
+    -- First 3 messages are always high priority (task initiation)
+    if idx <= 3 then return 100 end
+    -- Role-based scoring
+    if role == "user" then
+        -- User messages with questions or task descriptions are high priority
+        if content:match("^TASK:") or content:match("^QUESTION:") or content:match("%?%s*$") then
+            return M.IMPORTANCE_SCORES.USER_QUESTION
+        end
+        -- Tool outputs from user role are lower priority
+        if content:match("^\\[OUTPUT\\]") or content:match("^\\[RESULT\\]") or content:match("^\\[SYSTEM") then
+            return M.IMPORTANCE_SCORES.TOOL_OUTPUT
+        end
+        return M.IMPORTANCE_SCORES.USER_QUESTION
+    elseif role == "assistant" then
+        -- Assistant messages with commands are medium priority
+        if content:match("||| COMMAND |||") then
+            return M.IMPORTANCE_SCORES.ASSISTANT_REASONING + 10
+        end
+        -- Squashed mutations are low priority
+        if content:match("^\\[SYSTEM MEMORY:") then
+            return M.IMPORTANCE_SCORES.SQUASHED_MUTATION
+        end
+        return M.IMPORTANCE_SCORES.ASSISTANT_REASONING
+    elseif role == "system" then
+        return 60  -- System messages are moderately important
+    end
+    return 20  -- Default low priority
+end
 M.PRUNE_STRATEGIES = {
     fifo = function(history, limits)
         while #history > limits.max_history_messages do table.remove(history, 1) end
+    end,
+    -- IMPORTANCE-WEIGHTED PRUNING: Remove lowest-importance messages first
+    importance_weighted = function(history, limits, estimate_fn)
+        local max_msgs = limits.max_history_messages or 200
+        while #history > max_msgs do
+            -- Find the message with the lowest importance score (excluding first 3)
+            local min_score = math.huge
+            local min_idx = nil
+            for i = 4, #history do  -- Skip first 3 messages (always preserved)
+                local score = _score_message(history[i], i, #history)
+                if score < min_score then
+                    min_score = score
+                    min_idx = i
+                elseif score == min_score and min_idx then
+                    -- Tie-break: remove older message (lower index)
+                    if i < min_idx then
+                        min_idx = i
+                    end
+                end
+            end
+            if min_idx and min_idx >= 4 then
+                table.remove(history, min_idx)
+            else
+                break  -- No more removable messages
+            end
+        end
     end,
     fifo_assistant_first = function(history, limits)
         while #history > limits.max_history_messages do
@@ -96,7 +164,45 @@ M.PRUNE_STRATEGIES = {
                 end
             end
         end
-    end
+    end,
+    -- EXTENDED SQUASH: Also squash large shell outputs and search results
+    squash_large_outputs = function(history, limits, estimate_fn)
+        local total = 0
+        for _, m in ipairs(history) do total = total + estimate_fn(m.content) end
+        if total > limits.max_history_tokens then
+            for i = 1, #history - 5 do
+                local msg = history[i]
+                if not msg then break end
+                local c = msg.content or ""
+                if type(c) ~= "string" then c = tostring(c) end
+                local original_len = #c
+                
+                -- Squash large shell outputs (>2KB) — using plain string find to avoid pattern errors
+                if string.find(c, "[SHELL STDOUT/STDERR]:", 1, true) or string.find(c, "[SHELL STDOUT", 1, true) then
+                    if original_len > 2048 then
+                        local line_count = select(2, c:gsub("\n", "\n"))
+                        msg.content = string.format("[OUTPUT SUMMARIZED: Shell output truncated (%d lines, %d bytes)]", line_count, original_len)
+                        total = total - estimate_fn(c) + estimate_fn(msg.content)
+                    end
+                -- Squash large search results (>1KB)
+                elseif string.find(c, "[SEARCH RESULTS for '", 1, true) or string.find(c, "=== SEARCH DIGEST ===", 1, true) then
+                    if original_len > 1024 then
+                        local line_count = select(2, c:gsub("\n", "\n"))
+                        msg.content = string.format("[OUTPUT SUMMARIZED: Search results truncated (%d lines, %d bytes)]", line_count, original_len)
+                        total = total - estimate_fn(c) + estimate_fn(msg.content)
+                    end
+                -- Squash large generic tool outputs (>2KB) — fix: use %[\ instead of \\[
+                elseif c:match("^%[[A-Z]") then
+                    if original_len > 2048 then
+                        local line_count = select(2, c:gsub("\n", "\n"))
+                        msg.content = string.format("[OUTPUT SUMMARIZED: Tool output truncated (%d lines, %d bytes)]", line_count, original_len)
+                        total = total - estimate_fn(c) + estimate_fn(msg.content)
+                    end
+                end
+                if total <= limits.max_history_tokens then break end
+            end
+        end
+    end,
 }
 
 -- Стратегии инъекции контекста
@@ -125,6 +231,22 @@ M.INJECTION_STRATEGIES = {
 
                 -- Собираем чистое сообщение + свежий блок контекста
                 messages[i].content = (content ~= "" and content .. "\n\n" or "") .. block
+                break
+            end
+        end
+    end,
+    -- HYBRID STRATEGY: Inject dynamic context as a SEPARATE system message
+    -- RIGHT BEFORE the last user message, keeping the original user message intact.
+    -- This prevents task drift by preserving the original user intent.
+    hybrid_insert = function(messages, recency, digest)
+        local block = recency
+        if digest and digest ~= "" then block = block .. "\n\n" .. digest end
+        if block == "" then return end
+        -- Find the last user message and insert system context right before it
+        for i = #messages, 1, -1 do
+            if messages[i].role == "user" then
+                -- Insert as system message right before the last user message
+                table.insert(messages, i, { role = "system", content = "[DYNAMIC CONTEXT]\n" .. block })
                 break
             end
         end
@@ -172,6 +294,7 @@ function M.new(flow_config, full_config)
     self.test_failures = 0
     self.consecutive_recoveries = 0
     self.file_tree = nil
+    self.current_turn = 0 -- Tracks the current turn for staleness detection
     return self
 end
 
@@ -193,9 +316,11 @@ function M:prune_history(agent_name)
     local limits = self.flow_config.storage
     local agent_cfg = self.config.AGENTS[agent_name]
     local estimate = function(t) return self:estimate_tokens(t, agent_cfg) end
-    -- Применяем стратегии (можно расширять)
-    M.PRUNE_STRATEGIES.fifo_assistant_first(history, limits)
+    -- Apply importance-weighted pruning (smarter than fifo)
+    M.PRUNE_STRATEGIES.importance_weighted(history, limits, estimate)
+    -- Squash large patches and outputs to save tokens
     M.PRUNE_STRATEGIES.squash_large_patches(history, limits, estimate)
+    M.PRUNE_STRATEGIES.squash_large_outputs(history, limits, estimate)
 end
 
 function M:squash_last_mutation(agent_name)
@@ -224,6 +349,8 @@ function M:add_file(path, content)
     self.file_states[path] = "READ"
     self.global_access_counter = self.global_access_counter + 1
     self.file_access_rank[path] = self.global_access_counter
+    -- Track last accessed turn for staleness detection
+    self.file_access_rank[path .. "_last_turn"] = self.current_turn
 end
 
 function M:pin_file(path)
@@ -536,6 +663,22 @@ function M:process_turn_response(agent_name, raw_content, executor)
 
     -- 1. Нет команды -> разговор
     if not cmd then
+        -- FIX: Treat truncation/format errors as RETRY, not CONVERSATION
+        local is_retryable = parse_err and (
+            parse_err:match("TRUNCATED") or 
+            parse_err:match("MALFORMED_COMMAND") or 
+            parse_err:match("empty")
+        )
+        
+        if is_retryable then
+            self.consecutive_recoveries = (self.consecutive_recoveries or 0) + 1
+            if self.consecutive_recoveries >= self.flow_config.command_flow.max_retries then
+                self:add_message(agent_name, "assistant", utils.trim(raw_content))
+                return { type = "ERROR", message = "Command parsing failed after " .. self.flow_config.command_flow.max_retries .. " attempts." }
+            end
+            return { type = "RETRY", message = string.format("Command rejected: %s. Output exactly one complete command block.", parse_err) }
+        end
+
         self:add_message(agent_name, "assistant", utils.trim(raw_content))
         return { type = "CONVERSATION", hint = parse_err }
     end

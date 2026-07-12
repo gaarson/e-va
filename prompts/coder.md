@@ -11,7 +11,7 @@ You are a Senior Systems Programmer and Software Engineer specializing in robust
 Example:
 
 ||| COMMAND |||
-optimize_context:{"remove_files": ["src/old_module.lua"], "pin_files": ["src/core.h"]}
+optimize_context:{"remove_files": ["/old_module.lua"], "pin_files": ["/core.h"]}
 ||| END_COMMAND |||
 
 ## 3. VERIFICATION MANDATE (ATOMIC EXECUTION & CHUNKING)
@@ -28,7 +28,7 @@ The `patch` tool applies unified diffs to a single file. **Every SEARCH block MU
 
 ```
 ||| COMMAND |||
-patch:src/parser.c
+patch:/parser.c
 <<<<<<< SEARCH
 static void process_input(const char *data) {
     int len = strlen(data);
@@ -55,7 +55,7 @@ Stack multiple SEARCH/REPLACE blocks in a single patch command. The tool applies
 
 ```
 ||| COMMAND |||
-patch:src/parser.c
+patch:/parser.c
 <<<<<<< SEARCH
 #include <stdio.h>
 =======
@@ -95,7 +95,7 @@ If the `patch` tool fails (ambiguous match, encoding mismatch, permission denied
 Use `shell` with `sed` or `perl -pi` for simple find-and-replace operations:
 ```
 ||| COMMAND |||
-shell:sed -i 's/old_function_name/new_function_name/g' src/parser.c
+shell:sed -i 's/old_function_name/new_function_name/g' /parser.c
 
 
 Some tools you use trigger a **multi-stage execution pipeline** internally for quality control:

@@ -358,6 +358,8 @@ function M.new(ctx, agent_name, opts)
         max_iterations    = opts.max_iterations or 3,
         total_tokens_used = 0,
         max_tokens_per_task = opts.max_tokens_per_task or 32000,
+        budget_mode       = opts.budget_mode or "adaptive",  -- 'adaptive', 'fixed', 'aggressive'
+        file_path         = opts.file_path or nil,  -- Pre-known file path for patch/create_file (selective multi-stage)
         prompts = {
             intent    = opts.intent_prompt    or M.DEFAULT_INTENT_PROMPT,
             generate  = opts.generate_prompt  or M.DEFAULT_GENERATE_PROMPT,
@@ -518,6 +520,30 @@ function M:start_task(task, project_context)
     self.iteration = 1
     return { stage = "intent", prompt = self:build_intent_prompt(task, project_context) }
 end
+-- Adaptive token budget calculation
+function M:calculate_token_budget()
+    local mode = self.budget_mode
+    local ctx = self.ctx
+    local config = ctx and ctx.config
+    if mode == "fixed" then
+        -- Legacy behavior: fixed 32K budget
+        return self.max_tokens_per_task
+    elseif mode == "aggressive" then
+        -- 80% of available context
+        if config and config.LIMITS then
+            local available = config.LIMITS.MAX_CONTEXT - config.LIMITS.RESERVED_OUTPUT - config.LIMITS.SYSTEM_PROMPT_ESTIMATE
+            return math.floor(available * 0.8)
+        end
+        return self.max_tokens_per_task
+    else
+        -- 'adaptive' (default): 60% for current task, 40% reserved for subsequent turns
+        if config and config.LIMITS then
+            local available = config.LIMITS.MAX_CONTEXT - config.LIMITS.RESERVED_OUTPUT - config.LIMITS.SYSTEM_PROMPT_ESTIMATE
+            return math.floor(available * 0.6)
+        end
+        return self.max_tokens_per_task
+    end
+end
 function M:feed_response(llm_response)
     if self.state == M.STATES.INTENT_DRAFT then
         local intent, err = self:parse_intent(llm_response)
@@ -542,11 +568,12 @@ function M:feed_response(llm_response)
         return { stage = "execute", tool = self.intent.TOOL, payload = self.payload }
     end
     if self.state == M.STATES.REVIEWING then
-        -- TOKEN BUDGET CHECK: Force-approve if we've exceeded the token budget
-        if self.total_tokens_used > self.max_tokens_per_task then
+        -- ADAPTIVE TOKEN BUDGET CHECK: Force-approve if we've exceeded the calculated budget
+        local budget = self:calculate_token_budget()
+        if self.total_tokens_used > budget then
             logger.warn(string.format(
-                "[MULTI-STAGE] Token budget exceeded (%d/%d). Force-approving to prevent runaway token consumption.",
-                self.total_tokens_used, self.max_tokens_per_task
+                "[MULTI-STAGE] Token budget exceeded (%d/%d, mode=%s). Force-approving to prevent runaway token consumption.",
+                self.total_tokens_used, budget, self.budget_mode
             ))
             self.state = M.STATES.APPROVED
             return { stage = "done", result = self.last_result, iterations = self.iteration, forced_approval = true }
