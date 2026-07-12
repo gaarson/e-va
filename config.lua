@@ -220,7 +220,7 @@ function M.get()
             -- multi_stage_tools = { "patch", "create_file", "batch_patch", "delegate_plan" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
-              "patch", 
+              "patch",
               "create_file",
               "shell",
               "read_file",

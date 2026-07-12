@@ -871,22 +871,163 @@ end
 function M:has_searched(query) return self.search_history[query] ~= nil end
 function M:add_search_result(query, result) self.search_history[query] = result end
 
+-- ============================================================================
+-- MULTI-STRATEGY TOKEN ESTIMATOR
+-- Detects content type and uses appropriate divisors + structural overhead
+-- ============================================================================
+-- Per-text cache to avoid re-computing estimates on identical strings
+local _token_estimate_cache = {}
+local _cache_max_size = 1000
+local function _cache_get(text)
+    if not text then return nil end
+    return _token_estimate_cache[text]
+end
+local function _cache_set(text, value)
+    if not text then return end
+    -- Evict oldest entry if cache is full (simple LRU-ish: just clear half)
+    if next(_token_estimate_cache) then
+        local count = 0
+        for _ in pairs(_token_estimate_cache) do count = count + 1 end
+        if count >= _cache_max_size then
+            _token_estimate_cache = {}
+        end
+    end
+    _token_estimate_cache[text] = value
+end
+-- Content type detection heuristics
+local function _detect_content_type(text)
+    local len = #text
+    if len == 0 then return "empty" end
+    local code_score = 0
+    local xml_json_score = 0
+    local prose_score = 0
+    -- Code indicators
+    if text:match("function%s+") or text:match("def%s+") or text:match("class%s+") or
+       text:match("struct%s+") or text:match("import%s+") or text:match("require%(") or
+       text:match("local%s+") or text:match("var%s+") or text:match("let%s+") or
+       text:match("const%s+") or text:match("public%s+") or text:match("private%s+") or
+       text:match("static%s+") or text:match("void%s+") or text:match("int%s+") or
+       text:match("return%s+") or text:match("if%s+") or text:match("for%s+") or
+       text:match("while%s+") or text:match("switch%s+") or text:match("case%s+") then
+        code_score = code_score + 3
+    end
+    -- Code block markers
+    local fence_count = 0
+    for _ in text:gmatch("```") do fence_count = fence_count + 1 end
+    if fence_count > 0 then code_score = code_score + 2 end
+    -- Braces/brackets density (code tends to have more)
+    local brace_count = 0
+    for _ in text:gmatch("[{}()\\[\\]]") do brace_count = brace_count + 1 end
+    if brace_count > len * 0.02 then code_score = code_score + 1 end
+    -- XML/JSON indicators
+    if text:match("<[a-zA-Z_][a-zA-Z0-9_-]*%s") or text:match("</[a-zA-Z_]") or
+       text:match("<[a-zA-Z_][a-zA-Z0-9_-]*>") then
+        xml_json_score = xml_json_score + 2
+    end
+    if text:match('^%s*[{\\[]') or text:match('"[^"]*"%s*:') then
+        xml_json_score = xml_json_score + 2
+    end
+    -- Prose indicators (long sentences, punctuation)
+    local sentence_count = 0
+    for _ in text:gmatch("[.!?]%s") do sentence_count = sentence_count + 1 end
+    if sentence_count > 3 then prose_score = prose_score + 2 end
+    -- Average word length (prose tends to have shorter words)
+    local word_count = 0
+    local total_word_len = 0
+    for word in text:gmatch("%S+") do
+        word_count = word_count + 1
+        total_word_len = total_word_len + #word
+    end
+    if word_count > 0 then
+        local avg_word_len = total_word_len / word_count
+        if avg_word_len < 5 then prose_score = prose_score + 1 end
+    end
+    -- Decision
+    if code_score >= 4 then return "code" end
+    if xml_json_score >= 3 then return "xml_json" end
+    if code_score >= 2 then return "mixed" end
+    if prose_score >= 2 then return "prose" end
+    return "mixed" -- default fallback
+end
+-- Structural overhead calculation
+local function _calculate_structural_overhead(text, content_type)
+    local overhead = 0
+    -- XML tags: each tag adds ~2-3 tokens
+    local xml_tag_count = 0
+    for _ in text:gmatch("</?[a-zA-Z_][a-zA-Z0-9_-]*[^>]*>") do
+        xml_tag_count = xml_tag_count + 1
+    end
+    if xml_tag_count > 0 then
+        overhead = overhead + math.ceil(xml_tag_count * 2.5)
+    end
+    -- JSON structural chars: { } [ ] : ,
+    local json_struct_count = 0
+    for _ in text:gmatch("[{}\\[\\]:,]") do
+        json_struct_count = json_struct_count + 1
+    end
+    if json_struct_count > 10 then
+        overhead = overhead + math.ceil(json_struct_count * 0.5)
+    end
+    -- Markdown fences
+    local fence_count = 0
+    for _ in text:gmatch("```") do fence_count = fence_count + 1 end
+    if fence_count > 0 then
+        overhead = overhead + math.ceil(fence_count * 1.5)
+    end
+    -- Long identifiers (>30 chars) tend to be tokenized inefficiently
+    local long_id_count = 0
+    for id in text:gmatch("%S+") do
+        if #id > 30 and id:match("^[a-zA-Z0-9_./%-]+$") then
+            long_id_count = long_id_count + 1
+        end
+    end
+    if long_id_count > 0 then
+        overhead = overhead + long_id_count
+    end
+    return overhead
+end
 function M:estimate_tokens(text, agent_cfg)
-
-    if not text then return 0 end
-    local divisor = self.flow_config.token_estimation.chars_per_token or 3.5
-    return math.ceil(#text / divisor)
-    -- -- Allow per-agent override of chars_per_token for more accurate estimation
-    -- local divisor = (agent_cfg and agent_cfg.chars_per_token) or self.flow_config.token_estimation.chars_per_token or 3.5
-    -- local raw_tokens = math.ceil(#text / divisor)
-    -- -- Code-heavy penalty: detect code blocks and increase token estimate
-    -- -- Code typically uses fewer chars per token than prose
-    -- local code_penalty = 0
-    -- if text:match("```") or text:match("function ") or text:match("def ") or text:match("class ") or text:match("struct ") or text:match("import ") or text:match("require(") then
-    --     -- Add ~15% penalty for code-heavy content
-    --     code_penalty = math.ceil(raw_tokens * 0.15)
-    -- end
-    -- return raw_tokens + code_penalty
+    if not text or #text == 0 then return 0 end
+    -- Check cache first
+    local cached = _cache_get(text)
+    if cached then return cached end
+    -- Determine base divisor from config hierarchy:
+    -- 1. Per-agent override (agent_cfg.chars_per_token)
+    -- 2. Flow config default
+    -- 3. Hardcoded fallback
+    local base_divisor = self.flow_config.token_estimation.chars_per_token or 3.5
+    if agent_cfg and agent_cfg.chars_per_token then
+        base_divisor = agent_cfg.chars_per_token
+    end
+    -- Detect content type
+    local content_type = _detect_content_type(text)
+    -- Content-type-specific divisors
+    local divisors = {
+        code     = 2.5,   -- Code is denser: fewer chars per token
+        prose    = 3.5,   -- Natural language: standard ratio
+        mixed    = 3.0,   -- Mix of code and prose
+        xml_json = 3.2,   -- Structured data with tags/braces
+        empty    = 3.5,
+    }
+    -- Use content-type divisor if it differs significantly from base
+    local content_divisor = divisors[content_type] or base_divisor
+    -- Blend: if agent has explicit override, weight it more heavily
+    local effective_divisor
+    if agent_cfg and agent_cfg.chars_per_token then
+        -- 70% agent override, 30% content-type heuristic
+        effective_divisor = agent_cfg.chars_per_token * 0.7 + content_divisor * 0.3
+    else
+        -- Use content-type divisor directly
+        effective_divisor = content_divisor
+    end
+    -- Base token estimate
+    local raw_tokens = math.ceil(#text / effective_divisor)
+    -- Add structural overhead
+    local overhead = _calculate_structural_overhead(text, content_type)
+    local total = raw_tokens + overhead
+    -- Cache the result
+    _cache_set(text, total)
+    return total
 end
 
 function M:purge_images()
