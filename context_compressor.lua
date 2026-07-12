@@ -8,27 +8,17 @@ local M = {}
 -- ============================================================================
 
 M.DEFAULT_CONFIG = {
-
     zone1_size = 10,               -- Recent messages: keep verbatim
-
     zone2_size = 20,               -- Middle messages: light compression
-
-    max_tool_output_bytes = 2048,  -- Max bytes for tool output before compression
-
+    max_tool_output_bytes = 4096,  -- Increased from 2048 to 4096 for better context retention
     compress_thinking_blocks = true,
-
     preserve_errors = true,
-
-    max_shell_head_lines = 5,
-
-    max_shell_tail_lines = 10,
-
+    max_shell_head_lines = 10,     -- Increased from 5 to 10
+    max_shell_tail_lines = 20,     -- Increased from 10 to 20
     max_file_head_lines = 20,
-
     max_file_tail_lines = 20,
-
     max_search_results = 15,
-
+    max_error_output_bytes = 8192, -- Error outputs preserved up to 8KB
 }
 
 
@@ -117,76 +107,60 @@ end
 
 
 -- ============================================================================
-
--- 2. compress_tool_output(output)
-
--- Smart truncation based on output type
-
+-- 2. classify_tool_output(output)
+-- Classify output type for adaptive compression
 -- ============================================================================
-
-function M.compress_tool_output(output, config)
-
-    config = config or M.DEFAULT_CONFIG
-
-
-    if not output or #output == 0 then return output end
-
-    if #output <= config.max_tool_output_bytes then return output end
-
-
-    -- Preserve errors/stack traces if configured
-
-    if config.preserve_errors then
-
-        if output:match("error") or output:match("Error") or output:match("ERROR") or
-
-           output:match("traceback") or output:match("Traceback") or output:match("Exception") or
-
-           output:match("failed") or output:match("FAILED") or output:match("panic") then
-
-            -- Keep error messages intact but still truncate if extremely long
-
-            if #output > config.max_tool_output_bytes * 4 then
-
-                return M._truncate_middle(output, config.max_tool_output_bytes * 2)
-
-            end
-
-            return output
-
-        end
-
+function M.classify_tool_output(output)
+    if not output or #output == 0 then return "generic" end
+    -- Error outputs: contain error indicators
+    if output:match("[Ee][Rr][Rr][Oo][Rr]") or
+       output:match("[Ff][Aa][Ii][Ll][Ee][Dd]") or
+       output:match("[Pp][Aa][Tt][Cc][Hh] [Ff][Aa][Ii][Ll][Ee][Dd]") or
+       output:match("[Dd][Ii][Ss][Kk] [Ee][Rr][Rr][Oo][Rr]") or
+       output:match("[Ff][Aa][Tt][Aa][Ll]") or
+       output:match("[Tt][Rr][Aa][Cc][Ee][Bb][Aa][Cc][Kk]") or
+       output:match("[Ee][Xx][Cc][Ee][Pp][Tt][Ii][Oo][Nn]") then
+        return "error"
     end
-
-
-    -- Detect output type and apply specific compression
-
+    -- Shell outputs
     if output:match("^\\[SHELL OUTPUT\\]") or output:match("^\\[SHELL STDOUT") or
-
        output:match("^\\[SHELL STDERR") or output:match("^\\[SHELL") then
-
-        return M._compress_shell_output(output, config)
-
-    elseif output:match("^\\[SEARCH RESULTS\\]") or output:match("^=== SEARCH DIGEST ===") or
-
-           output:match("^\\[SEARCH") then
-
-        return M._compress_search_output(output, config)
-
-    elseif output:match("^\\[OUTPUT\\]") or output:match("^\\[RESULT\\]") or
-
-           output:match("^\\[FILE CONTENT\\]") then
-
-        return M._compress_generic_output(output, config)
-
-    else
-
-        -- Generic truncation
-
-        return M._truncate_middle(output, config.max_tool_output_bytes)
-
+        return "shell"
     end
-
+    -- Search results
+    if output:match("^\\[SEARCH RESULTS\\]") or output:match("^=== SEARCH DIGEST ===") or
+       output:match("^\\[SEARCH") then
+        return "search"
+    end
+    return "generic"
+end
+-- ============================================================================
+-- 3. compress_tool_output(output)
+-- Smart truncation based on output type (adaptive)
+-- ============================================================================
+function M.compress_tool_output(output, config)
+    config = config or M.DEFAULT_CONFIG
+    if not output or #output == 0 then return output end
+    -- Classify output type for adaptive strategy
+    local output_type = M.classify_tool_output(output)
+    -- Route to appropriate compression strategy based on classification
+    if output_type == "error" then
+        -- Error outputs: preserve up to 8KB for debugging
+        if #output <= config.max_error_output_bytes then
+            return output
+        end
+        return M._truncate_middle(output, config.max_error_output_bytes)
+    elseif output_type == "shell" then
+        return M._compress_shell_output(output, config)
+    elseif output_type == "search" then
+        return M._compress_search_output(output, config)
+    else
+        -- Generic outputs: use standard truncation
+        if #output <= config.max_tool_output_bytes then
+            return output
+        end
+        return M._truncate_middle(output, config.max_tool_output_bytes)
+    end
 end
 
 

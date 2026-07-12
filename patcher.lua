@@ -407,77 +407,88 @@ function M.apply_patch(original_content, llm_response)
 
 
                 else
-
                     -- C module failed: try Lua fallback that skips empty lines
-
                     local matches = find_all_matches_skip_empty(file_lines, s_lines)
-
                     if #matches > 0 then
-
                         for m = #matches, 1, -1 do
-
                             local mi = matches[m]
-
                             local fidx = mi
-
                             local sidx = 1
-
                             local span_end = mi
-
                             while sidx <= #s_lines and fidx <= #file_lines do
-
                                 if file_lines[fidx]:match("^%s*$") then
-
                                     fidx = fidx + 1
-
                                 elseif fuzzy_line_eq(file_lines[fidx], s_lines[sidx]) then
-
                                     sidx = sidx + 1
-
                                     span_end = fidx
-
                                     fidx = fidx + 1
-
                                 else
-
                                     break
-
                                 end
-
                             end
-
                             if sidx > #s_lines then
-
                                 local cnt = span_end - mi + 1
-
                                 for _ = 1, cnt do table.remove(file_lines, mi) end
-
                                 for ri = #r_lines, 1, -1 do table.insert(file_lines, mi, r_lines[ri]) end
-
                                 changes_count = changes_count + 1
-
                             end
-
                         end
-
                     else
-
-                        local snippet = s_str:sub(1, 100):gsub("\n", " ")
-
-                        if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
-
-                        local reason = err_msg or "Fuzzy failed in C module and Lua fallback"
-
-                        table.insert(errors, string.format("FAILED BLOCK: '%s' -> %s", snippet, reason))
-
+                        -- FALLBACK: Whitespace normalization (fuzzy whitespace match)
+                        -- Enabled by default (patcher_fuzzy_whitespace = true)
+                        local patcher_fuzzy_whitespace = true
+                        if patcher_fuzzy_whitespace then
+                            -- Create normalized search lines (trim leading/trailing whitespace)
+                            local norm_s_lines = {}
+                            for _, sl in ipairs(s_lines) do
+                                table.insert(norm_s_lines, sl:gsub("^%s+", ""):gsub("%s+$", ""))
+                            end
+                            -- Retry with normalized lines
+                            local norm_matches = find_all_matches_skip_empty(file_lines, norm_s_lines)
+                            if #norm_matches > 0 then
+                                for m = #norm_matches, 1, -1 do
+                                    local mi = norm_matches[m]
+                                    local fidx = mi
+                                    local sidx = 1
+                                    local span_end = mi
+                                    while sidx <= #norm_s_lines and fidx <= #file_lines do
+                                        if file_lines[fidx]:match("^%s*$") then
+                                            fidx = fidx + 1
+                                        else
+                                            -- Compare normalized versions
+                                            local file_norm = file_lines[fidx]:gsub("^%s+", ""):gsub("%s+$", "")
+                                            if file_norm == norm_s_lines[sidx] then
+                                                sidx = sidx + 1
+                                                span_end = fidx
+                                                fidx = fidx + 1
+                                            else
+                                                break
+                                            end
+                                        end
+                                    end
+                                    if sidx > #norm_s_lines then
+                                        local cnt = span_end - mi + 1
+                                        for _ = 1, cnt do table.remove(file_lines, mi) end
+                                        for ri = #r_lines, 1, -1 do table.insert(file_lines, mi, r_lines[ri]) end
+                                        changes_count = changes_count + 1
+                                    end
+                                end
+                            else
+                                local snippet = s_str:sub(1, 100):gsub("\n", " ")
+                                if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
+                                local reason = err_msg or "Fuzzy failed in C module, Lua fallback, and whitespace normalization"
+                                table.insert(errors, string.format("FAILED BLOCK: '%s' -> %s", snippet, reason))
+                            end
+                        else
+                            local snippet = s_str:sub(1, 100):gsub("\n", " ")
+                            if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
+                            local reason = err_msg or "Fuzzy failed in C module and Lua fallback"
+                            table.insert(errors, string.format("FAILED BLOCK: '%s' -> %s", snippet, reason))
+                        end
                     end
-
                 end
-
             end
-
         end
-
     end
 
     if changes_count > 0 then

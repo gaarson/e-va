@@ -73,6 +73,28 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
         history.add_message(ctx, agent_name, "user", dup_msg)
         return { type = "DUPLICATE", message = dup_msg }
     end
+    -- 2.6. Circuit breaker check: block tools in cooldown
+    local cb_config = ctx.config and ctx.config.CIRCUIT_BREAKER
+    if cb_config and cb_config.enabled then
+        ctx.circuit_breaker_state = ctx.circuit_breaker_state or {}
+        local tool_name_cb = cmd:match("^([^:]+)")
+        if tool_name_cb then
+            local cb_entry = ctx.circuit_breaker_state[tool_name_cb]
+            if cb_entry and cb_entry.triggered_turn then
+                local cooldown_until = cb_entry.triggered_turn + cb_config.cooldown_turns
+                if ctx.current_turn and ctx.current_turn < cooldown_until then
+                    local remaining = cooldown_until - ctx.current_turn
+                    local cb_msg = string.format(
+                        "[SYSTEM: CIRCUIT BREAKER] Tool '%s' is in cooldown due to repeated failures. " ..
+                        "Please wait %d turn(s) before retrying this tool. Try a different approach or tool.",
+                        tool_name_cb, remaining
+                    )
+                    history.add_message(ctx, agent_name, "user", cb_msg)
+                    return { type = "DUPLICATE", message = cb_msg }
+                end
+            end
+        end
+    end
     -- 3. Execution
     local res = registry.execute(cmd, ctx, agent_name)
     local tool_name = cmd:match("^([^:]+)")
@@ -95,6 +117,48 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
     end
     -- Record this command as executed for dedup purposes
     history.add_executed_command(ctx, cmd)
+    -- 3.5. Circuit breaker: track failures and successes
+    if cb_config and cb_config.enabled and tool_name then
+        local output_str = res.output or ""
+        local is_failure = false
+        -- Check for error indicators in output
+        if output_str:match("[Ee][Rr][Rr][Oo][Rr]") or
+           output_str:match("[Ff][Aa][Ii][Ll][Ee][Dd]") or
+           output_str:match("[Pp][Aa][Tt][Cc][Hh] [Ff][Aa][Ii][Ll][Ee][Dd]") or
+           output_str:match("[Dd][Ii][Ss][Kk] [Ee][Rr][Rr][Oo][Rr]") or
+           output_str:match("[Ff][Aa][Tt][Aa][Ll]") then
+            is_failure = true
+        end
+        -- Also check signal for failure indicators
+        if res.signal and (res.signal == "ERROR" or res.signal == "FAILURE") then
+            is_failure = true
+        end
+        local cb_entry = ctx.circuit_breaker_state[tool_name] or { failures = 0, triggered_turn = nil }
+        if is_failure then
+            cb_entry.failures = (cb_entry.failures or 0) + 1
+            -- Trigger circuit breaker if threshold reached
+            if cb_entry.failures >= cb_config.threshold then
+                cb_entry.triggered_turn = ctx.current_turn
+                ctx.circuit_breaker_state[tool_name] = cb_entry
+                -- Inject warning message if configured
+                if cb_config.warning_message then
+                    local warn_msg = string.format(
+                        "[SYSTEM: CIRCUIT BREAKER TRIGGERED] Tool '%s' has failed %d consecutive times. " ..
+                        "It will be blocked for %d turns. Consider alternative approaches.",
+                        tool_name, cb_entry.failures, cb_config.cooldown_turns
+                    )
+                    history.add_message(ctx, agent_name, "user", warn_msg)
+                end
+            else
+                ctx.circuit_breaker_state[tool_name] = cb_entry
+            end
+        else
+            -- Success: reset failure counter
+            cb_entry.failures = 0
+            cb_entry.triggered_turn = nil
+            ctx.circuit_breaker_state[tool_name] = cb_entry
+        end
+    end
     -- Add result to history as user/system
     if res.output then
         local sanitized_output = utils.sanitize_for_json(res.output)

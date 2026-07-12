@@ -428,6 +428,34 @@ end
 -- Public API: Start with pre-filled intent (skip INTENT phase)
 ------------------------------------------------------------------------
 
+-- ============================================================================
+-- COMPLEXITY HEURISTIC: Estimate task complexity to decide if review is needed
+-- ============================================================================
+local function estimate_complexity(tool_name, payload_hint, file_path)
+    -- Simple operations: non-code files with small payloads
+    local simple_extensions = { ".md", ".txt", ".json", ".cfg", ".yaml", ".toml", ".ini", ".env", ".lock", ".gitignore" }
+    local is_simple_ext = false
+    if file_path then
+        for _, ext in ipairs(simple_extensions) do
+            if file_path:match(ext .. "$") then
+                is_simple_ext = true
+                break
+            end
+        end
+    end
+    -- Check payload hint for simplicity indicators
+    local hint_lower = (payload_hint or ""):lower()
+    local is_small_payload = hint_lower:match("small") or hint_lower:match("simple") or hint_lower:match("single") or hint_lower:match("short") or hint_lower:match("<500") or hint_lower:match("<1000")
+    -- If it's a simple file type AND payload hint suggests small content, skip review
+    if is_simple_ext and is_small_payload then
+        return "simple"
+    end
+    -- For create_file with simple extensions, also consider simple
+    if tool_name == "create_file" and is_simple_ext then
+        return "simple"
+    end
+    return "complex"
+end
 function M:start_task_with_intent(task, project_context, tool_name, payload_hint, success_criteria, file_path)
     self:reset()
     -- Store pre-known file_path for selective multi-stage (patch/create_file)
@@ -444,6 +472,15 @@ function M:start_task_with_intent(task, project_context, tool_name, payload_hint
     local agent_cfg = self.ctx.config.AGENTS[self.agent_name]
     if agent_cfg and not registry.is_tool_allowed(agent_cfg, tool_name) then
         return { stage = "error", message = string.format("start_task_with_intent: tool '%s' is not allowed for agent '%s'.", tool_name, self.agent_name) }
+    end
+    -- COMPLEXITY HEURISTIC: Skip review cycle for simple operations
+    -- Optimization rationale: Simple file operations (config files, docs, small data files)
+    -- don't benefit from the review cycle and waste tokens/time. By detecting these
+    -- upfront, we can set max_iterations=1 to bypass the review phase entirely.
+    local complexity = estimate_complexity(tool_name, payload_hint, file_path)
+    if complexity == "simple" then
+        self.max_iterations = 1  -- Skip review cycle for simple operations
+        logger.info(string.format("[MULTI-STAGE] Complexity heuristic: '%s' classified as SIMPLE. Skipping review cycle.", tool_name))
     end
     self.task      = task
     self.intent    = {

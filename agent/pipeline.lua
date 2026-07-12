@@ -13,16 +13,27 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
     local current_stage_idx = 1
     local last_active_agent = nil
 
-    -- Helper: save state
+    -- Helper: save state (atomic write via temp file + rename)
     local function save_state()
         local snap = ctx:snapshot()
-        if snap then
-            local dir = state_file:match("(.*[/\\])")
-            if dir then
-                os.execute(string.format("mkdir -p '%s'", dir))
-            end
-            local f = io.open(state_file, "w")
-            if f then f:write(snap); f:close() end
+        if not snap then return end
+        local dir = state_file:match("(.*[/\\])")
+        if dir then
+            os.execute(string.format("mkdir -p '%s'", dir))
+        end
+        local tmp_file = state_file .. ".tmp"
+        local ok, err = pcall(function()
+            local f = io.open(tmp_file, "w")
+            if not f then error("Cannot open temp file: " .. tostring(err)) end
+            f:write(snap)
+            f:close()
+            -- Atomic rename
+            os.rename(tmp_file, state_file)
+        end)
+        if not ok then
+            logger.error(string.format("[STATE SAVE FAILED] %s", tostring(err)))
+            -- Clean up temp file on failure
+            os.execute(string.format("rm -f '%s'", tmp_file))
         end
     end
 
