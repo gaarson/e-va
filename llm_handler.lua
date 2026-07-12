@@ -11,28 +11,39 @@ local _DEDUP_WINDOW = 30 -- seconds: consider requests within this window as pot
 local _DEDUP_CLEANUP_INTERVAL = 60 -- seconds: purge entries older than this
 
 local function _request_hash(profile, messages, options)
-    -- Generate a deterministic hash from the request payload components
-    local h = ""
-    h = h .. (profile.model or "") .. "|"
-    h = h .. (profile.url or "") .. "|"
-    h = h .. (options and options.temperature or "") .. "|"
-    h = h .. (options and options.max_tokens or "") .. "|"
-    -- Hash the messages content (role + content for each message)
+    local parts = {
+        profile.model or "",
+        profile.url or "",
+        tostring(options and options.temperature or ""),
+        tostring(options and options.max_tokens or "")
+    }
+    
     if messages then
         for _, msg in ipairs(messages) do
+            table.insert(parts, msg.role or "")
             local content = msg.content or ""
             if type(content) == "table" then
                 content = json:encode(content)
             end
-            h = h .. (msg.role or "") .. ":" .. content .. "#"
+            table.insert(parts, content)
         end
     end
-    -- Simple hash: sum of byte values modulo a large prime, formatted as hex
-    local sum = 0
-    for i = 1, #h do
-        sum = (sum + string.byte(h, i)) % 4294967295
+    
+    -- Быстрая сборка строки без утечек памяти
+    local h = table.concat(parts, "|")
+    
+    -- Оптимизированный алгоритм хеширования (DJB2-подобный)
+    local hash = 5381
+    local len = #h
+    -- Если текст гигантский, хешируем чанками (шагами), чтобы не вешать процессор
+    local step = math.max(1, math.floor(len / 50000)) 
+    
+    for i = 1, len, step do
+        local byte = string.byte(h, i)
+        hash = ((hash * 33) + byte) % 4294967295
     end
-    return string.format("%08x", sum)
+    
+    return string.format("%08x", hash)
 end
 
 local function _cleanup_in_flight()
@@ -160,16 +171,19 @@ function M.send_request(profile, messages, options)
         patcher_core.setup_esc_monitor()
     end
 
-    for chunk in stream:each_chunk() do
-        -- Check for timeout BEFORE processing chunk (detects gaps between chunks)
-        -- print("\n[RAW CHUNK LENGTH]: ", #chunk)
+    while true do
+        -- Запрашиваем следующий чанк, отдавая контроль сети с таймаутом!
+        local chunk, err = stream:get_next_chunk(STREAM_TIMEOUT)
+        
+        if not chunk then
+            if err and err ~= "EOF" then
+                logger.warn("[STREAM] Network error or timeout reading chunk: " .. tostring(err))
+                is_timeout = true
+            end
+            break -- Конец стрима или ошибка/таймаут
+        end
 
         local now = socket.gettime()
-        if (now - last_activity_time) > STREAM_TIMEOUT then
-            is_timeout = true
-            logger.warn(string.format("[STREAM] Timeout after %.1f seconds of inactivity. Breaking stream loop.", now - last_activity_time))
-            break
-        end
         last_activity_time = now
 
         -- Check for ESC key or SIGINT

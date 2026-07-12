@@ -1,5 +1,6 @@
 local utils = require("utils")
 local inspect = require('inspect')
+local socket = require("socket")
 local agent_home = os.getenv("AGENT_HOME") or "."
 local project_root = os.getenv("PROJECT_ROOT") or "."
 
@@ -262,97 +263,10 @@ local function _run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_use
         return "ERROR"
     end
 end
-local function run_agent_turn_multi_stage(agent_name, agent_cfg, turn)
-    local multi_exec = multi_stage_executor.new(ctx, agent_name, {
-        max_iterations = agent_cfg.multi_stage_max_iterations or 3
-    })
-    -- Получаем задачу из последнего сообщения пользователя
-    local last_user_msg = nil
-    local history = ctx.history[agent_name] or {}
-    for i = #history, 1, -1 do
-        if history[i].role == "user" then
-            last_user_msg = history[i].content
-            break
-        end
-    end
-    if not last_user_msg or utils.trim(last_user_msg) == "" then
-        logger.warn("[MULTI-STAGE] No user message found to start task.")
-        return nil
-    end
-    logger.info(string.format("[MULTI-STAGE] Starting multi-stage execution for agent: %s", agent_name))
-    return _run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg, "MULTI-STAGE")
-end
 
 -- Shared helper: sends an LLM request with retry/stream/recovery logic.
 -- Used by both the main turn loop and the selective multi-stage loop.
-local function run_llm_request(agent_cfg, messages, label)
-    label = label or ""
-    local prefix = label ~= "" and string.format("[%s] ", label) or ""
-    io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", tostring(agent_cfg.name or "AGENT")))
-    local printer = utils.stream_token_printer(agent_cfg)
-    local response_data, err
-    local max_retries, retry_delay = 5, 5
-    logger.info(string.format('%s[STREAM] Sending request to model=%s, stream=true', prefix, agent_cfg.model))
-    for attempt = 1, max_retries do
-        response_data, err = llm.send_request(agent_cfg, messages, { on_token = printer })
-        if response_data then break end
-        if err == 'DUPLICATE_REQUEST_BLOCKED' then
-            logger.warn(string.format("%s[DEDUP] Duplicate request blocked on attempt %d. Waiting %ds before retry...", prefix, attempt, retry_delay))
-            os.execute("sleep " .. tostring(math.max(retry_delay, 5)))
-            retry_delay = retry_delay * 2
-        elseif type(err) == 'table' and err.type == 'CONTEXT_EXCEEDED' then
-            local new_val = context_optimizer.shrink_max_tokens(agent_cfg, config.AGENT_DEFAULTS.min_max_tokens or 1024)
-            logger.info(string.format('%s[CONTEXT OPTIMIZATION] Reduced max_tokens to %d', prefix, new_val))
-        else
-            logger.warn(string.format("%s[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", prefix, attempt, max_retries, tostring(err)))
-        end
-        if attempt < max_retries then
-            print(string.format("\27[33m[SYSTEM] Retrying in %d seconds...\27[0m", retry_delay))
-            os.execute("sleep " .. tostring(retry_delay))
-            retry_delay = retry_delay * 3
-        end
-    end
-    utils.flush_stream_buffer(printer)
-    if not response_data then
-        logger.error(string.format("%sFATAL: Network unreachable after %d attempts.", prefix, max_retries), err)
-        return nil, err
-    end
-    local content = ""
-    if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
-        content = response_data.choices[1].message.content
-    end
-    return content, nil
-end
 -- Circuit breaker state: tracks consecutive tool failures
-local tool_failure_counts = {}
-local function check_circuit_breaker(tool_name, agent_name)
-    if not tool_name then return end
-    local key = agent_name .. ":" .. tool_name
-    local failures = tool_failure_counts[key] or 0
-    local threshold = (config.CIRCUIT_BREAKER and config.CIRCUIT_BREAKER.threshold) or 3
-    if failures >= threshold then
-        logger.warn(string.format("[CIRCUIT BREAKER] Tool '%s' failed %d times consecutively for agent '%s'. Injecting warning.", tool_name, failures, agent_name))
-        ctx:add_message(agent_name, "user", string.format(
-            "[SYSTEM WARNING] Tool '%s' has failed %d consecutive times. Consider:\n" ..
-            "1. Re-reading the target file to ensure you have the latest content\n" ..
-            "2. Trying a different approach or tool\n" ..
-            "3. Breaking the task into smaller, more atomic steps",
-            tool_name, failures
-        ))
-        -- Reset counter after injecting warning
-        tool_failure_counts[key] = 0
-    end
-end
-local function record_tool_success(tool_name, agent_name)
-    if not tool_name then return end
-    local key = agent_name .. ":" .. tool_name
-    tool_failure_counts[key] = 0
-end
-local function record_tool_failure(tool_name, agent_name)
-    if not tool_name then return end
-    local key = agent_name .. ":" .. tool_name
-    tool_failure_counts[key] = (tool_failure_counts[key] or 0) + 1
-end
 local function run_agent_turn(agent_name, agent_cfg, turn)
     ctx.consecutive_recoveries = 0
     -- Process pending optimizations from previous turn (non-blocking)
@@ -395,7 +309,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             if err == 'DUPLICATE_REQUEST_BLOCKED' then
                 logger.warn(string.format("[DEDUP] Duplicate request blocked on attempt %d. Waiting %ds before retry...", attempt, retry_delay))
                 -- Wait longer to allow the in-flight request to complete
-                os.execute("sleep " .. tostring(math.max(retry_delay, 5)))
+                -- os.execute("sleep " .. tostring(math.max(retry_delay, 5)))
+                socket.sleep(math.max(retry_delay, 5))
                 retry_delay = retry_delay * 2
             elseif type(err) == 'table' and err.type == 'CONTEXT_EXCEEDED' then
                 local new_val = context_optimizer.shrink_max_tokens(agent_cfg, config.AGENT_DEFAULTS.min_max_tokens or 1024)
@@ -405,7 +320,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             end
             if attempt < max_retries then
                 print(string.format("\n\27[33m[NETWORK RETRY %d/%d] Retrying in %d seconds...\27[0m", attempt, max_retries, retry_delay))
-                os.execute("sleep " .. tostring(retry_delay))
+                -- os.execute("sleep " .. tostring(retry_delay))
+                socket.sleep(retry_delay)
                 retry_delay = retry_delay * 3
             end
         end
@@ -555,7 +471,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             rd, e = llm.send_request(cfg, msgs, { on_token = printer })
             if e == 'DUPLICATE_REQUEST_BLOCKED' then
                 logger.warn("[EMPTY RESPONSE] Duplicate request blocked. Waiting " .. base_delay .. "s...")
-                os.execute("sleep " .. tostring(base_delay))
+                -- os.execute("sleep " .. tostring(base_delay))
+                socket.sleep(base_delay)
                 rd, e = llm.send_request(cfg, msgs, { on_token = printer })
             end
             return rd, e
