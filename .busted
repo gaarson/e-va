@@ -1,0 +1,11 @@
+return {
+   pattern = "test_.*",
+   verbose = true,
+   keep_going = true,
+   coverage = true,
+   coverage_report_dir = "coverage",
+   picky = true,
+   plugins = {
+      "busted.output.plugins.prettyTerminal"
+   }
+}

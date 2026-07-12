@@ -15,9 +15,9 @@ if [ $# -eq 0 ]; then
     fi
     echo ">>> Discovered test directories:"
     echo "$TEST_DIRS"
-    ./lua_modules/bin/busted --coverage $TEST_DIRS
+    ./lua_modules/bin/busted --pattern='test_.*' --coverage $TEST_DIRS
 else
-    ./lua_modules/bin/busted --coverage "$@"
+    ./lua_modules/bin/busted --pattern='test_.*' --coverage "$@"
 fi
 TEST_STATUS=$?
 
