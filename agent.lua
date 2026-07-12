@@ -376,6 +376,17 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
             end
             if is_multi_stage_tool then
                 logger.info(string.format("[SELECTIVE MULTI-STAGE] Routing tool '%s' through multi-stage executor", tool_name))
+                -- Extract file_path from parsed_cmd for patch tool (first line after 'patch:')
+                local file_path = nil
+                if tool_name == "patch" then
+                    local args_part = parsed_cmd:match("^patch:%s*(.*)")
+                    if args_part then
+                        local first_line = args_part:match("^[^\r\n]+")
+                        if first_line then
+                            file_path = utils.trim(first_line)
+                        end
+                    end
+                end
                 -- Extract last user message for task context
                 local last_user_msg = nil
                 local history = ctx.history[agent_name] or {}
@@ -414,7 +425,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                     {
                         tool_name = tool_name,
                         payload_hint = "Refine and execute the payload for this tool based on the task context. Use the original command as a starting point.",
-                        success_criteria = success_criteria
+                        success_criteria = success_criteria,
+                        file_path = file_path
                     }
                 )
             end

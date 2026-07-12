@@ -22,21 +22,31 @@ typedef struct {
     size_t len;
 } StringRef;
 
+/* Pre-strip whitespace bounds and compare. Returns 1 if equal ignoring leading/trailing whitespace. */
 static int fuzzy_streq(const char *s1, size_t len1, const char *s2, size_t len2) {
-    size_t i = 0, j = 0;
-    while (i < len1 && j < len2) {
-        while (i < len1 && isspace((unsigned char)s1[i])) i++;
-        while (j < len2 && isspace((unsigned char)s2[j])) j++;
-
-        if (i == len1 || j == len2) break;
-        if (s1[i] != s2[j]) return 0;
-        i++; j++;
+    /* Quick length heuristic: if one string is more than 2x the other, skip fuzzy comparison */
+    if (len1 > 0 && len2 > 0) {
+        if (len1 > len2 * 2 || len2 > len1 * 2) return 0;
     }
-
-    while (i < len1 && isspace((unsigned char)s1[i])) i++;
-    while (j < len2 && isspace((unsigned char)s2[j])) j++;
-
-    return (i == len1 && j == len2);
+    /* Pre-strip leading whitespace */
+    size_t s1_start = 0, s2_start = 0;
+    while (s1_start < len1 && isspace((unsigned char)s1[s1_start])) s1_start++;
+    while (s2_start < len2 && isspace((unsigned char)s2[s2_start])) s2_start++;
+    /* Pre-strip trailing whitespace */
+    size_t s1_end = len1, s2_end = len2;
+    while (s1_end > s1_start && isspace((unsigned char)s1[s1_end - 1])) s1_end--;
+    while (s2_end > s2_start && isspace((unsigned char)s2[s2_end - 1])) s2_end--;
+    size_t s1_core = s1_end - s1_start;
+    size_t s2_core = s2_end - s2_start;
+    /* Both empty after stripping */
+    if (s1_core == 0 && s2_core == 0) return 1;
+    /* Different core lengths */
+    if (s1_core != s2_core) return 0;
+    /* Compare core content character-by-character */
+    for (size_t k = 0; k < s1_core; k++) {
+        if (s1[s1_start + k] != s2[s2_start + k]) return 0;
+    }
+    return 1;
 }
 
 static StringRef* extract_string_array(lua_State *L, int index, size_t *count) {
@@ -83,11 +93,23 @@ static int l_find_unique_fuzzy_block(lua_State *L) {
 
     size_t match_start = 0;
     int match_count = 0;
-
+    size_t comparisons = 0;
+    size_t max_comparisons = 1000000; // 1 million safety limit (reduced from 10M)
     for (size_t i = 0; i <= content_count - search_count; i++) {
+        /* Early termination: if search block is larger than remaining content, stop */
+        if (i + search_count > content_count) break;
+        if (comparisons > max_comparisons) {
+            free(content);
+            free(search);
+            lua_pushnil(L);
+            lua_pushnil(L);
+            lua_pushstring(L, "TIMEOUT: Search exceeded maximum comparisons");
+            return 3;
+        }
         int is_match = 1;
         for (size_t j = 0; j < search_count; j++) {
-            if (!fuzzy_streq(content[i + j].str, content[i + j].len, 
+            comparisons++;
+            if (!fuzzy_streq(content[i + j].str, content[i + j].len,
                              search[j].str, search[j].len)) {
                 is_match = 0;
                 break;

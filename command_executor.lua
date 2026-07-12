@@ -81,7 +81,8 @@ function M:parse_command(text)
 
     -- STRIP OUTER MARKDOWN FENCES ONLY:
     -- Check if the body is wrapped in matching ``` ... ``` fences.
-    -- Simplified: no inner-backtick counting; safeguard against nested commands.
+    -- CRITICAL: Never strip backticks that appear inside the payload.
+    -- Only strip if the ENTIRE body is wrapped in a single pair of fences.
     local function strip_outer_fences(lns)
         -- (1) Find first non-empty line
         local first = 1
@@ -89,16 +90,12 @@ function M:parse_command(text)
         -- (2) Find last non-empty line
         local last = #lns
         while last >= 1 and lns[last]:match("^%s*$") do last = last - 1 end
-
         if first > last then return lns end -- all empty
-
         local first_line = lns[first]
         local last_line  = lns[last]
-
         -- (3) Check if first line opens a fence and last line closes it
         local open_fence = first_line:match("^%s*(`+)%s*$") or first_line:match("^%s*(`+)%s*%w*$")
         local close_fence = last_line:match("^%s*(`+)%s*$")
-
         if open_fence and close_fence then
             -- (4) Verify backtick counts match
             if #open_fence == #close_fence then
@@ -110,8 +107,17 @@ function M:parse_command(text)
                         break
                     end
                 end
-                if not has_nested_command then
-                    -- (6) Remove the first and last fence lines
+                -- (6) SAFEGUARD: Check if there are OTHER backtick fences inside the body
+                -- If there are internal fences, do NOT strip the outer ones
+                local has_internal_fences = false
+                for i = first + 1, last - 1 do
+                    if lns[i]:match("^%s*`+`*%s*$") or lns[i]:match("^%s*`+`*%s*%w*$") then
+                        has_internal_fences = true
+                        break
+                    end
+                end
+                if not has_nested_command and not has_internal_fences then
+                    -- (7) Remove the first and last fence lines
                     local stripped = {}
                     for i = 1, first - 1 do stripped[#stripped + 1] = lns[i] end
                     for i = first + 1, last - 1 do stripped[#stripped + 1] = lns[i] end

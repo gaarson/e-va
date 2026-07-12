@@ -257,3 +257,70 @@ describe("patch tool handler (tools/patch.lua) — Integration", function()
         os.remove(tmpfile)
     end)
 end)
+describe("patcher.apply_patch — Performance tests", function()
+    it("should terminate quickly on large non-matching input", function()
+        -- Create a large file with 2000 lines
+        local lines = {}
+        for i = 1, 2000 do
+            table.insert(lines, string.format("local var_%d = %d", i, i))
+        end
+        local content = table.concat(lines, "\n")
+        -- Search for something that doesn't exist
+        local patch = "<<<<<<< SEARCH\nlocal nonexistent_var = 99999\n=======\nlocal replaced = 1\n>>>>>>> REPLACE"
+        local start_time = os.clock()
+        local ok, err = patcher.apply_patch(content, patch)
+        local elapsed = os.clock() - start_time
+        assert.are_false(ok)
+        assert(elapsed < 2.0, string.format("Took %.2fs, should be under 2s", elapsed))
+    end)
+    it("should handle files with many small differences without hanging", function()
+        -- Create old and new versions with many small differences
+        local old_lines = {}
+        local new_lines = {}
+        for i = 1, 500 do
+            if i % 10 == 0 then
+                table.insert(old_lines, string.format("local val_%d = OLD", i))
+                table.insert(new_lines, string.format("local val_%d = NEW", i))
+            else
+                table.insert(old_lines, string.format("local common_%d = %d", i, i))
+                table.insert(new_lines, string.format("local common_%d = %d", i, i))
+            end
+        end
+        local start_time = os.clock()
+        local diff = patcher.generate_unified_diff(old_lines, new_lines, "test.lua")
+        local elapsed = os.clock() - start_time
+        assert(diff ~= nil)
+        assert(diff ~= "")
+        assert(elapsed < 2.0, string.format("Diff generation took %.2fs, should be under 2s", elapsed))
+    end)
+    it("should handle large files (1000+ lines) with non-matching search blocks within reasonable time", function()
+        local lines = {}
+        for i = 1, 1500 do
+            table.insert(lines, string.format("line_%d = some_content_here_%d", i, i))
+        end
+        local content = table.concat(lines, "\n")
+        local patch = "<<<<<<< SEARCH\nline_999 = some_content_here_999\n=======\nline_999 = REPLACED\n>>>>>>> REPLACE"
+        local start_time = os.clock()
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        local elapsed = os.clock() - start_time
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("REPLACED"))
+        assert(elapsed < 3.0, string.format("Large file patch took %.2fs, should be under 3s", elapsed))
+    end)
+    it("should detect ambiguous match quickly", function()
+        -- Create content with many duplicate lines
+        local lines = {}
+        for i = 1, 1000 do
+            table.insert(lines, "local x = 1")
+        end
+        local content = table.concat(lines, "\n")
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local start_time = os.clock()
+        local ok, err = patcher.apply_patch(content, patch)
+        local elapsed = os.clock() - start_time
+        assert.are_false(ok)
+        assert(err:find("AMBIGUOUS", 1, true))
+        assert(elapsed < 2.0, string.format("Ambiguous detection took %.2fs, should be under 2s", elapsed))
+    end)
+end)

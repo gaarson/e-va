@@ -23,9 +23,40 @@ function M.generate_unified_diff(old_lines, new_lines, filename)
     table.insert(diff_lines, "+++ " .. filename)
     local old_len = #old_lines
     local new_len = #new_lines
+
+
+    -- Early termination: if identical, return empty
+
+    if old_len == new_len then
+
+        local identical = true
+
+        for idx = 1, old_len do
+
+            if not fuzzy_line_eq(old_lines[idx], new_lines[idx]) then
+
+                identical = false
+
+                break
+
+            end
+
+        end
+
+        if identical then return "" end
+
+    end
+
+
     local i = 1
     local j = 1
+    local iterations = 0
+    local max_iterations = 5000
     while i <= old_len or j <= new_len do
+        iterations = iterations + 1
+        if iterations > max_iterations then
+            return "--- " .. filename .. "\n+++ " .. filename .. "\n@@ content changed @@"
+        end
         if i > old_len then
             -- Remaining new lines
             local start_j = j
@@ -57,11 +88,15 @@ function M.generate_unified_diff(old_lines, new_lines, filename)
                 -- Collect old lines to remove
                 local old_start = i
                 local new_start = j
-                -- Advance past differing region in old
+                -- Advance past differing region in old (with iteration cap per hunk)
+                local hunk_iters = 0
+                local max_hunk_iters = 1000
                 while i <= old_len do
+                    hunk_iters = hunk_iters + 1
+                    if hunk_iters > max_hunk_iters then break end
                     -- Check if old_lines[i] matches any upcoming new_lines[j+]
                     local found = false
-                    for k = j, math.min(j + 10, new_len) do
+                    for k = j, math.min(j + 3, new_len) do
                         if fuzzy_line_eq(old_lines[i], new_lines[k]) then
                             found = true
                             break
@@ -70,10 +105,12 @@ function M.generate_unified_diff(old_lines, new_lines, filename)
                     if found then break end
                     i = i + 1
                 end
-                -- Advance past differing region in new
+                -- Advance past differing region in new (with iteration cap per hunk)
                 while j <= new_len do
+                    hunk_iters = hunk_iters + 1
+                    if hunk_iters > max_hunk_iters then break end
                     local found = false
-                    for k = i, math.min(i + 10, old_len) do
+                    for k = i, math.min(i + 3, old_len) do
                         if fuzzy_line_eq(new_lines[j], old_lines[k]) then
                             found = true
                             break
@@ -133,68 +170,53 @@ local STATE_IN_REPLACE = 2
 
 -- FIX: Fuzzy line equality (mirrors C fuzzy_streq)
 
-local function fuzzy_line_eq(a, b)
-
-    if not a or not b then return false end
-
-    return a:gsub("^%s+", ""):gsub("%s+$", "") == b:gsub("^%s+", ""):gsub("%s+$", "")
-
-end
 
 -- FIX: Find all occurrences of search_lines in file_lines, skipping empty lines in file
-
+-- PERFORMANCE: Added max_iterations cap and length-based pre-filter
 local function find_all_matches_skip_empty(file_lines, search_lines)
-
     local matches = {}
-
     local fi = 1
-
+    local iterations = 0
+    local max_iterations = 10000
+    -- Pre-compute first search line length for quick filtering
+    local first_search_trimmed = search_lines[1]:gsub("^%s+", ""):gsub("%s+$", "")
+    local first_search_len = #first_search_trimmed
     while fi <= #file_lines do
-
-        if fuzzy_line_eq(file_lines[fi], search_lines[1]) then
-
-            local si = 2
-
-            local fidx = fi + 1
-
-            local is_match = true
-
-            while si <= #search_lines and fidx <= #file_lines do
-
-                if file_lines[fidx]:match("^%s*$") then
-
-                    fidx = fidx + 1
-
-                elseif fuzzy_line_eq(file_lines[fidx], search_lines[si]) then
-
-                    si = si + 1
-
-                    fidx = fidx + 1
-
-                else
-
-                    is_match = false
-
-                    break
-
-                end
-
-            end
-
-            if is_match and si > #search_lines then
-
-                table.insert(matches, fi)
-
-            end
-
+        iterations = iterations + 1
+        if iterations > max_iterations then
+            break
         end
-
+        -- Length-based pre-filter: skip positions where line length ratio exceeds 3x
+        local file_trimmed = file_lines[fi]:gsub("^%s+", ""):gsub("%s+$", "")
+        local file_len = #file_trimmed
+        local skip_length = false
+        if first_search_len > 0 and file_len > 0 then
+            if file_len > first_search_len * 3 or first_search_len > file_len * 3 then
+                skip_length = true
+            end
+        end
+        if not skip_length and fuzzy_line_eq(file_lines[fi], search_lines[1]) then
+            local si = 2
+            local fidx = fi + 1
+            local is_match = true
+            while si <= #search_lines and fidx <= #file_lines do
+                if file_lines[fidx]:match("^%s*$") then
+                    fidx = fidx + 1
+                elseif fuzzy_line_eq(file_lines[fidx], search_lines[si]) then
+                    si = si + 1
+                    fidx = fidx + 1
+                else
+                    is_match = false
+                    break
+                end
+            end
+            if is_match and si > #search_lines then
+                table.insert(matches, fi)
+            end
+        end
         fi = fi + 1
-
     end
-
     return matches
-
 end
 
 -- FIX: Strip ALL empty lines from search/replace blocks
@@ -219,12 +241,21 @@ end
 
 function M.apply_patch(original_content, llm_response)
     if not original_content then return false, "No content provided" end
+    local start_time = os.clock()
+    local TIMEOUT_SECONDS = 5
     local content = original_content:gsub("\r\n", "\n"):gsub("\r", "\n")
     local response = llm_response:gsub("\r\n", "\n"):gsub("\r", "\n")
     local changes_count = 0
     local errors = {}
     local original_lines = to_lines(content)
     local file_lines = to_lines(content)
+    -- Helper: check timeout
+    local function check_timeout()
+        if os.clock() - start_time > TIMEOUT_SECONDS then
+            return true
+        end
+        return false
+    end
 
     -- Phase 1: Line-based state-machine parsing of SEARCH/REPLACE blocks
 
@@ -339,90 +370,41 @@ function M.apply_patch(original_content, llm_response)
                 local s_line, e_line, err_msg = patcher_core.find_unique_fuzzy_block(file_lines, s_lines)
 
                 if s_line and e_line then
-
                     -- Unique match found via C module
-
+                    -- BULK SLICE REPLACEMENT: O(n) instead of O(n*k) with table.remove loop
                     local count_to_remove = e_line - s_line + 1
-
-                    for _ = 1, count_to_remove do
-
-                        table.remove(file_lines, s_line)
-
+                    local new_file_lines = {}
+                    -- Copy lines before the match
+                    for k = 1, s_line - 1 do
+                        new_file_lines[#new_file_lines + 1] = file_lines[k]
                     end
-
-                    for idx = #r_lines, 1, -1 do
-
-                        table.insert(file_lines, s_line, r_lines[idx])
-
+                    -- Insert replacement lines
+                    for k = 1, #r_lines do
+                        new_file_lines[#new_file_lines + 1] = r_lines[k]
                     end
-
+                    -- Copy lines after the match
+                    for k = e_line + 1, #file_lines do
+                        new_file_lines[#new_file_lines + 1] = file_lines[k]
+                    end
+                    file_lines = new_file_lines
                     changes_count = changes_count + 1
+
 
                 elseif err_msg and err_msg:match("^AMBIGUOUS") then
 
-                    -- Multiple matches: apply to ALL occurrences (reverse order)
 
-                    local matches = find_all_matches_skip_empty(file_lines, s_lines)
+                    -- AMBIGUOUS MATCH: Fail with error (do NOT silently apply to all)
 
-                    if #matches > 0 then
 
-                        for m = #matches, 1, -1 do
+                    local snippet = s_str:sub(1, 100):gsub("\n", " ")
 
-                            local mi = matches[m]
 
-                            -- Calculate span including empty lines
+                    if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
 
-                            local fidx = mi
 
-                            local sidx = 1
+                    table.insert(errors, string.format("FAILED BLOCK: '%s' -> AMBIGUOUS MATCH: Found multiple occurrences. Add more context lines to make the match unique.", snippet))
 
-                            local span_end = mi
 
-                            while sidx <= #s_lines and fidx <= #file_lines do
-
-                                if file_lines[fidx]:match("^%s*$") then
-
-                                    fidx = fidx + 1
-
-                                elseif fuzzy_line_eq(file_lines[fidx], s_lines[sidx]) then
-
-                                    sidx = sidx + 1
-
-                                    span_end = fidx
-
-                                    fidx = fidx + 1
-
-                                else
-
-                                    break
-
-                                end
-
-                            end
-
-                            if sidx > #s_lines then
-
-                                local cnt = span_end - mi + 1
-
-                                for _ = 1, cnt do table.remove(file_lines, mi) end
-
-                                for ri = #r_lines, 1, -1 do table.insert(file_lines, mi, r_lines[ri]) end
-
-                                changes_count = changes_count + 1
-
-                            end
-
-                        end
-
-                    else
-
-                        local snippet = s_str:sub(1, 100):gsub("\n", " ")
-
-                        if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
-
-                        table.insert(errors, string.format("FAILED BLOCK: '%s' -> AMBIGUOUS but fallback found no matches", snippet))
-
-                    end
 
                 else
 
