@@ -39,6 +39,7 @@ function M.get()
             auto_squash_on_mutation = true,
             continuation_prompt = "check maybe you stuck or what maybe command invalid",
             reinforcement_interval = 5,
+            dedup_exceptions = { "task_complete", "delegate_plan" }, -- Commands exempt from dedup
         },
         token_estimation = {
             chars_per_token = 3.5,
@@ -90,7 +91,9 @@ function M.get()
         pass_requested_files = true,       -- Передавать файлы, запрошенные на предыдущем этапе
         pass_recent_tool_outputs = true,   -- Передавать результаты последних инструментов
         auto_load_plan_files = true,       -- Автоматически подгружать файлы из плана
-        max_knowledge_base_files = 50,     -- Максимальное количество файлов для передачи
+        max_knowledge_base_files = 100,    -- Increased from 50 to 100
+        pin_plan_targets = true,           -- NEW: Automatically pin all execution plan target files
+        max_delegate_file_tokens = 15000,  -- NEW: Max tokens per file for delegate_plan auto-loading
         -- NEW: Enable CODER to send error summaries back to ARCHITECT for plan adjustment
         feedback_to_architect = true,
         feedback_sections = { "tasks_completed", "tasks_failed", "errors_encountered", "plan_deviations", "recommendations" },

@@ -40,6 +40,7 @@ M.DEFAULT_CONFIG = {
         auto_squash_on_mutation = true,
         continuation_prompt = "ok",
         reinforcement_interval = 5, -- Каждые N ходов напоминаем о плане
+        dedup_exceptions = { "task_complete", "delegate_plan" }, -- Commands that should never be deduped
         allow_consecutive_assistant = false, -- Некоторые API требуют чередования ролей
     },
     -- Оценка токенов
@@ -459,8 +460,11 @@ end
 function M:is_duplicate_command(cmd)
     local normalized = _normalize_cmd(cmd)
     if normalized == "" then return false end
-    -- task_complete should never be considered a duplicate (terminal command)
-    if normalized == "task_complete" then return false end
+    -- Check config-driven dedup exceptions
+    local exceptions = self.flow_config.command_flow.dedup_exceptions or { "task_complete" }
+    for _, exc in ipairs(exceptions) do
+        if normalized == exc then return false end
+    end
     for _, prev_cmd in ipairs(self.executed_commands) do
         if prev_cmd == normalized then
             return true
@@ -629,23 +633,35 @@ function M:get_recency_block()
     if #self.last_actions > 0 then
         table.insert(parts, "<last_actions>" .. self:get_actions_text() .. "</last_actions>")
     end
-
+    -- Build set of execution_plan target files for full-content display
+    local plan_target_files = {}
+    if self.execution_plan and #self.execution_plan > 0 then
+        for _, task in ipairs(self.execution_plan) do
+            if task.file then
+                local rel_path = utils.normalize_path(self.config.PROJECT_ROOT, task.file)
+                plan_target_files[rel_path] = true
+            end
+        end
+    end
     if self.flow_config.storage.include_pinned_in_recency then
         for path,_ in pairs(self.pinned_files) do
             if not self.turn_requested_files[path] and self.knowledge_base[path] then
                 local content = self.knowledge_base[path]
-                if self.promoted_files and self.promoted_files[path] then
+                local is_plan_target = plan_target_files[path]
+                -- For files that are BOTH pinned AND in execution_plan: show FULL content
+                -- For other pinned files: apply truncation only if promoted
+                if not is_plan_target and self.promoted_files and self.promoted_files[path] then
                     local max_display_len = 200
                     if #content > max_display_len then
                         content = content:sub(1, max_display_len) .. "\n...[TRUNCATED: Full content moved to conversation history]..."
                     end
                 end
+                -- Plan targets always get full content regardless of promoted status
                 table.insert(parts, string.format("<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>",
                     path, content))
             end
         end
     end
-
     return table.concat(parts, "\n")
 end
 
@@ -775,9 +791,42 @@ function M:process_turn_response(agent_name, raw_content, executor)
     end
     -- 2.5. Deduplication check: block duplicate commands
     if self:is_duplicate_command(cmd) then
+        -- Find the previous output of this command from history so the model can see the result
+        local prev_output = ""
+        local history = self:get_history(agent_name)
+        -- Search backwards through history for the last user message that contains output from this command
+        local tool_name = cmd:match("^([^:]+)")
+        for j = #history, 1, -1 do
+            local msg = history[j]
+            if msg.role == "user" and msg.content and #msg.content > 10 then
+                -- Look for tool output markers that match the command
+                if tool_name then
+                    if msg.content:match("\[" .. tool_name:upper() .. "\]") or 
+                       msg.content:match("\[OUTPUT\]") or 
+                       msg.content:match("\[RESULT\]") or 
+                       msg.content:match("^\[SEARCH") or 
+                       msg.content:match("^\[SYSTEM") then
+                        prev_output = msg.content
+                        break
+                    end
+                else
+                    prev_output = msg.content
+                    break
+                end
+            end
+        end
+        local prev_output_section = ""
+        if prev_output and #prev_output > 0 then
+            -- Truncate if too long
+            if #prev_output > 4096 then
+                prev_output = prev_output:sub(1, 4096) .. "\n...(truncated)"
+            end
+            prev_output_section = "\n\n--- PREVIOUS OUTPUT (this command was already executed) ---\n" .. prev_output .. "\n--- END PREVIOUS OUTPUT ---"
+        end
         local dup_msg = string.format(
-            "[SYSTEM: DUPLICATE COMMAND BLOCKED] You already executed this command recently:\n||| COMMAND |||\n%s\n||| END_COMMAND |||\nPlease proceed to the next step or issue a different command.",
-            cmd
+            "[SYSTEM: DUPLICATE COMMAND BLOCKED] You already executed this command recently:\n||| COMMAND |||\n%s\n||| END_COMMAND |||%s\nPlease proceed to the next step or issue a different command.",
+            cmd,
+            prev_output_section
         )
         self:add_message(agent_name, "user", dup_msg)
         return { type = "DUPLICATE", message = dup_msg }
@@ -1668,64 +1717,82 @@ function M:get_handoff_files()
 end
 
 -- НОВЫЙ: Метод для инъекции файлов в контекст следующего этапа
+-- ENHANCED: Prioritizes execution_plan files, adds PINNED_TARGETS section, no truncation for plan targets
 function M:inject_handoff_files(agent_name)
     local files_to_pass = self:get_handoff_files()
     if not next(files_to_pass) then return end
     local parts = {}
     local history = self:get_history(agent_name)
-    for path, _ in pairs(files_to_pass) do
-        local content = self.knowledge_base[path]
-        if content then
-            local is_in_history = false
-            local escaped_path = path:gsub("[%(%)%.%%%+%-%*%?%[%^%$%|]", "%%%1")
-
-            local tag_pattern = "<file_context%s+path=\"" .. escaped_path .. "\""
-
-            for _, msg in ipairs(history) do
-
-                if msg.content and string.find(msg.content, tag_pattern, 1, true) then
-
-                    is_in_history = true
-
-                    break
-
-                end
-
+    -- Build set of execution_plan target files for prioritization
+    local plan_target_files = {}
+    if self.execution_plan and #self.execution_plan > 0 then
+        for _, task in ipairs(self.execution_plan) do
+            if task.file then
+                local rel_path = utils.normalize_path(self.config.PROJECT_ROOT, task.file)
+                plan_target_files[rel_path] = true
             end
-
-
-            if not is_in_history then
-
-                local status = "READ_ONLY"
-
-                if self.pinned_files[path] then status = "PINNED"
-
-                elseif self.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
-
-                self:pin_file(path)
-
-                table.insert(parts, string.format(
-
-                    "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
-
-                    path, status, content
-
-                ))
-
-            end
-
         end
-
     end
-
+    -- PINNED_TARGETS list for the summary section
+    local pinned_targets = {}
+    -- Helper: check if file is already in history
+    local function is_in_history(path)
+        local escaped_path = path:gsub("[%(%)%.%%%+%-%*%?%[%^%$%|]", "%%%1")
+        local tag_pattern = "<file_context%s+path=\"" .. escaped_path .. "\""
+        for _, msg in ipairs(history) do
+            if msg.content and string.find(msg.content, tag_pattern, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+    -- Helper: determine status and inject file content
+    local function inject_file(path, content)
+        if is_in_history(path) then return end
+        local status = "READ_ONLY"
+        if self.pinned_files[path] then status = "PINNED"
+        elseif self.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
+        -- Ensure file is pinned
+        self:pin_file(path)
+        -- Calculate line count for metadata
+        local line_count = select(2, content:gsub("\n", "\n"))
+        -- For plan target files: ALWAYS show full content (no truncation)
+        -- For non-plan files: also show full content (handoff files should be complete)
+        local display_content = content
+        table.insert(parts, string.format(
+            "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
+            path, status, display_content
+        ))
+        -- Track pinned targets for summary
+        if plan_target_files[path] then
+            table.insert(pinned_targets, string.format("%s (%d lines)", path, line_count))
+        end
+    end
+    -- PHASE 1: Inject execution_plan target files FIRST (highest priority)
+    for path, _ in pairs(files_to_pass) do
+        if plan_target_files[path] and self.knowledge_base[path] then
+            inject_file(path, self.knowledge_base[path])
+        end
+    end
+    -- PHASE 2: Inject remaining files (pinned, requested, knowledge_base)
+    for path, _ in pairs(files_to_pass) do
+        if not plan_target_files[path] and self.knowledge_base[path] then
+            inject_file(path, self.knowledge_base[path])
+        end
+    end
     if #parts > 0 then
-
-        local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n")
-
+        -- Build PINNED_TARGETS summary section
+        local pinned_targets_section = ""
+        if #pinned_targets > 0 then
+            pinned_targets_section = "\n<PINNED_TARGETS>\nThe following execution plan target files are pinned and fully loaded:\n"
+            for _, pt in ipairs(pinned_targets) do
+                pinned_targets_section = pinned_targets_section .. "  - " .. pt .. "\n"
+            end
+            pinned_targets_section = pinned_targets_section .. "</PINNED_TARGETS>"
+        end
+        local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n") .. pinned_targets_section
         self:add_message(agent_name, "user", block)
-
     end
-
 end
 
 

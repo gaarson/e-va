@@ -28,7 +28,9 @@ local function register(registry)
             
             -- НОВЫЙ: Автоматически подгружаем файлы из плана
             local loaded_files = {}
-            local max_files = 5 -- Ограничение на количество файлов в одном плане
+            local pinned_files_list = {}
+            local max_files = 15 -- Increased from 5 to 15
+            local max_tokens_per_file = 15000 -- Increased from 5000 to 15000
             for _, task in ipairs(plan) do
                 if task.file and #loaded_files < max_files then
                     local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, task.file)
@@ -36,12 +38,13 @@ local function register(registry)
                         local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
                         local content = utils.read_file_range(full_path)
                         if content then
-                            -- Проверка размера файла (не более 5000 токенов)
+                            -- Проверка размера файла (не более 15000 токенов)
                             local token_count = ctx:estimate_tokens(content)
-                            if token_count <= 5000 then
+                            if token_count <= max_tokens_per_file then
                                 ctx:add_file(rel_path, content)
                                 ctx:pin_file(rel_path)
                                 table.insert(loaded_files, rel_path)
+                                table.insert(pinned_files_list, string.format("%s (%d tokens)", rel_path, token_count))
                             else
                                 logger.warn(string.format("[DELEGATE] File %s too large (%d tokens), skipping.", rel_path, token_count))
                             end
@@ -49,10 +52,17 @@ local function register(registry)
                     end
                 end
             end
-
+            -- Add pin_files array to plan payload for context_flow awareness
+            if type(payload) == "table" then
+                payload.pin_files = loaded_files
+            end
             local auto_msg = ""
             if #loaded_files > 0 then
                 auto_msg = " Auto-loaded targets into context: " .. table.concat(loaded_files, ", ")
+                auto_msg = auto_msg .. "\n[PINNED CONFIRMATION] The following files are pinned and prioritized:\n"
+                for _, pf in ipairs(pinned_files_list) do
+                    auto_msg = auto_msg .. "  - " .. pf .. "\n"
+                end
             end
             
             return { output = "\n[SYSTEM]: Plan delegated successfully." .. auto_msg, signal = "PIPELINE_NEXT_STAGE" }
