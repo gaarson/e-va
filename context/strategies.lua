@@ -4,8 +4,10 @@
 
 
 local M = {}
-
 local utils = require("utils")
+local config = require("context.config")
+-- Re-export IMPORTANCE_SCORES from config for backward compatibility
+M.IMPORTANCE_SCORES = config.IMPORTANCE_SCORES
 
 
 -- ============================================================================

@@ -45,19 +45,13 @@ M.DEFAULT_CONFIG = {
     },
 
     command_flow = {
-
         strict_parsing = true,
-
         max_retries = 3,
-
         auto_squash_on_mutation = true,
-
         continuation_prompt = "ok",
-
         reinforcement_interval = 5,
-
+        dedup_exceptions = { "task_complete", "delegate_plan" },
         allow_consecutive_assistant = false,
-
     },
 
     token_estimation = {
@@ -136,20 +130,12 @@ M.DEFAULT_CONFIG = {
 
 
 M.IMPORTANCE_SCORES = {
-
     TASK_DESCRIPTION = 100,
-
     USER_QUESTION = 80,
-
     ASSISTANT_REASONING = 40,
-
     TOOL_OUTPUT = 20,
-
     SQUASHED_MUTATION = 5,
-
 }
-
-
 function M.apply_model_profile(flow_config, profile_name)
 
     if not profile_name or not flow_config.model_profiles[profile_name] then
