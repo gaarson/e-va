@@ -747,6 +747,7 @@ function M:feed_execution_result(output)
     self.last_result = enriched_result
     self.state       = M.STATES.REVIEWING
     return { stage = "review", prompt = self:build_review_prompt() }
+  end
 end
 
 ------------------------------------------------------------------------
