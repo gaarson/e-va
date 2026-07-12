@@ -15,7 +15,6 @@ local mock_registry = {
     tools = {
         patch = { desc = "Applies diffs" },
         create_file = { desc = "Creates files" },
-        batch_patch = { desc = "Batch patches" },
         delegate_plan = { desc = "Delegates plans" },
         shell = { desc = "Shell commands" },
     },
@@ -44,7 +43,7 @@ local function mock_ctx()
             AGENTS = {
                 TEST_AGENT = {
                     name = "TEST_AGENT",
-                    allowed_tools = {"patch", "create_file", "batch_patch", "delegate_plan", "shell"}
+                    allowed_tools = {"patch", "create_file", "delegate_plan", "shell"}
                 }
             },
             PROJECT_ROOT = "."
@@ -162,13 +161,6 @@ do
     local result = exec:feed_execution_result({ output = "[SUCCESS]: Applied 1 patch block(s) to src/test.lua.", signal = "MUTATION_SUCCESS" })
     assert_truthy(exec.last_result:find("<file_content_after_patch"), "Includes file_content_after_patch tag")
     assert_truthy(exec.last_result:find("local x = 1"), "Contains original file content (before patch would be applied)")
-    -- Test 2.2: batch_patch tool includes file content
-    exec:reset()
-    exec.intent = { TOOL = "batch_patch", raw = "test" }
-    exec.payload = "src/test.lua\n<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 10\n>>>>>>> REPLACE"
-    exec.state = multi_stage.STATES.COMMAND_READY
-    result = exec:feed_execution_result({ output = "[SUCCESS]: Batch patch applied." })
-    assert_truthy(exec.last_result:find("<file_content_after_patch"), "batch_patch includes file content")
     -- Test 2.3: Non-patch tool does NOT include file content enrichment
     exec:reset()
     exec.intent = { TOOL = "shell", raw = "test" }

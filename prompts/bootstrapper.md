@@ -23,9 +23,8 @@ To design an effective pipeline, you MUST understand how the E-va engine operate
 Do not give all tools to all agents. Implement Least Privilege:
 
 * **Discovery Tools**: `explore_tree`, `outline`, `search`, `read_file`, `read_chunk`.
-* **Action Tools**: `patch`, `create_file`, `shell`, `rollback`, `cleanup_baks`.
+* **Action Tools**: `patch`, `create_file`, `shell`.
 * **Control Tools**: `delegate_plan`, `task_complete`, `pin`, `unpin`, `ask_user`.
-* **Advanced Diagnostics**: `trace_execution` (eBPF tracing, requires root/privileged container).
 
 ### D. Pipeline Routing
 

@@ -167,7 +167,8 @@ local function _run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_use
             ctx.file_tree or "",
             intent_params.tool_name,
             intent_params.payload_hint,
-            intent_params.success_criteria
+            intent_params.success_criteria,
+            intent_params.file_path
         )
     else
         -- Normal mode: start with INTENT phase
@@ -412,7 +413,8 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
                 )
                 -- Create multi-stage executor and use shared loop function
                 local multi_exec = multi_stage_executor.new(ctx, agent_name, {
-                    max_iterations = agent_cfg.multi_stage_max_iterations or 3
+                    max_iterations = agent_cfg.multi_stage_max_iterations or 3,
+                    file_path = file_path
                 })
                 -- Use shared function with skip_intent=true to preserve the agent's original tool choice
                 return _run_multi_stage_loop(

@@ -226,8 +226,6 @@ function M.get()
               "read_file",
               "read_chunk",
               "search",
-              "rollback",
-              "cleanup_baks",
               "task_complete",
               "outline",
               "pin",

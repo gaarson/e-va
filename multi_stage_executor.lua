@@ -29,30 +29,51 @@ M.STATES = {
 
 M.TOOL_GENERATE_HINTS = {
 
+
     patch = [[
+
 
 PAYLOAD FORMAT FOR `patch`:
 
-Line 1: FILE PATH (relative or absolute)
-Then: SEARCH/REPLACE diff blocks.
+
+IMPORTANT: If the prompt states "FILE PATH IS ALREADY PROVIDED: <path>",
+
+DO NOT repeat the file path. Output ONLY SEARCH/REPLACE diff blocks.
+
+Otherwise, include the file path as the first line.
+
 
 <<<<<<< SEARCH
+
 <exact lines from the file, 2-4 lines of UNCHANGED context>
+
 <lines to replace>
+
 <more unchanged context>
+
 =======
+
 <exact same unchanged context lines>
+
 <new replacement lines>
+
 <same unchanged context lines>
+
 >>>>>>> REPLACE
 
+
 RULES:
+
 - SEARCH block MUST match the actual file content EXACTLY (character-for-character).
+
 - Include 2-4 lines of unchanged context around the change to make the match unique.
+
 - The unchanged context lines must appear IDENTICALLY in both SEARCH and REPLACE blocks.
+
 - Do NOT wrap in code fences. Do NOT add explanations.
-- First line must be the file path, followed by the diff blocks.
+
 - If multiple changes in the same file, output multiple SEARCH/REPLACE blocks sequentially.
+
 
 ]],
 
@@ -70,34 +91,6 @@ RULES:
 - Content must be syntactically valid for the target language.
 - If the file already exists, it will be overwritten (backup created if configured).
 - Directories will be auto-created if they don't exist.
-
-]],
-
-    batch_patch = [[
-
-PAYLOAD FORMAT FOR `batch_patch`:
-
-file_path_1
-<<<<<<< SEARCH
-<context + old code>
-=======
-<context + new code>
->>>>>>> REPLACE
----FILE---
-file_path_2
-<<<<<<< SEARCH
-<context + old code>
-=======
-<context + new code>
->>>>>>> REPLACE
-
-RULES:
-- Each file starts with its path on a single line.
-- Followed by one or more SEARCH/REPLACE blocks.
-- Separate files with ---FILE--- on its own line.
-- Every SEARCH block needs 2-4 lines of unchanged context.
-- Order matters if patches are interdependent.
-- No JSON wrapping. Raw text format only.
 
 ]],
 
@@ -155,18 +148,6 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `create_file`:
 - [ ] Does the content follow project conventions?
 - [ ] Are there no syntax errors in the created file?
 - [ ] If revision was requested, were the reviewer's corrections applied correctly?
-
-]],
-
-    batch_patch = [[
-
-TOOL-SPECIFIC REVIEW CHECKS FOR `batch_patch`:
-
-- [ ] Was the format valid (file paths, ---FILE--- separators, SEARCH/REPLACE blocks)?
-- [ ] Did ALL patches apply successfully (no partial failures)?
-- [ ] Were patches applied in the correct dependency order?
-- [ ] Does every SEARCH block have sufficient context?
-- [ ] If revision was requested, were only the failed patches corrected?
 
 ]],
 
@@ -284,7 +265,7 @@ local function validate_payload(tool_name, payload)
         if not data.memo or utils.trim(data.memo) == "" then
             return false, "delegate_plan payload missing or empty 'memo' field."
         end
-    elseif tool_name == "patch" or tool_name == "batch_patch" then
+    elseif tool_name == "patch" then
         -- Must contain at least one SEARCH/REPLACE block
         if not payload:find("<<<<<<< SEARCH") then
             return false, tool_name .. " payload must contain at least one SEARCH/REPLACE block."
@@ -445,17 +426,83 @@ function M:build_intent_prompt(task, project_context)
     })
 end
 
+
 function M:build_generate_prompt()
+
     local tool_name = self.intent and self.intent.TOOL or ""
+
     local tool_hint = M.TOOL_GENERATE_HINTS[tool_name] or ""
+
     local hint_block = ""
+
     if tool_hint ~= "" then
+
+        -- For patch tool, dynamically adjust hint based on whether file_path is pre-known
+
+        if tool_name == "patch" and self.file_path and self.file_path ~= "" then
+
+            tool_hint = string.format([=[
+
+PAYLOAD FORMAT FOR `patch`:
+
+
+FILE PATH IS ALREADY PROVIDED: %s
+
+DO NOT repeat the file path in your output.
+
+
+Output ONLY SEARCH/REPLACE diff blocks:
+
+
+<<<<<<< SEARCH
+
+<exact lines from the file, 2-4 lines of UNCHANGED context>
+
+<lines to replace>
+
+<more unchanged context>
+
+=======
+
+<exact same unchanged context lines>
+
+<new replacement lines>
+
+<same unchanged context lines>
+
+>>>>>>> REPLACE
+
+
+RULES:
+
+- SEARCH block MUST match the actual file content EXACTLY (character-for-character).
+
+- Include 2-4 lines of unchanged context around the change to make the match unique.
+
+- The unchanged context lines must appear IDENTICALLY in both SEARCH and REPLACE blocks.
+
+- Do NOT wrap in code fences. Do NOT add explanations.
+
+- Do NOT include the file path. Output ONLY the SEARCH/REPLACE blocks.
+
+- If multiple changes in the same file, output multiple SEARCH/REPLACE blocks sequentially.
+
+]=], self.file_path)
+
+        end
+
         hint_block = "\n\n" .. tool_hint
+
     end
+
     return render(self.prompts.generate, {
+
         intent_text = self.intent_raw or "",
+
         tool_specific_hint = hint_block,
+
     })
+
 end
 
 function M:build_review_prompt()
@@ -484,8 +531,12 @@ end
 
 ------------------------------------------------------------------------
 
-function M:start_task_with_intent(task, project_context, tool_name, payload_hint, success_criteria)
+function M:start_task_with_intent(task, project_context, tool_name, payload_hint, success_criteria, file_path)
     self:reset()
+    -- Store pre-known file_path for selective multi-stage (patch/create_file)
+    if file_path and file_path ~= "" then
+        self.file_path = utils.trim(file_path)
+    end
     -- Validate tool_name exists in registry and is allowed for the agent
     if not tool_name or utils.trim(tool_name) == "" then
         return { stage = "error", message = "start_task_with_intent: tool_name is empty." }
@@ -565,7 +616,12 @@ function M:feed_response(llm_response)
             return { stage = "error", message = "Payload validation failed: " .. err_msg }
         end
         self.state   = M.STATES.COMMAND_READY
-        return { stage = "execute", tool = self.intent.TOOL, payload = self.payload }
+        -- If file_path is pre-known for patch tool, prepend it to payload for the tool handler
+        local effective_payload = self.payload
+        if self.intent.TOOL == "patch" and self.file_path and self.file_path ~= "" then
+            effective_payload = self.file_path .. "\n" .. self.payload
+        end
+        return { stage = "execute", tool = self.intent.TOOL, payload = effective_payload }
     end
     if self.state == M.STATES.REVIEWING then
         -- ADAPTIVE TOKEN BUDGET CHECK: Force-approve if we've exceeded the calculated budget
@@ -657,26 +713,19 @@ function M:feed_execution_result(output)
     if enriched_result == "" then
         enriched_result = "<empty output>"
     end
-    -- For patch/batch_patch tools, inject file content after patching for reviewer verification
     local tool_name = self.intent and self.intent.TOOL or ""
-    if tool_name == "patch" or tool_name == "batch_patch" then
+    if tool_name == "patch" then
         -- Extract file path(s) from the payload (may be nil if not set yet)
         local file_paths_list = {}
         if self.payload then
-            if tool_name == "patch" then
-                -- First line of payload is the file path
+        if tool_name == "patch" then
+            -- Use pre-known file_path if available, otherwise extract from payload
+            if self.file_path and self.file_path ~= "" then
+                file_paths_list[#file_paths_list + 1] = self.file_path
+            else
                 local first_line = self.payload:match("^[^\r\n]+")
                 if first_line and utils.trim(first_line) ~= "" then
                     file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
-                end
-            elseif tool_name == "batch_patch" then
-                -- Extract file paths from batch_patch payload (lines before SEARCH blocks, separated by ---FILE---)
-                for line in self.payload:gmatch("[^\r\n]+") do
-                    local trimmed = utils.trim(line)
-                    if trimmed ~= "" and not trimmed:match("^<<<<<<") and not trimmed:match("^=======") and not trimmed:match("^>>>>>>") and trimmed ~= "---FILE---" then
-                        file_paths_list[#file_paths_list + 1] = trimmed
-                        break  -- Just get the first file path for now
-                    end
                 end
             end
         end
@@ -794,7 +843,6 @@ SUCCESS_CRITERIA: <concrete, verifiable success criteria>
 TOOL SELECTION GUIDELINES:
 - `patch`: Use when modifying an existing file. You MUST know the exact file content. Include sufficient SEARCH context.
 - `create_file`: Use when creating a brand-new file. Provide complete, valid file content.
-- `batch_patch`: Use when modifying multiple files in one atomic operation. Requires JSON format.
 - `delegate_plan`: Use to delegate work to another agent (CODER). Provide a structured plan with memo context.
 
 Rules:

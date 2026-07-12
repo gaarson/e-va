@@ -12,7 +12,6 @@ package.preload["tool_registry"] = function()
         shell = { name = "shell", desc = "Run shell commands" },
         read_file = { name = "read_file", desc = "Read files" },
         delegate_plan = { name = "delegate_plan", desc = "Delegate plans" },
-        batch_patch = { name = "batch_patch", desc = "Batch patches" },
     }
     function M.is_tool_allowed(agent_cfg, tool_name)
         if not agent_cfg or not agent_cfg.allowed_tools then return true end
@@ -165,7 +164,7 @@ local function make_mock_ctx()
             PROJECT_ROOT = "/tmp/test_project",
             AGENTS = {
                 test_agent = {
-                    allowed_tools = {"patch", "create_file", "shell", "read_file", "delegate_plan", "batch_patch"}
+                    allowed_tools = {"patch", "create_file", "shell", "read_file", "delegate_plan"}
                 }
             },
             CREATE_BACKUPS = false

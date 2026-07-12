@@ -237,20 +237,9 @@ end
 - Agents can use `mcp_browser_*` tools if configured in `config.lua`
 - Available tools: `navigate`, `screenshot`, `click`, `fill`, `evaluate_script`, etc.
 
-## 9. Advanced: eBPF Tracing
-For `trace_execution` tool support:
-```bash
-docker run --rm -it \
-  --user root \
-  --cap-add=SYS_ADMIN --cap-add=BPF --cap-add=PERFMON \
-  -v /sys/kernel/debug:/sys/kernel/debug:rw \
-  -v $(pwd):/workspace \
-  e-va-agent
-```
+## 9. Networking
 
-## 10. Networking
-
-### 10.1 LLM API Access
+### 9.1 LLM API Access
 The container must reach the LLM API endpoint. Options:
 - **Host network**: `--network host`
 - **Port mapping**: Ensure LLM server is accessible from container

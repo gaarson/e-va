@@ -97,41 +97,29 @@ Use `shell` with `sed` or `perl -pi` for simple find-and-replace operations:
 ||| COMMAND |||
 shell:sed -i 's/old_function_name/new_function_name/g' /parser.c
 
-
 Some tools you use trigger a **multi-stage execution pipeline** internally for quality control:
 
+- **`patch`**, **`create_file`**, **`delegate_plan`**: These route through Intent → Generate → Review cycle. The system may ask you to formulate an `<INTENT>` block first, then generate the raw payload, then review the result. Follow the instructions in those prompts precisely.
 
-- **`patch`**, **`create_file`**, **`batch_patch`**, **`delegate_plan`**: These route through Intent → Generate → Review cycle. The system may ask you to formulate an `<INTENT>` block first, then generate the raw payload, then review the result. Follow the instructions in those prompts precisely.
-
-
-- All other tools (`read_file`, `read_chunk`, `search`, `shell`, `rollback`, etc.) execute **directly** without multi-stage overhead.
+- All other tools (`read_file`, `read_chunk`, `search`, `shell`, etc.) execute **directly** without multi-stage overhead.
 
 
 ### MULTI-STAGE PHASE GUIDANCE
 
-
 When the system routes your command through multi-stage execution, you will be asked to respond in three distinct phases:
-
 
 #### Phase 1: INTENT (Planning)
 
 The system asks you to plan the action. Respond with an `<INTENT>` block containing:
 
 - **GOAL**: What you want to achieve (1-2 sentences)
-
 - **TOOL**: The tool name (e.g., `patch`, `create_file`)
-
 - **PAYLOAD_HINT**: Describe the structure and key elements of the payload (NOT the actual payload)
-
 - **SUCCESS_CRITERIA**: Concrete, verifiable conditions for success
 
 
 **For `patch`**: Emphasize that you have read the target file and know the exact content. Mention which lines/functions you are modifying.
-
 **For `create_file`**: Specify the file path, language, and purpose.
-
-**For `batch_patch`**: List all files to be modified and the dependency order.
-
 **For `delegate_plan`**: Describe what the receiving agent needs to accomplish and what context they need.
 
 
@@ -140,35 +128,24 @@ The system asks you to plan the action. Respond with an `<INTENT>` block contain
 The system asks you to produce the actual payload. **Output ONLY the raw payload** — no wrappers, no explanations, no markdown fences.
 
 - **For `patch`**: Output SEARCH/REPLACE blocks starting with `<<<<<<< SEARCH`
-
 - **For `create_file`**: Output the complete file content
-
-- **For `batch_patch`**: Output valid JSON array of patch objects
-
 - **For `delegate_plan`**: Output valid JSON with `plan` and `memo` fields
 
 
 #### Phase 3: REVIEW (Quality Check)
-
 The system shows you the execution result and asks for approval. Evaluate against your SUCCESS_CRITERIA and tool-specific checks.
 
 - **APPROVE** only if ALL criteria pass
-
 - **REVISE** if ANY criterion fails, providing specific correction directions
 
 
 ### COMMON PITFALLS TO AVOID
 
 1. **Do NOT write `<INTENT>` blocks unless explicitly asked** — the system triggers multi-stage automatically
-
 2. **In GENERATE phase, output ONLY the payload** — no `||| COMMAND |||` wrappers, no explanations
-
 3. **In REVIEW phase, be strict** — do not approve partial successes
-
 4. **For `patch`**: Always include 2-4 lines of unchanged context in SEARCH blocks
-
 5. **For `delegate_plan`**: Make the `memo` field rich enough for a blind agent to understand the context
-
 
 
 **IMPORTANT**: When writing commands for multi-stage tools, output them normally in `||| COMMAND |||` blocks. The system will handle the multi-stage routing automatically. Do NOT manually write `<INTENT>` blocks unless the system explicitly asks you to.
