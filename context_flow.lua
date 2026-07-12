@@ -319,6 +319,7 @@ function M.new(flow_config, full_config)
         recommendations = {}
     }
     self.task_outcomes = {}
+    self.executed_commands = {} -- Sliding window of recently executed commands (max 20 entries)
     return self
 end
 
@@ -446,6 +447,33 @@ end
 
 function M:clear_turn_requested_files()
     self.turn_requested_files = {}
+end
+-- ============================================================================
+-- COMMAND DEDUPLICATION
+-- ============================================================================
+-- Normalize a command string for comparison: trim whitespace, normalize line endings
+local function _normalize_cmd(cmd)
+    if not cmd then return "" end
+    return cmd:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+end
+function M:is_duplicate_command(cmd)
+    local normalized = _normalize_cmd(cmd)
+    if normalized == "" then return false end
+    for _, prev_cmd in ipairs(self.executed_commands) do
+        if prev_cmd == normalized then
+            return true
+        end
+    end
+    return false
+end
+function M:add_executed_command(cmd)
+    local normalized = _normalize_cmd(cmd)
+    if normalized == "" then return end
+    table.insert(self.executed_commands, normalized)
+    -- FIFO: keep max 20 entries
+    if #self.executed_commands > 20 then
+        table.remove(self.executed_commands, 1)
+    end
 end
 
 -- ============================================================================
@@ -743,7 +771,15 @@ function M:process_turn_response(agent_name, raw_content, executor)
         end
         return { type = "RETRY", message = string.format("Command rejected: %s. Output exactly one valid command.", val_err) }
     end
-
+    -- 2.5. Deduplication check: block duplicate commands
+    if self:is_duplicate_command(cmd) then
+        local dup_msg = string.format(
+            "[SYSTEM: DUPLICATE COMMAND BLOCKED] You already executed this command recently:\n||| COMMAND |||\n%s\n||| END_COMMAND |||\nPlease proceed to the next step or issue a different command.",
+            cmd
+        )
+        self:add_message(agent_name, "user", dup_msg)
+        return { type = "DUPLICATE", message = dup_msg }
+    end
     -- 3. Выполнение
     -- print(inspect(self))
     -- print(inspect(self))
@@ -768,6 +804,8 @@ function M:process_turn_response(agent_name, raw_content, executor)
     if self.flow_config.command_flow.auto_squash_on_mutation then
         self:squash_last_mutation(agent_name)
     end
+    -- Record this command as executed for dedup purposes
+    self:add_executed_command(cmd)
     -- Добавляем результат в историю как user/system
     if res.output then
         local sanitized_output = utils.sanitize_for_json(res.output)
@@ -799,7 +837,8 @@ function M:snapshot()
         turn_requested_files = self.turn_requested_files,
         calibration_data = self.calibration_data,
         coder_feedback = self.coder_feedback,
-        task_outcomes = self.task_outcomes
+        task_outcomes = self.task_outcomes,
+        executed_commands = self.executed_commands
     })
 end
 
@@ -830,6 +869,7 @@ function M:load_from_snapshot(json_str)
         recommendations = {}
     }
     self.task_outcomes = state.task_outcomes or {}
+    self.executed_commands = state.executed_commands or {}
     return true
 end
 
@@ -866,6 +906,7 @@ function M:reset()
         recommendations = {}
     }
     self.task_outcomes = {}
+    self.executed_commands = {}
 end
 -- ============================================================================
 -- 8. CODER FEEDBACK LOOP

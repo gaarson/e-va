@@ -728,6 +728,11 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 	    elseif result.type == "ERROR" then
         logger.error("Agent execution error: " .. (result.message or "Unknown error"))
         return "ERROR"
+    elseif result.type == "DUPLICATE" then
+        logger.warn(string.format("[DEDUP] Blocked duplicate command. Message injected into history."))
+        -- The duplicate message was already added to history by context_flow.lua
+        save_state()
+        return "AUTO_LOOP" -- Continue loop; LLM will see the dedup message
     elseif result.type == "EXECUTED" then
         save_state()
         return "AUTO_LOOP"
