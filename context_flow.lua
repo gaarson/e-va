@@ -116,10 +116,10 @@ M.INJECTION_STRATEGIES = {
                 local content = messages[i].content
 
                 -- Удаляем предыдущие динамические блоки, чтобы избежать накопления
-                -- Примечание: в Lua 5.1 точка не ловит \n, поэтому используем (.|\n)
-                content = content:gsub("<execution_plan>(.-)</execution_plan>", "")
-                content = content:gsub("<last_actions>(.-)</last_actions>", "")
-                content = content:gsub("<file_context[^>]->(.-)</file_context>", "")
+                -- FIX: Use ([\s\S]) instead of (.-) to correctly match newlines in Lua 5.1
+                content = content:gsub("<execution_plan>([%s%S]*)</execution_plan>", "")
+                content = content:gsub("<last_actions>([%s%S]*)</last_actions>", "")
+                content = content:gsub("<file_context[^>]->([%s%S]*)</file_context>", "")
                 content = content:gsub("\n\n+", "\n\n")
                 content = utils.trim(content)
 
@@ -191,8 +191,8 @@ end
 function M:prune_history(agent_name)
     local history = self:get_history(agent_name)
     local limits = self.flow_config.storage
-    local estimate = function(t) return math.ceil((#(t or "")) / self.flow_config.token_estimation.chars_per_token) end
-
+    local agent_cfg = self.config.AGENTS[agent_name]
+    local estimate = function(t) return self:estimate_tokens(t, agent_cfg) end
     -- Применяем стратегии (можно расширять)
     M.PRUNE_STRATEGIES.fifo_assistant_first(history, limits)
     M.PRUNE_STRATEGIES.squash_large_patches(history, limits, estimate)
@@ -263,8 +263,7 @@ function M:build_context(agent_name, agent_cfg, available_tokens)
     local chat_buffer = {}
     local current_cost = 0
     local history = self:get_history(agent_name)
-    local estimate = function(t) return math.ceil((#(t or "")) / self.flow_config.token_estimation.chars_per_token) end
-
+    local estimate = function(t) return self:estimate_tokens(t, agent_cfg) end
     -- 1. Оцениваем размер обязательных блоков
     local recency = self:get_recency_block()
     local recency_cost = estimate(recency)
@@ -427,10 +426,9 @@ function M:get_recency_block()
 end
 
 function M:get_search_digest(max_tokens)
-    if not next(self.search_history) then return "" end
+    local div = self.flow_config.token_estimation.chars_per_token
     local buf = {"\n=== SEARCH DIGEST ==="}
     local tokens = 0
-    local div = self.flow_config.token_estimation.chars_per_token
     for q, res in pairs(self.search_history) do
         table.insert(buf, "--- Query: " .. q .. " ---")
         for line in res:gmatch("[^\r\n]+") do
@@ -873,10 +871,22 @@ end
 function M:has_searched(query) return self.search_history[query] ~= nil end
 function M:add_search_result(query, result) self.search_history[query] = result end
 
-function M:estimate_tokens(text)
+function M:estimate_tokens(text, agent_cfg)
+
     if not text then return 0 end
     local divisor = self.flow_config.token_estimation.chars_per_token or 3.5
     return math.ceil(#text / divisor)
+    -- -- Allow per-agent override of chars_per_token for more accurate estimation
+    -- local divisor = (agent_cfg and agent_cfg.chars_per_token) or self.flow_config.token_estimation.chars_per_token or 3.5
+    -- local raw_tokens = math.ceil(#text / divisor)
+    -- -- Code-heavy penalty: detect code blocks and increase token estimate
+    -- -- Code typically uses fewer chars per token than prose
+    -- local code_penalty = 0
+    -- if text:match("```") or text:match("function ") or text:match("def ") or text:match("class ") or text:match("struct ") or text:match("import ") or text:match("require(") then
+    --     -- Add ~15% penalty for code-heavy content
+    --     code_penalty = math.ceil(raw_tokens * 0.15)
+    -- end
+    -- return raw_tokens + code_penalty
 end
 
 function M:purge_images()
@@ -1103,9 +1113,13 @@ function M:inject_handoff_files(agent_name)
         local content = self.knowledge_base[path]
         if content then
             -- Проверка: не был ли файл уже добавлен в историю на этом этапе
+            -- FIX: Match the exact <file_context path="..."> tag to avoid false positives
+            -- from filenames appearing as substrings in unrelated text (e.g., "main" in "maintain")
             local is_in_history = false
+            local escaped_path = path:gsub("[%(%)%.%%%+%-%*%?%[%^%$%|]", "%%%1")
+            local tag_pattern = "<file_context%s+path=\"" .. escaped_path .. "\""
             for _, msg in ipairs(history) do
-                if msg.content and string.find(msg.content, path, 1, true) then -- true = plain search
+                if msg.content and string.find(msg.content, tag_pattern, 1, true) then
                     is_in_history = true
                     break
                 end

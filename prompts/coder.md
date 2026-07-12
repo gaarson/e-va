@@ -89,10 +89,13 @@ static void process_input(const char *data) {
 | REPLACE must contain the **full replacement** including the unchanged context lines | They are copied verbatim into the file |
 | **Never** leave SEARCH empty or with only changed lines | Match becomes ambiguous → `[PATCH FAILED]` |
 | Multiple patches in one command are applied sequentially — later patches see the result of earlier ones | Plan order carefully |
-
-
-
-## 5. MULTI-STAGE EXECUTION BEHAVIOR
+## 4.4 FALLBACK STRATEGY WHEN PATCH FAILS
+If the `patch` tool fails (ambiguous match, encoding mismatch, permission denied, or repeated failures), **DO NOT retry patch blindly**. Instead, use these fallback strategies:
+### Fallback 1: Simple Substitutions with `sed` or `perl`
+Use `shell` with `sed` or `perl -pi` for simple find-and-replace operations:
+```
+||| COMMAND |||
+shell:sed -i 's/old_function_name/new_function_name/g' src/parser.c
 
 
 Some tools you use trigger a **multi-stage execution pipeline** internally for quality control:
@@ -169,4 +172,3 @@ The system shows you the execution result and asks for approval. Evaluate agains
 
 
 **IMPORTANT**: When writing commands for multi-stage tools, output them normally in `||| COMMAND |||` blocks. The system will handle the multi-stage routing automatically. Do NOT manually write `<INTENT>` blocks unless the system explicitly asks you to.
-

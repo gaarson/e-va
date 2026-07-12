@@ -39,8 +39,9 @@ end
 
 
 M._OPTIMIZE_THRESHOLD = 0.10  -- Only re-run if context grew by >10%
-
-
+-- Rate limiting: prevent hammering the API
+M._last_llm_call_time = 0
+M._MIN_CALL_INTERVAL = 2  -- Minimum seconds between optimizer LLM calls
 -- Helper: compute approximate context size
 
 local function _compute_context_size(ctx)
@@ -105,36 +106,26 @@ end
 
 
 function M.analyze_and_optimize(ctx, config)
-
-    -- CACHING: Skip if context hasn't grown significantly since last optimization
-
-    local current_size = _compute_context_size(ctx)
-
-    local last = M._last_optimization
-
-    
-
-    if last.timestamp > 0 and last.context_size > 0 then
-
-        local growth_ratio = (current_size - last.context_size) / last.context_size
-
-        if growth_ratio <= M._OPTIMIZE_THRESHOLD then
-
-            logger.info(string.format("[OPTIMIZER] SKIPPED: Context growth %.1f%% <= %.1f%% threshold", 
-
-                growth_ratio * 100, M._OPTIMIZE_THRESHOLD * 100))
-
-            return
-
-        end
-
+    -- RATE LIMITING: Skip if we called the LLM recently
+    local now = os.time()
+    if now - M._last_llm_call_time < M._MIN_CALL_INTERVAL then
+        logger.info(string.format("[OPTIMIZER] SKIPPED: Rate limited. Last call %.1fs ago (< %ds)", 
+            now - M._last_llm_call_time, M._MIN_CALL_INTERVAL))
+        return
     end
-
-
+    -- CACHING: Skip if context hasn't grown significantly since last optimization
+    local current_size = _compute_context_size(ctx)
+    local last = M._last_optimization
+    if last.timestamp > 0 and last.context_size > 0 then
+        local growth_ratio = (current_size - last.context_size) / last.context_size
+        if growth_ratio <= M._OPTIMIZE_THRESHOLD then
+            logger.info(string.format("[OPTIMIZER] SKIPPED: Context growth %.1f%% <= %.1f%% threshold", 
+                growth_ratio * 100, M._OPTIMIZE_THRESHOLD * 100))
+            return
+        end
+    end
     -- Run optimization asynchronously in a coroutine
-
     _run_optimization_async(ctx, config)
-
 end
 
 
@@ -202,6 +193,7 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
     }
 
     -- 3. Асинхронный (не стримящий) вызов к отдельной модели
+    M._last_llm_call_time = os.time()  -- Track call time for rate limiting
     local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
@@ -301,6 +293,7 @@ Return the optimized prompt as plain text without any markdown formatting or ext
     }
 
     -- 3. Send to LLM for optimization (non-streaming)
+    M._last_llm_call_time = os.time()  -- Track call time for rate limiting
     local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
@@ -356,6 +349,7 @@ Return the summary as plain text without any markdown formatting or extra text.
     }
 
     -- Non-streaming call to the optimizer model
+    M._last_llm_call_time = os.time()  -- Track call time for rate limiting
     local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
@@ -449,6 +443,7 @@ Output ONLY the message text, nothing else.
     }
 
     -- 3. Non-streaming call to optimizer model
+    M._last_llm_call_time = os.time()  -- Track call time for rate limiting
     local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.3, max_tokens = 256 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to generate continuation prompt: " .. tostring(err))

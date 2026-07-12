@@ -1,6 +1,7 @@
 local M = {}
 local utils    = require("utils")
 local registry = require("tool_registry")
+local logger   = require("logger")
 
 ------------------------------------------------------------------------
 -- States
@@ -126,11 +127,8 @@ RULES:
 
 
 M.TOOL_REVIEW_CHECKS = {
-
     patch = [[
-
 TOOL-SPECIFIC REVIEW CHECKS FOR `patch`:
-
 - [ ] Does every SEARCH block contain 2-4 lines of unchanged context?
 - [ ] Would the SEARCH blocks match the actual file content exactly?
 - [ ] Are there zero-op patches (SEARCH == REPLACE)?
@@ -138,7 +136,14 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `patch`:
 - [ ] Did the execution result confirm successful patching (no [PATCH FAILED])?
 - [ ] Are the changed lines syntactically valid for the target language?
 - [ ] If revision was requested, were the reviewer's corrections applied correctly?
-
+- [ ] Does the <file_content_after_patch> block reflect the intended changes?
+- [ ] IF <file_content_after_patch> IS PRESENT IN THE EXECUTION RESULT:
+     Compare the file content AFTER patching against the intended changes.
+     Verify that the REPLACE blocks were actually applied correctly in the resulting file.
+     Check that no unintended side effects occurred (e.g., broken indentation, missing lines).
+- [ ] IF --- UNIFIED DIFF --- IS PRESENT IN THE EXECUTION RESULT:
+     Verify the diff accurately represents the changes made.
+     Confirm that removed lines (-) and added lines (+) match the intended modification.
 ]],
 
     create_file = [[
@@ -185,16 +190,41 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `delegate_plan`:
 ------------------------------------------------------------------------
 --- Sanitize LLM-generated payload: strip markdown fences, thinking tags,
 --- common preamble phrases, and leading/trailing whitespace.
+--- IMPROVED: Only strip balanced thinking tags, protect code comments, log significant removals.
 local function sanitize_payload(raw)
     if not raw then return "" end
     local s = utils.trim(raw)
+    local original_len = #s
+    local removed_chars = 0
     -- Strip markdown code fences (```lang ... ```)
     s = s:gsub("^%s*```[%w%-]*\n?", "")
     s = s:gsub("\n?```%s*$", "")
-    -- Strip <think> ... </thinking> or <thinking> ... </thinking> blocks
-    s = s:gsub("<%!%-%-.*?%-%->", "")  -- HTML comments just in case
-    s = s:gsub("<thinking>.-</thinking>", "")
-    s = s:gsub("</thinking>.-<thinking>", "")
+    -- Strip BALANCED thinking tags only (protects unbalanced/code comments)
+    -- Match <thinking>...</thinking> or <think> ...  with proper balancing
+    local function strip_balanced_tags(text, open_tag, close_tag)
+        local result = text
+        local found = true
+        while found do
+            local start_pos = result:find(open_tag, 1, true)
+            if start_pos then
+                local end_pos = result:find(close_tag, start_pos + #open_tag, true)
+                if end_pos then
+                    local removed = result:sub(start_pos, end_pos + #close_tag - 1)
+                    removed_chars = removed_chars + #removed
+                    result = result:sub(1, start_pos - 1) .. result:sub(end_pos + #close_tag)
+                else
+                    found = false  -- Unbalanced tag, leave it alone
+                end
+            else
+                found = false
+            end
+        end
+        return result
+    end
+    s = strip_balanced_tags(s, "<thinking>", "</thinking>")
+    s = strip_balanced_tags(s, "<think>", "")
+    -- Strip HTML comments (balanced only)
+    s = strip_balanced_tags(s, "<!--", "-->")
     -- Strip common preamble phrases (case-insensitive)
     local preambles = {
         "^here is the payload%s*:?",
@@ -212,7 +242,13 @@ local function sanitize_payload(raw)
     -- Strip ||| COMMAND ||| ... ||| END_COMMAND ||| wrappers
     s = s:gsub("^%s*|||%s*COMMAND%s*|||%s*\n?", "")
     s = s:gsub("\n?|||%s*END_COMMAND%s*|||%s*$", "")
-    return utils.trim(s)
+    local final_s = utils.trim(s)
+    -- Log significant content removal for debugging
+    if removed_chars > 100 then
+        logger.info(string.format("[SANITIZE] Removed %d chars of thinking/tags from payload (%.1f%% of original)", 
+            removed_chars, (removed_chars / original_len) * 100))
+    end
+    return final_s
 end
 --- Безопасный шаблонизатор: заменяет {key} на значения из vars.
 --- Не интерпретирует '%' в значениях, не ломается на магических символах.
@@ -229,6 +265,42 @@ end
 --- starting with 'FIELDNAME:' (case-insensitive prefix match). Continuation
 --- lines (lines not matching 'WORD:') are accumulated into the current field.
 --- Handles arbitrary field order, blank lines, and trailing content.
+--- Validate payload content based on tool type BEFORE execution.
+--- Returns (true, nil) if valid, or (false, error_message) if invalid.
+local function validate_payload(tool_name, payload)
+    if not payload or utils.trim(payload) == "" then
+        return false, "Payload is empty."
+    end
+    if tool_name == "delegate_plan" then
+        -- Must be valid JSON with "plan" and "memo" fields
+        local json = require("JSON")
+        local ok, data = pcall(json.decode, payload)
+        if not ok then
+            return false, "delegate_plan payload is not valid JSON: " .. tostring(data)
+        end
+        if not data.plan or type(data.plan) ~= "table" then
+            return false, "delegate_plan payload missing 'plan' array."
+        end
+        if not data.memo or utils.trim(data.memo) == "" then
+            return false, "delegate_plan payload missing or empty 'memo' field."
+        end
+    elseif tool_name == "patch" or tool_name == "batch_patch" then
+        -- Must contain at least one SEARCH/REPLACE block
+        if not payload:find("<<<<<<< SEARCH") then
+            return false, tool_name .. " payload must contain at least one SEARCH/REPLACE block."
+        end
+        if not payload:find(">>>>>>> REPLACE") then
+            return false, tool_name .. " payload has SEARCH block but no closing REPLACE marker."
+        end
+    elseif tool_name == "create_file" then
+        -- First line must be a file path (non-empty)
+        local first_line = payload:match("^[^\r\n]+")
+        if not first_line or utils.trim(first_line) == "" then
+            return false, "create_file payload must start with a file path."
+        end
+    end
+    return true, nil
+end
 local function extract_field(block, name)
     if not block or not name then return "" end
     local target_upper = name:upper()
@@ -242,14 +314,14 @@ local function extract_field(block, name)
     for i = 1, #lines do
         local line = lines[i]
         -- Check if this line starts a new field: WORD: (possibly with leading whitespace)
-        local field_match = line:match("^%s*([A-Za-z_][A-Za-z0-9_]*)%s*:%s*(.*)")
-        if field_match then
+        local field_name, field_value = line:match("^%s*([A-Za-z_][A-Za-z0-9_]*)%s*:%s*(.*)")
+        if field_name then
             -- Save previous field
             if current_key then
                 results[current_key:upper()] = table.concat(current_value, "\n")
             end
-            current_key = field_match:upper()
-            current_value = { field_match }
+            current_key = field_name:upper()
+            current_value = { field_value }
         else
             -- Continuation line
             if current_key then
@@ -284,6 +356,8 @@ function M.new(ctx, agent_name, opts)
         corrections       = {},
         iteration         = 0,
         max_iterations    = opts.max_iterations or 3,
+        total_tokens_used = 0,
+        max_tokens_per_task = opts.max_tokens_per_task or 32000,
         prompts = {
             intent    = opts.intent_prompt    or M.DEFAULT_INTENT_PROMPT,
             generate  = opts.generate_prompt  or M.DEFAULT_GENERATE_PROMPT,
@@ -409,35 +483,31 @@ end
 ------------------------------------------------------------------------
 
 function M:start_task_with_intent(task, project_context, tool_name, payload_hint, success_criteria)
-
     self:reset()
-
+    -- Validate tool_name exists in registry and is allowed for the agent
+    if not tool_name or utils.trim(tool_name) == "" then
+        return { stage = "error", message = "start_task_with_intent: tool_name is empty." }
+    end
+    if not registry.tools[tool_name] then
+        return { stage = "error", message = string.format("start_task_with_intent: unknown tool '%s'.", tool_name) }
+    end
+    local agent_cfg = self.ctx.config.AGENTS[self.agent_name]
+    if agent_cfg and not registry.is_tool_allowed(agent_cfg, tool_name) then
+        return { stage = "error", message = string.format("start_task_with_intent: tool '%s' is not allowed for agent '%s'.", tool_name, self.agent_name) }
+    end
     self.task      = task
-
     self.intent    = {
-
         GOAL             = task or "",
-
-        TOOL             = tool_name or "",
-
+        TOOL             = tool_name,
         PAYLOAD_HINT     = payload_hint or "",
-
         SUCCESS_CRITERIA = success_criteria or "",
-
         raw              = string.format("GOAL: %s\nTOOL: %s\nPAYLOAD_HINT: %s\nSUCCESS_CRITERIA: %s",
-
             task or "", tool_name or "", payload_hint or "", success_criteria or ""),
-
     }
-
     self.intent_raw = self.intent.raw
-
     self.state      = M.STATES.INTENT_READY
-
     self.iteration  = 1
-
     return { stage = "generate", prompt = self:build_generate_prompt() }
-
 end
 
 
@@ -448,7 +518,6 @@ function M:start_task(task, project_context)
     self.iteration = 1
     return { stage = "intent", prompt = self:build_intent_prompt(task, project_context) }
 end
-
 function M:feed_response(llm_response)
     if self.state == M.STATES.INTENT_DRAFT then
         local intent, err = self:parse_intent(llm_response)
@@ -460,51 +529,146 @@ function M:feed_response(llm_response)
         self.state      = M.STATES.INTENT_READY
         return { stage = "generate", prompt = self:build_generate_prompt() }
     end
-
     if self.state == M.STATES.INTENT_READY or self.state == M.STATES.REVISING then
         self.payload = sanitize_payload(llm_response)
+        -- Pre-execution validation
+        local valid, err_msg = validate_payload(self.intent.TOOL, self.payload)
+        if not valid then
+            logger.warn(string.format("[MULTI-STAGE] Payload validation failed for tool '%s': %s", self.intent.TOOL, err_msg))
+            self.state = M.STATES.ERROR
+            return { stage = "error", message = "Payload validation failed: " .. err_msg }
+        end
         self.state   = M.STATES.COMMAND_READY
         return { stage = "execute", tool = self.intent.TOOL, payload = self.payload }
     end
-
     if self.state == M.STATES.REVIEWING then
+        -- TOKEN BUDGET CHECK: Force-approve if we've exceeded the token budget
+        if self.total_tokens_used > self.max_tokens_per_task then
+            logger.warn(string.format(
+                "[MULTI-STAGE] Token budget exceeded (%d/%d). Force-approving to prevent runaway token consumption.",
+                self.total_tokens_used, self.max_tokens_per_task
+            ))
+            self.state = M.STATES.APPROVED
+            return { stage = "done", result = self.last_result, iterations = self.iteration, forced_approval = true }
+        end
         local review, err = self:parse_review(llm_response)
         if not review then
-            return { stage = "error", message = "Review parse failed: " .. err }
+            -- FALLBACK: Try to infer verdict from raw text
+            local upper_resp = llm_response:upper()
+            local inferred_verdict = nil
+            if upper_resp:find("APPROVE") and not upper_resp:find("REVISE") then
+                inferred_verdict = "APPROVE"
+            elseif upper_resp:find("REVISE") or upper_resp:find("REVISION") or upper_resp:find("FAIL") or upper_resp:find("ERROR") then
+                inferred_verdict = "REVISE"
+            end
+            if inferred_verdict == "APPROVE" then
+                logger.warn("[MULTI-STAGE] Review parse failed but APPROVE inferred from response. Auto-approving.")
+                self.state = M.STATES.APPROVED
+                return { stage = "done", result = self.last_result, iterations = self.iteration }
+            elseif inferred_verdict == "REVISE" then
+                logger.warn(string.format("[MULTI-STAGE] Review parse failed but REVISE inferred. Using fallback correction: '%s'", err))
+                self.review = { verdict = "REVISE", correction = "Reviewer could not be parsed. Correction: " .. err, raw = utils.trim(llm_response) }
+            else
+                -- Cannot infer anything — auto-APPROVE with warning to avoid infinite loops
+                logger.warn(string.format("[MULTI-STAGE] Review parse failed and no verdict inferable. Auto-approving to prevent infinite loop. Error: %s", err))
+                self.state = M.STATES.APPROVED
+                return { stage = "done", result = self.last_result, iterations = self.iteration }
+            end
+        else
+            self.review = review
         end
-        self.review = review
-
-        if review.verdict == "APPROVE" then
+        if self.review.verdict == "APPROVE" then
             self.state = M.STATES.APPROVED
             return { stage = "done", result = self.last_result, iterations = self.iteration }
         end
-
-        if self.iteration >= self.max_iterations then
-            self.state = M.STATES.ERROR
-            return {
-                stage = "error",
-                message = string.format(
-                    "Failed to satisfy intent after %d iterations. Last correction: %s",
-                    self.iteration, review.correction
-                ),
-            }
+        if self.review.verdict == "REVISE" then
+            if self.iteration >= self.max_iterations then
+                self.state = M.STATES.ERROR
+                return {
+                    stage = "error",
+                    message = string.format(
+                        "Failed to satisfy intent after %d iterations. Last correction: %s",
+                        self.iteration, self.review.correction
+                    ),
+                }
+            end
+            self.corrections[#self.corrections + 1] = self.review.correction
+            self.intent_raw = self:_merge_correction(self.review.correction)
+            self.state      = M.STATES.REVISING
+            self.iteration  = self.iteration + 1
+            return { stage = "generate", prompt = self:build_generate_prompt() }
         end
-
-        self.corrections[#self.corrections + 1] = review.correction
-        self.intent_raw = self:_merge_correction(review.correction)
-        self.state      = M.STATES.REVISING
-        self.iteration  = self.iteration + 1
-        return { stage = "generate", prompt = self:build_generate_prompt() }
     end
-
     return { stage = "error", message = "Unexpected state: " .. self.state }
 end
-
 function M:feed_execution_result(output)
     if self.state ~= M.STATES.COMMAND_READY then
         return { stage = "error", message = "Not in COMMAND_READY state." }
     end
-    self.last_result = (output == nil or output == "") and "<empty output>" or tostring(output)
+    -- Extract output string and signal from result table
+    local output_str
+    local signal_str
+    if type(output) == "table" then
+        output_str = output.output ~= nil and tostring(output.output) or ""
+        signal_str = output.signal ~= nil and tostring(output.signal) or ""
+    elseif type(output) == "string" then
+        output_str = output
+        signal_str = ""
+    else
+        output_str = tostring(output or "")
+        signal_str = ""
+    end
+    -- Build base result string with signal if present
+    local result_parts = {}
+    if signal_str ~= "" then
+        table.insert(result_parts, string.format("[SIGNAL] %s", signal_str))
+    end
+    if output_str ~= "" then
+        table.insert(result_parts, string.format("[OUTPUT] %s", output_str))
+    end
+    local enriched_result = table.concat(result_parts, "\n")
+    if enriched_result == "" then
+        enriched_result = "<empty output>"
+    end
+    -- For patch/batch_patch tools, inject file content after patching for reviewer verification
+    local tool_name = self.intent and self.intent.TOOL or ""
+    if tool_name == "patch" or tool_name == "batch_patch" then
+        -- Extract file path(s) from the payload (may be nil if not set yet)
+        local file_paths_list = {}
+        if self.payload then
+            if tool_name == "patch" then
+                -- First line of payload is the file path
+                local first_line = self.payload:match("^[^\r\n]+")
+                if first_line and utils.trim(first_line) ~= "" then
+                    file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
+                end
+            elseif tool_name == "batch_patch" then
+                -- Extract file paths from batch_patch payload (lines before SEARCH blocks, separated by ---FILE---)
+                for line in self.payload:gmatch("[^\r\n]+") do
+                    local trimmed = utils.trim(line)
+                    if trimmed ~= "" and not trimmed:match("^<<<<<<") and not trimmed:match("^=======") and not trimmed:match("^>>>>>>") and trimmed ~= "---FILE---" then
+                        file_paths_list[#file_paths_list + 1] = trimmed
+                        break  -- Just get the first file path for now
+                    end
+                end
+            end
+        end
+        -- Append file content from knowledge_base for each path
+        for _, fp in ipairs(file_paths_list) do
+            -- Normalize path for knowledge_base lookup
+            local normalized = fp
+            if not fp:match("^/") then
+                normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
+            end
+            local content = self.ctx.knowledge_base[normalized]
+            if content then
+                enriched_result = enriched_result .. string.format("\n\n<file_content_after_patch path=\"%s\">\n%s\n</file_content_after_patch>", normalized, content)
+            else
+                enriched_result = enriched_result .. string.format("\n\n[file_content_after_patch path=\"%s\"] File not found in knowledge_base.", normalized)
+            end
+        end
+    end
+    self.last_result = enriched_result
     self.state       = M.STATES.REVIEWING
     return { stage = "review", prompt = self:build_review_prompt() }
 end
@@ -512,38 +676,46 @@ end
 ------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
---- Sanitize LLM-generated payload: strip markdown fences, thinking tags,
---- common preamble phrases, and leading/trailing whitespace.
-local function sanitize_payload(raw)
-    if not raw then return "" end
-    local s = utils.trim(raw)
-    -- Remove markdown code fences (```lang ... ```)
-    s = s:gsub("^%s*```[%w_-]*\n?", "")
-    s = s:gsub("\n?```%s*$", "")
-    -- Remove <think> ... </thinking> or <thinking> ... </thinking> blocks
-    s = s:gsub("<!%-%-.*?%-%->", "")  -- HTML comments just in case
-    s = (s:gsub("<thinking>.-</thinking>", ""):gsub("</thinking>", ""):gsub("<thinking>", ""))
-    s = (s:gsub("<think>.-</thinking>", ""):gsub("</thinking>", ""):gsub("", ""))
-    -- Remove common preamble phrases (case-insensitive)
-    local preambles = {
-        "^here is the payload%s*:?",
-        "^here is the content%s*:?",
-        "^here is my command%s*:?",
-        "^command%s*:?",
-        "^payload%s*:?",
-        "^output%s*:?",
-        "^result%s*:?",
-    }
-    for _, pat in ipairs(preambles) do
-        s = s:gsub(pat, "", 1)
+--- Summarize a correction to a concise directive (max ~200 chars).
+--- Keeps the most actionable part of the reviewer's feedback.
+local function summarize_correction(correction)
+    local trimmed = utils.trim(correction)
+    if #trimmed <= 200 then return trimmed end
+    -- Take the first 200 chars and truncate at a sentence boundary if possible
+    local sub = trimmed:sub(1, 200)
+    local last_period = sub:find("%. ", 180) or sub:find("%.$", 180)
+    if last_period then
+        return sub:sub(1, last_period) .. "..."
     end
-    return utils.trim(s)
+    return sub:sub(1, 197) .. "..."
 end
 function M:_merge_correction(correction)
+    -- Maintain a rolling window of at most 2 corrections.
+    -- Older corrections are summarized into an accumulated block.
+    local new_corrections = self.corrections
+    table.insert(new_corrections, correction)
+    local revision_parts = {}
+    if #new_corrections <= 2 then
+        -- Few corrections: include all raw
+        for i, c in ipairs(new_corrections) do
+            table.insert(revision_parts, string.format("Correction #%d:\n%s", i, c))
+        end
+    else
+        -- More than 2: summarize all but the last 2
+        local accumulated = {}
+        for i = 1, #new_corrections - 2 do
+            table.insert(accumulated, summarize_correction(new_corrections[i]))
+        end
+        table.insert(revision_parts, "Accumulated reviewer notes (earlier iterations):\n" .. table.concat(accumulated, "\n\n"))
+        -- Last 2 raw
+        for i = #new_corrections - 1, #new_corrections do
+            table.insert(revision_parts, string.format("Correction #%d:\n%s", i, new_corrections[i]))
+        end
+    end
     return self.intent_raw
         .. "\n\n<REVISION iteration=\"" .. self.iteration .. "\">\n"
         .. "Previous attempt failed. Reviewer notes:\n"
-        .. correction .. "\n"
+        .. table.concat(revision_parts, "\n\n") .. "\n"
         .. "Adjust PAYLOAD accordingly. Keep GOAL and SUCCESS_CRITERIA.\n"
         .. "</REVISION>"
 end

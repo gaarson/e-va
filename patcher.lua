@@ -1,29 +1,127 @@
 
 local M = {}
-
 local patcher_core = require("patcher_core")
+-- Fuzzy line equality (mirrors C fuzzy_streq)
 
-local function to_lines(str)
+-- Defined early because it's used by generate_unified_diff
 
-    local t = {}
+local function fuzzy_line_eq(a, b)
 
-    local clean = str:gsub("\r\n", "\n"):gsub("\r", "\n")
+    if not a or not b then return false end
 
-    for line in clean:gmatch("([^\n]*)\n?") do
-
-        table.insert(t, line)
-
-    end
-
-    if #t > 0 and t[#t] == "" then
-
-        table.remove(t)
-
-    end
-
-    return t
+    return a:gsub("^%s+", ""):gsub("%s+$", "") == b:gsub("^%s+", ""):gsub("%s+$", "")
 
 end
+
+
+
+-- Unified diff generator
+function M.generate_unified_diff(old_lines, new_lines, filename)
+    filename = filename or "file"
+    local diff_lines = {}
+    table.insert(diff_lines, "--- " .. filename)
+    table.insert(diff_lines, "+++ " .. filename)
+    local old_len = #old_lines
+    local new_len = #new_lines
+    local i = 1
+    local j = 1
+    while i <= old_len or j <= new_len do
+        if i > old_len then
+            -- Remaining new lines
+            local start_j = j
+            while j <= new_len do j = j + 1 end
+            local hunk_start = math.max(1, start_j - 3)
+            local hunk_end = new_len
+            table.insert(diff_lines, string.format("@@ -%d,%d +%d,%d @@ ", old_len, 0, hunk_start, hunk_end - hunk_start + 1))
+            for k = hunk_start, hunk_end do
+                table.insert(diff_lines, "+" .. new_lines[k])
+            end
+        elseif j > new_len then
+            -- Remaining old lines
+            local start_i = i
+            while i <= old_len do i = i + 1 end
+            local hunk_start = math.max(1, start_i - 3)
+            local hunk_end = old_len
+            table.insert(diff_lines, string.format("@@ -%d,%d +%d,0 @@ ", hunk_start, hunk_end - hunk_start + 1, new_len))
+            for k = hunk_start, hunk_end do
+                table.insert(diff_lines, "-" .. old_lines[k])
+            end
+        else
+            -- Check for matching lines
+            if fuzzy_line_eq(old_lines[i], new_lines[j]) then
+                i = i + 1
+                j = j + 1
+            else
+                -- Found a difference, collect context and changed lines
+                local ctx_before = 3
+                -- Collect old lines to remove
+                local old_start = i
+                local new_start = j
+                -- Advance past differing region in old
+                while i <= old_len do
+                    -- Check if old_lines[i] matches any upcoming new_lines[j+]
+                    local found = false
+                    for k = j, math.min(j + 10, new_len) do
+                        if fuzzy_line_eq(old_lines[i], new_lines[k]) then
+                            found = true
+                            break
+                        end
+                    end
+                    if found then break end
+                    i = i + 1
+                end
+                -- Advance past differing region in new
+                while j <= new_len do
+                    local found = false
+                    for k = i, math.min(i + 10, old_len) do
+                        if fuzzy_line_eq(new_lines[j], old_lines[k]) then
+                            found = true
+                            break
+                        end
+                    end
+                    if found then break end
+                    j = j + 1
+                end
+                local old_end = i - 1
+                local new_end = j - 1
+                -- Context window
+                local ctx_old_start = math.max(1, old_start - ctx_before)
+                local ctx_new_start = math.max(1, new_start - ctx_before)
+                table.insert(diff_lines, string.format("@@ -%d,%d +%d,%d @@ ", ctx_old_start, old_end - ctx_old_start + 1, ctx_new_start, new_end - ctx_new_start + 1))
+                -- Context before
+                for k = ctx_old_start, old_start - 1 do
+                    table.insert(diff_lines, " " .. old_lines[k])
+                end
+                -- Removed lines
+                for k = old_start, old_end do
+                    table.insert(diff_lines, "-" .. old_lines[k])
+                end
+                -- Added lines
+                for k = new_start, new_end do
+                    table.insert(diff_lines, "+" .. new_lines[k])
+                end
+            end
+        end
+    end
+    if #diff_lines <= 2 then
+        return ""
+    end
+    return table.concat(diff_lines, "\n")
+end
+
+local function to_lines(str)
+    local t = {}
+    local clean = str:gsub("\r\n", "\n"):gsub("\r", "\n")
+    for line in clean:gmatch("([^\n]*)\n?") do
+        table.insert(t, line)
+    end
+    if #t > 0 and t[#t] == "" then
+        table.remove(t)
+    end
+    return t
+end
+-- Store original lines reference for diff generation
+local original_lines_ref = nil
 
 -- State constants for the line-based parser
 
@@ -120,17 +218,12 @@ local function strip_all_empty(lns)
 end
 
 function M.apply_patch(original_content, llm_response)
-
     if not original_content then return false, "No content provided" end
-
     local content = original_content:gsub("\r\n", "\n"):gsub("\r", "\n")
-
     local response = llm_response:gsub("\r\n", "\n"):gsub("\r", "\n")
-
     local changes_count = 0
-
     local errors = {}
-
+    local original_lines = to_lines(content)
     local file_lines = to_lines(content)
 
     -- Phase 1: Line-based state-machine parsing of SEARCH/REPLACE blocks
@@ -406,9 +499,8 @@ function M.apply_patch(original_content, llm_response)
     end
 
     if changes_count > 0 then
-
-        return true, table.concat(file_lines, "\n"), changes_count
-
+        local diff_str = M.generate_unified_diff(original_lines, file_lines)
+        return true, table.concat(file_lines, "\n"), changes_count, diff_str
     else
 
         if #errors > 0 then

@@ -61,19 +61,12 @@ local function register(registry)
         return { output = "\n[ERROR]: Invalid JSON plan format. Engine saw: " .. debug_snip, signal = nil }
     end,
     [[
-    
     MULTI-STAGE GUIDE FOR `delegate_plan`:
-    
     1. INTENT PHASE: In PAYLOAD_HINT, describe delegation scope - target agent, files, and overall goal.
-    
        Example: "Delegate to CODER: implement 3 functions in src/parser.lua. Memo includes grammar rules."
-    
     2. GENERATE PHASE: Output ONLY valid JSON with "plan" (array of {file, instruction}) and "memo" (rich context).
-    
        If revising, fix JSON syntax, add missing files, or enrich the memo.
-    
     3. CRITICAL: The memo is the MOST IMPORTANT field - it carries all context to the receiving agent.
-    
        Each instruction must be atomic and verifiable.
     
     ]]

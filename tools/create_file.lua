@@ -33,17 +33,11 @@ local function register(registry)
         end
     end,
     [[
-    
     MULTI-STAGE GUIDE FOR `create_file`:
-    
     1. INTENT PHASE: In PAYLOAD_HINT, specify the EXACT file path, purpose, language, and key sections.
-    
        Example: "Create src/utils/helpers.lua: utility module with string trimming and path normalization."
-    
     2. GENERATE PHASE: Output ONLY the complete file content. No wrappers, no markdown fences.
-    
        If revising, incorporate reviewer corrections - add missing parts, fix syntax.
-    
     3. CRITICAL: File path must be correct. Content must be syntactically valid for its language.
     
     ]]

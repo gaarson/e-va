@@ -71,15 +71,22 @@ function M.get()
         clear_history = "per_stage",
         memo_sections = { "execution_plan", "decisions", "files_modified", "remaining_tasks" },
         max_memo_tokens = 4000,
-
         pass_knowledge_base = true,        -- Передавать все файлы из базы знаний
         pass_pinned_files = true,          -- Передавать зафиксированные файлы
         pass_requested_files = true,       -- Передавать файлы, запрошенные на предыдущем этапе
         pass_recent_tool_outputs = true,   -- Передавать результаты последних инструментов
         auto_load_plan_files = true,       -- Автоматически подгружать файлы из плана
         max_knowledge_base_files = 50,     -- Максимальное количество файлов для передачи
+        -- NEW: Enable CODER to send error summaries back to ARCHITECT for plan adjustment
+        feedback_to_architect = false,
     }
-
+    -- Circuit breaker configuration for tool failures
+    cfg.CIRCUIT_BREAKER = {
+        enabled = true,
+        threshold = 3,           -- Number of consecutive failures before triggering
+        cooldown_turns = 5,      -- Number of turns to wait before retrying the failed tool
+        warning_message = true,  -- Whether to inject a warning message to the agent
+    }
     cfg.TASKS = {}
 
     cfg.CREATE_BACKUPS = false
@@ -209,8 +216,8 @@ function M.get()
             model = "Qwen3.5-27B-AWQ",
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
-            use_selective_multi_stage = true,
-            multi_stage_tools = { "patch", "create_file", "batch_patch", "delegate_plan" },
+            -- use_selective_multi_stage = true,
+            -- multi_stage_tools = { "patch", "create_file", "batch_patch", "delegate_plan" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch", 
