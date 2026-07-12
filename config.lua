@@ -37,7 +37,7 @@ function M.get()
             strict_parsing = true,
             max_retries = 3,
             auto_squash_on_mutation = true,
-            continuation_prompt = "check maybe you stuck or what, good luck",
+            continuation_prompt = "check maybe you stuck or what maybe command invalid",
             reinforcement_interval = 5,
         },
         token_estimation = {
@@ -232,8 +232,8 @@ function M.get()
             model = "Qwen3.5-27B-AWQ",
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
-            use_selective_multi_stage = true,
-            multi_stage_tools = { "create_file" },
+            -- use_selective_multi_stage = true,
+            -- multi_stage_tools = { "create_file" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch",

@@ -459,6 +459,8 @@ end
 function M:is_duplicate_command(cmd)
     local normalized = _normalize_cmd(cmd)
     if normalized == "" then return false end
+    -- task_complete should never be considered a duplicate (terminal command)
+    if normalized == "task_complete" then return false end
     for _, prev_cmd in ipairs(self.executed_commands) do
         if prev_cmd == normalized then
             return true
@@ -1671,41 +1673,65 @@ function M:inject_handoff_files(agent_name)
     if not next(files_to_pass) then return end
     local parts = {}
     local history = self:get_history(agent_name)
-
     for path, _ in pairs(files_to_pass) do
         local content = self.knowledge_base[path]
         if content then
-            -- Проверка: не был ли файл уже добавлен в историю на этом этапе
-            -- FIX: Match the exact <file_context path="..."> tag to avoid false positives
-            -- from filenames appearing as substrings in unrelated text (e.g., "main" in "maintain")
             local is_in_history = false
             local escaped_path = path:gsub("[%(%)%.%%%+%-%*%?%[%^%$%|]", "%%%1")
+
             local tag_pattern = "<file_context%s+path=\"" .. escaped_path .. "\""
+
             for _, msg in ipairs(history) do
+
                 if msg.content and string.find(msg.content, tag_pattern, 1, true) then
+
                     is_in_history = true
+
                     break
+
                 end
+
             end
+
 
             if not is_in_history then
+
                 local status = "READ_ONLY"
+
                 if self.pinned_files[path] then status = "PINNED"
+
                 elseif self.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
+
+                self:pin_file(path)
+
                 table.insert(parts, string.format(
+
                     "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
+
                     path, status, content
+
                 ))
+
             end
+
         end
+
     end
+
     if #parts > 0 then
+
         local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n")
+
         self:add_message(agent_name, "user", block)
+
     end
+
 end
 
+
 function M:get_execution_plan_text() return self:get_plan_text() end
+
 function M:get_last_actions_text() return self:get_actions_text() end
+
 
 return M

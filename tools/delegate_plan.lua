@@ -40,6 +40,7 @@ local function register(registry)
                             local token_count = ctx:estimate_tokens(content)
                             if token_count <= 5000 then
                                 ctx:add_file(rel_path, content)
+                                ctx:pin_file(rel_path)
                                 table.insert(loaded_files, rel_path)
                             else
                                 logger.warn(string.format("[DELEGATE] File %s too large (%d tokens), skipping.", rel_path, token_count))

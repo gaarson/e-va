@@ -914,6 +914,13 @@ local function execute_pipeline()
                 if config.HANDOFF.pass_knowledge_base or config.HANDOFF.pass_pinned_files or config.HANDOFF.pass_requested_files then
                     local next_agent = config.PIPELINE[current_stage_idx + 1] and config.PIPELINE[current_stage_idx + 1].agents[1] or "CODER"
                     ctx:inject_handoff_files(next_agent)
+                    -- Second layer: pin all handoff files for the receiving agent
+                    local handoff_files = ctx:get_handoff_files()
+                    if handoff_files then
+                        for path, _ in pairs(handoff_files) do
+                            ctx:pin_file(path)
+                        end
+                    end
                 end
             end
 
