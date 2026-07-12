@@ -312,7 +312,8 @@ function M.send_request(profile, messages, options)
         full_reason = full_reason,
         full_text = full_text,
         interrupted = was_interrupted,
-        timed_out = is_timeout
+        timed_out = is_timeout,
+        usage = last_part and last_part.usage or nil
     }
 end
 

@@ -15,7 +15,7 @@ function M.build_context(ctx, agent_name, agent_cfg, available_tokens)
     local chat_buffer = {}
     local current_cost = 0
     local history = ctx.history[agent_name] or {}
-    local estimate = function(t) return ctx.estimate_tokens(t, agent_cfg) end
+    local estimate = function(t) return ctx:estimate_tokens(t, agent_cfg) end
     -- 1. Estimate size of mandatory blocks
     local recency = M.get_recency_block(ctx)
     local recency_cost = estimate(recency)
@@ -227,14 +227,14 @@ function M.get_memory_block(ctx, max_tokens)
     if next(ctx.pinned_files) then
         local pinned_text = "\n=== PINNED FILES ===\n"
         for path, _ in pairs(ctx.pinned_files) do pinned_text = pinned_text .. string.format("- %s\n", path) end
-        local cost = ctx.estimate_tokens(pinned_text)
+        local cost = ctx:estimate_tokens(pinned_text)
         if current_tokens + cost < max_tokens then table.insert(memory_parts, pinned_text); current_tokens = current_tokens + cost end
     end
     local changes_text = M.get_changes_summary(ctx)
-    local cost = ctx.estimate_tokens(changes_text)
+    local cost = ctx:estimate_tokens(changes_text)
     if current_tokens + cost < max_tokens then table.insert(memory_parts, changes_text); current_tokens = current_tokens + cost end
     local insights_text = M.get_insights_summary(ctx)
-    cost = ctx.estimate_tokens(insights_text)
+    cost = ctx:estimate_tokens(insights_text)
     if current_tokens + cost < max_tokens then table.insert(memory_parts, insights_text); current_tokens = current_tokens + cost end
     return table.concat(memory_parts, "\n")
 end

@@ -22,7 +22,7 @@ function M.prune_history(ctx, agent_name)
     local history = M.get_history(ctx, agent_name)
     local limits = ctx.flow_config.storage
     local agent_cfg = ctx.config.AGENTS[agent_name]
-    local estimate = function(t) return ctx.estimate_tokens(t, agent_cfg) end
+    local estimate = function(t) return ctx:estimate_tokens(t, agent_cfg) end
     -- STEP 1: Apply compression BEFORE pruning
     if ctx.flow_config.compression and ctx.flow_config.compression.enabled then
         M.compress_history(ctx, agent_name)
@@ -198,7 +198,7 @@ function M.should_squash(ctx, agent_name)
     local limits = ctx.flow_config.storage
     if #history > limits.squash_threshold_messages then return true end
     local total_tokens = 0
-    for _, msg in ipairs(history) do total_tokens = total_tokens + ctx.estimate_tokens(msg.content) end
+    for _, msg in ipairs(history) do total_tokens = total_tokens + ctx:estimate_tokens(msg.content) end
     if total_tokens > limits.squash_threshold_tokens then return true end
     return false
 end
