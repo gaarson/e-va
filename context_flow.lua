@@ -293,6 +293,7 @@ function M.new(flow_config, full_config)
     self.consecutive_recoveries = 0
     self.file_tree = nil
     self.current_turn = 0 -- Tracks the current turn for staleness detection
+    self.calibration_data = {} -- Model-calibrated token estimation data
     return self
 end
 
@@ -727,7 +728,8 @@ function M:snapshot()
         last_actions = self.last_actions,
         handoff_memo = self.handoff_memo,
         test_failures = self.test_failures,
-        turn_requested_files = self.turn_requested_files
+        turn_requested_files = self.turn_requested_files,
+        calibration_data = self.calibration_data
     })
 end
 
@@ -749,7 +751,7 @@ function M:load_from_snapshot(json_str)
     self.test_failures = state.test_failures or 0
     self.turn_requested_files = state.turn_requested_files or {}
     self.promoted_files = state.promoted_files or {}
-
+    self.calibration_data = state.calibration_data or {}
     return true
 end
 
@@ -776,8 +778,8 @@ function M:reset()
     self.test_failures = 0
     self.consecutive_recoveries = 0
     self.file_tree = nil
+    self.calibration_data = {}
 end
-
 -- ============================================================================
 -- 7. HANDOFF MEMO & STAGE TRANSITION
 -- ============================================================================
@@ -1000,25 +1002,56 @@ function M:add_search_result(query, result) self.search_history[query] = result 
 -- MULTI-STRATEGY TOKEN ESTIMATOR
 -- Detects content type and uses appropriate divisors + structural overhead
 -- ============================================================================
--- Per-text cache to avoid re-computing estimates on identical strings
+-- LRU cache for token estimates
 local _token_estimate_cache = {}
-local _cache_max_size = 1000
+local _cache_order = {}
+local _cache_max_size_default = 1000
+local function _get_cache_max_size(flow_config)
+    if flow_config and flow_config.token_estimation and flow_config.token_estimation.cache_size then
+        return flow_config.token_estimation.cache_size
+    end
+    return _cache_max_size_default
+end
 local function _cache_get(text)
     if not text then return nil end
     return _token_estimate_cache[text]
 end
-local function _cache_set(text, value)
+local function _cache_set(text, value, flow_config)
     if not text then return end
-    -- Evict oldest entry if cache is full (simple LRU-ish: just clear half)
-    if next(_token_estimate_cache) then
-        local count = 0
-        for _ in pairs(_token_estimate_cache) do count = count + 1 end
-        if count >= _cache_max_size then
-            _token_estimate_cache = {}
+    local max_size = _get_cache_max_size(flow_config)
+    -- If already in cache, move to end (update recency)
+    if _token_estimate_cache[text] ~= nil then
+        -- Remove from current position in order
+        for i, key in ipairs(_cache_order) do
+            if key == text then
+                table.remove(_cache_order, i)
+                break
+            end
         end
+        -- Add to end
+        table.insert(_cache_order, text)
+        _token_estimate_cache[text] = value
+        return
     end
+    -- Evict oldest if at capacity
+    if #_cache_order >= max_size then
+        local oldest = table.remove(_cache_order, 1)
+        _token_estimate_cache[oldest] = nil
+    end
+    -- Insert new entry
+    table.insert(_cache_order, text)
     _token_estimate_cache[text] = value
 end
+-- Model-calibrated divisors (chars per token)
+M.MODEL_DIVISORS = {
+    ['gpt-4o'] = { code = 2.8, prose = 3.8, mixed = 3.2, xml_json = 3.4 },
+    ['gpt-4'] = { code = 2.7, prose = 3.7, mixed = 3.1, xml_json = 3.3 },
+    ['gpt-3.5-turbo'] = { code = 2.6, prose = 3.6, mixed = 3.0, xml_json = 3.2 },
+    ['claude-3-opus'] = { code = 3.0, prose = 4.0, mixed = 3.5, xml_json = 3.6 },
+    ['claude-3-sonnet'] = { code = 3.0, prose = 4.0, mixed = 3.5, xml_json = 3.6 },
+    ['claude-3-haiku'] = { code = 3.0, prose = 4.0, mixed = 3.5, xml_json = 3.6 },
+    ['default'] = { code = 2.5, prose = 3.5, mixed = 3.0, xml_json = 3.2 }
+}
 -- Content type detection heuristics
 local function _detect_content_type(text)
     local len = #text
@@ -1116,34 +1149,31 @@ function M:estimate_tokens(text, agent_cfg)
     -- Check cache first
     local cached = _cache_get(text)
     if cached then return cached end
-    -- Determine base divisor from config hierarchy:
-    -- 1. Per-agent override (agent_cfg.chars_per_token)
-    -- 2. Flow config default
-    -- 3. Hardcoded fallback
-    local base_divisor = self.flow_config.token_estimation.chars_per_token or 3.5
-    if agent_cfg and agent_cfg.chars_per_token then
-        base_divisor = agent_cfg.chars_per_token
-    end
     -- Detect content type
     local content_type = _detect_content_type(text)
-    -- Content-type-specific divisors
-    local divisors = {
-        code     = 2.5,   -- Code is denser: fewer chars per token
-        prose    = 3.5,   -- Natural language: standard ratio
-        mixed    = 3.0,   -- Mix of code and prose
-        xml_json = 3.2,   -- Structured data with tags/braces
-        empty    = 3.5,
-    }
-    -- Use content-type divisor if it differs significantly from base
-    local content_divisor = divisors[content_type] or base_divisor
-    -- Blend: if agent has explicit override, weight it more heavily
+    -- Get model-specific divisors
+    local model_name = (agent_cfg and agent_cfg.model) or "default"
+    local model_divs = M.MODEL_DIVISORS[model_name] or M.MODEL_DIVISORS["default"]
+    -- Get content-type divisor from model table
+    local model_divisor = model_divs[content_type] or model_divs.mixed
+    -- Blend: 80% model-calibrated, 20% content-type heuristic
+    local content_fallback = { code = 2.5, prose = 3.5, mixed = 3.0, xml_json = 3.2, empty = 3.5 }
+    local content_divisor = content_fallback[content_type] or content_fallback.mixed
+    local blended_divisor = model_divisor * 0.8 + content_divisor * 0.2
+    -- If agent has explicit chars_per_token override, blend 60/40
     local effective_divisor
     if agent_cfg and agent_cfg.chars_per_token then
-        -- 70% agent override, 30% content-type heuristic
-        effective_divisor = agent_cfg.chars_per_token * 0.7 + content_divisor * 0.3
+        effective_divisor = agent_cfg.chars_per_token * 0.6 + blended_divisor * 0.4
     else
-        -- Use content-type divisor directly
-        effective_divisor = content_divisor
+        effective_divisor = blended_divisor
+    end
+    -- Apply calibration adjustment if available
+    if self.calibration_data and self.calibration_data[model_name] and self.calibration_data[model_name].ratio then
+        local ratio = self.calibration_data[model_name].ratio
+        -- Cap adjustment to ±20%
+        if ratio > 1.2 then ratio = 1.2 end
+        if ratio < 0.8 then ratio = 0.8 end
+        effective_divisor = effective_divisor / ratio
     end
     -- Base token estimate
     local raw_tokens = math.ceil(#text / effective_divisor)
@@ -1151,10 +1181,52 @@ function M:estimate_tokens(text, agent_cfg)
     local overhead = _calculate_structural_overhead(text, content_type)
     local total = raw_tokens + overhead
     -- Cache the result
-    _cache_set(text, total)
+    _cache_set(text, total, self.flow_config)
     return total
 end
-
+-- ============================================================================
+-- CALIBRATION: Learn from actual token counts
+-- ============================================================================
+function M:calibrate_from_actual(agent_name, estimated_tokens, actual_tokens)
+    if not estimated_tokens or estimated_tokens == 0 or not actual_tokens or actual_tokens == 0 then return end
+    local agent_cfg = self.config.AGENTS[agent_name]
+    local model_name = (agent_cfg and agent_cfg.model) or "default"
+    if not self.calibration_data then self.calibration_data = {} end
+    if not self.calibration_data[model_name] then
+        self.calibration_data[model_name] = { samples = {}, ratio = 1.0 }
+    end
+    local cal = self.calibration_data[model_name]
+    local ratio = actual_tokens / estimated_tokens
+    table.insert(cal.samples, { estimated = estimated_tokens, actual = actual_tokens, ratio = ratio })
+    -- Keep last 50 samples for rolling average
+    if #cal.samples > 50 then table.remove(cal.samples, 1) end
+    -- Compute running average ratio after 10+ samples
+    if #cal.samples >= 10 then
+        local sum = 0
+        for _, s in ipairs(cal.samples) do sum = sum + s.ratio end
+        cal.ratio = sum / #cal.samples
+    end
+end
+function M:get_calibration_stats()
+    if not self.calibration_data or not next(self.calibration_data) then
+        return { message = "No calibration data available" }
+    end
+    local stats = {}
+    for model, cal in pairs(self.calibration_data) do
+        local entry = { model = model, samples = #cal.samples, ratio = cal.ratio }
+        if #cal.samples > 0 then
+            local min_r, max_r = cal.samples[1].ratio, cal.samples[1].ratio
+            for _, s in ipairs(cal.samples) do
+                if s.ratio < min_r then min_r = s.ratio end
+                if s.ratio > max_r then max_r = s.ratio end
+            end
+            entry.min_ratio = min_r
+            entry.max_ratio = max_r
+        end
+        table.insert(stats, entry)
+    end
+    return stats
+end
 function M:purge_images()
     self.images = {}
     self.images_loaded = false
