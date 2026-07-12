@@ -132,7 +132,18 @@ function M.send_request(profile, messages, options)
     end
 
     if not payload.stream then
-        local body_str = stream:get_body_as_string()
+        -- TIMEOUT SUPPORT for non-streaming: wrap get_body_as_string with socket timeout
+        local body_str
+        local ok, err = pcall(function()
+            local orig_timeout = socket.timeout((profile.params and profile.params.stream_timeout) or 60)
+            body_str = stream:get_body_as_string()
+            socket.timeout(orig_timeout) -- restore
+        end)
+        if not ok then
+            _in_flight_requests[req_hash] = nil
+            logger.warn("[NON-STREAM] Timeout reading response body: " .. tostring(err))
+            return nil, "HTTP TIMEOUT"
+        end
         local response = json:decode(body_str)
 
         if response and response.usage then

@@ -294,6 +294,15 @@ function M.new(flow_config, full_config)
     self.file_tree = nil
     self.current_turn = 0 -- Tracks the current turn for staleness detection
     self.calibration_data = {} -- Model-calibrated token estimation data
+    -- CODER FEEDBACK LOOP: Track task outcomes and feedback for ARCHITECT
+    self.coder_feedback = {
+        tasks_completed = {},
+        tasks_failed = {},
+        errors_encountered = {},
+        plan_deviations = {},
+        recommendations = {}
+    }
+    self.task_outcomes = {}
     return self
 end
 
@@ -729,7 +738,9 @@ function M:snapshot()
         handoff_memo = self.handoff_memo,
         test_failures = self.test_failures,
         turn_requested_files = self.turn_requested_files,
-        calibration_data = self.calibration_data
+        calibration_data = self.calibration_data,
+        coder_feedback = self.coder_feedback,
+        task_outcomes = self.task_outcomes
     })
 end
 
@@ -752,6 +763,14 @@ function M:load_from_snapshot(json_str)
     self.turn_requested_files = state.turn_requested_files or {}
     self.promoted_files = state.promoted_files or {}
     self.calibration_data = state.calibration_data or {}
+    self.coder_feedback = state.coder_feedback or {
+        tasks_completed = {},
+        tasks_failed = {},
+        errors_encountered = {},
+        plan_deviations = {},
+        recommendations = {}
+    }
+    self.task_outcomes = state.task_outcomes or {}
     return true
 end
 
@@ -779,6 +798,112 @@ function M:reset()
     self.consecutive_recoveries = 0
     self.file_tree = nil
     self.calibration_data = {}
+    -- Reset feedback tracking
+    self.coder_feedback = {
+        tasks_completed = {},
+        tasks_failed = {},
+        errors_encountered = {},
+        plan_deviations = {},
+        recommendations = {}
+    }
+    self.task_outcomes = {}
+end
+-- ============================================================================
+-- 8. CODER FEEDBACK LOOP
+-- ============================================================================
+function M:record_task_success(task_index, summary)
+    self.coder_feedback.tasks_completed = self.coder_feedback.tasks_completed or {}
+    table.insert(self.coder_feedback.tasks_completed, {
+        task_index = task_index,
+        summary = summary or "",
+        timestamp = os.clock()
+    })
+    if self.execution_plan and self.execution_plan[task_index] then
+        self.task_outcomes[task_index] = {
+            status = "SUCCESS",
+            summary = summary or "",
+            file = self.execution_plan[task_index].file
+        }
+    end
+end
+function M:record_task_failure(task_index, error_msg)
+    self.coder_feedback.tasks_failed = self.coder_feedback.tasks_failed or {}
+    table.insert(self.coder_feedback.tasks_failed, {
+        task_index = task_index,
+        error = error_msg or "",
+        timestamp = os.clock()
+    })
+    if self.execution_plan and self.execution_plan[task_index] then
+        self.task_outcomes[task_index] = {
+            status = "FAILED",
+            error = error_msg or "",
+            file = self.execution_plan[task_index].file
+        }
+    end
+end
+function M:record_error(error_msg)
+    self.coder_feedback.errors_encountered = self.coder_feedback.errors_encountered or {}
+    table.insert(self.coder_feedback.errors_encountered, {
+        error = error_msg or "",
+        timestamp = os.clock()
+    })
+end
+function M:record_deviation(note)
+    self.coder_feedback.plan_deviations = self.coder_feedback.plan_deviations or {}
+    table.insert(self.coder_feedback.plan_deviations, {
+        note = note or "",
+        timestamp = os.clock()
+    })
+end
+function M:add_recommendation(rec)
+    self.coder_feedback.recommendations = self.coder_feedback.recommendations or {}
+    table.insert(self.coder_feedback.recommendations, {
+        recommendation = rec or "",
+        timestamp = os.clock()
+    })
+end
+function M:generate_feedback_report()
+    local cfg = self.config.HANDOFF or {}
+    local max_tokens = cfg.max_feedback_tokens or 3000
+    local div = self.flow_config.token_estimation.chars_per_token
+    local max_chars = math.floor(max_tokens * div)
+    local parts = {}
+    table.insert(parts, "<coder_feedback_report>")
+    local function add_section(tag, items, formatter)
+        if not items or #items == 0 then return end
+        table.insert(parts, string.format("<%s>", tag))
+        for _, item in ipairs(items) do
+            local line = formatter(item)
+            if line then table.insert(parts, line) end
+        end
+        table.insert(parts, string.format("</%s>", tag))
+    end
+    add_section("tasks_completed", self.coder_feedback.tasks_completed, function(item)
+        return string.format("- Step %d: %s (%s)", item.task_index, item.summary or "completed", item.file or "unknown file")
+    end)
+    add_section("tasks_failed", self.coder_feedback.tasks_failed, function(item)
+        return string.format("- Step %d: FAILED - %s", item.task_index, item.error or "unknown error")
+    end)
+    add_section("errors_encountered", self.coder_feedback.errors_encountered, function(item)
+        return "- " .. (item.error or "")
+    end)
+    add_section("plan_deviations", self.coder_feedback.plan_deviations, function(item)
+        return "- " .. (item.note or "")
+    end)
+    add_section("recommendations", self.coder_feedback.recommendations, function(item)
+        return "- " .. (item.recommendation or "")
+    end)
+    table.insert(parts, "</coder_feedback_report>")
+    local report = table.concat(parts, "\n")
+    -- Truncate if over budget
+    if #report > max_chars then
+        report = report:sub(1, max_chars) .. "\n... [FEEDBACK TRUNCATED]"
+    end
+    return report
+end
+function M:inject_feedback_as_message(agent_name, feedback_text)
+    if not feedback_text or feedback_text == "" then return end
+    self:add_message(agent_name, "system", "[CODER FEEDBACK]\n" .. feedback_text)
 end
 -- ============================================================================
 -- 7. HANDOFF MEMO & STAGE TRANSITION

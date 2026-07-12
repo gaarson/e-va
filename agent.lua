@@ -447,8 +447,6 @@ end
 -- Circuit breaker state: tracks consecutive tool failures
 local function run_agent_turn(agent_name, agent_cfg, turn)
     ctx.consecutive_recoveries = 0
-    -- Process pending optimizations from previous turn (non-blocking)
-    optimizer.process_pending(ctx, config)
     local synced_files = ctx:sync_files()
     if #synced_files > 0 then
         logger.info(string.format("[FS WATCHER] Auto-synced %d changed file(s): %s", #synced_files, table.concat(synced_files, ", ")))
@@ -715,6 +713,13 @@ local function run_agent_turn(agent_name, agent_cfg, turn)
 	    -- PROACTIVE CONTEXT OPTIMIZATION: If context is getting large, optimize before next turn
 	    if ctx:should_squash(agent_name) then
 	        optimizer.analyze_and_optimize(ctx, config)
+	        local last_res = optimizer.get_last_result()
+	        if last_res then
+	            logger.info(string.format("[OPTIMIZER] Last result: summary='%s', removed=%d, pinned=%d",
+	                last_res.new_summary or "N/A",
+	                #last_res.files_to_remove,
+	                #last_res.files_to_pin))
+	        end
 	    end
 
 	    -- 3. Обрабатываем результат

@@ -37,7 +37,7 @@ function M.get()
             strict_parsing = true,
             max_retries = 3,
             auto_squash_on_mutation = true,
-            continuation_prompt = "ok",
+            continuation_prompt = "check maybe you stuck or what, good luck",
             reinforcement_interval = 5,
         },
         token_estimation = {
@@ -78,7 +78,9 @@ function M.get()
         auto_load_plan_files = true,       -- Автоматически подгружать файлы из плана
         max_knowledge_base_files = 50,     -- Максимальное количество файлов для передачи
         -- NEW: Enable CODER to send error summaries back to ARCHITECT for plan adjustment
-        feedback_to_architect = false,
+        feedback_to_architect = true,
+        feedback_sections = { "tasks_completed", "tasks_failed", "errors_encountered", "plan_deviations", "recommendations" },
+        max_feedback_tokens = 3000,
     }
     -- Circuit breaker configuration for tool failures
     cfg.CIRCUIT_BREAKER = {
@@ -216,8 +218,8 @@ function M.get()
             model = "Qwen3.5-27B-AWQ",
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
-            use_selective_multi_stage = true,
-            multi_stage_tools = { "patch", "create_file" },
+            -- use_selective_multi_stage = true,
+            -- multi_stage_tools = { "patch", "create_file" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch",
