@@ -134,12 +134,32 @@ end
 -- ============================================================================
 -- COMMAND DEDUPLICATION
 -- ============================================================================
+-- Helper: check if a normalized command matches any exception pattern.
+-- Patterns ending with '*' are treated as prefix wildcards.
+local function _matches_exception(normalized, exceptions)
+    for _, exc in ipairs(exceptions) do
+        if exc:sub(-1) == "*" then
+            -- Wildcard prefix pattern: strip trailing '*' and check prefix
+            local prefix = exc:sub(1, #exc - 1)
+            if normalized:sub(1, #prefix) == prefix then
+                return true
+            end
+        else
+            -- Exact match
+            if normalized == exc then
+                return true
+            end
+        end
+    end
+    return false
+end
 function M.is_duplicate_command(ctx, cmd)
     local normalized = (cmd or ""):gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("^%s+", ""):gsub("%s+$", "")
     if normalized == "" then return false end
     local exceptions = ctx.flow_config.command_flow.dedup_exceptions or { "task_complete" }
-    for _, exc in ipairs(exceptions) do
-        if normalized == exc then return false end
+    -- Check against exception patterns (exact + wildcard prefix)
+    if _matches_exception(normalized, exceptions) then
+        return false
     end
     for _, prev_cmd in ipairs(ctx.executed_commands) do
         if prev_cmd == normalized then return true end
@@ -149,6 +169,11 @@ end
 function M.add_executed_command(ctx, cmd)
     local normalized = (cmd or ""):gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("^%s+", ""):gsub("%s+$", "")
     if normalized == "" then return end
+    -- Do NOT record commands that match exception patterns (they are ephemeral)
+    local exceptions = ctx.flow_config.command_flow.dedup_exceptions or { "task_complete" }
+    if _matches_exception(normalized, exceptions) then
+        return
+    end
     table.insert(ctx.executed_commands, normalized)
     if #ctx.executed_commands > 20 then
         table.remove(ctx.executed_commands, 1)

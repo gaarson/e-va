@@ -39,7 +39,9 @@ function M.get()
             auto_squash_on_mutation = true,
             continuation_prompt = "check maybe you stuck or what maybe command invalid",
             reinforcement_interval = 5,
-            dedup_exceptions = { "task_complete", "delegate_plan" }, -- Commands exempt from dedup
+            -- Commands exempt from dedup. Patterns ending with '*' are treated as prefix wildcards
+            -- (e.g., "mcp_browser_*" exempts all mcp_browser_* variants like mcp_browser_go_to, mcp_browser_click, etc.)
+            dedup_exceptions = { "task_complete", "delegate_plan", "mcp_browser_*" },
         },
         token_estimation = {
             chars_per_token = 3.5,
@@ -117,7 +119,7 @@ function M.get()
         auto_purge_after_turn = false,  -- Images persist across turns; use M:purge_images() manually if needed
         tokens_per_base64_byte = 0.004,  -- For OpenAI vision: low res (<50KB) = 85 tokens, high res = variable (~0.004/byte)
         max_image_dimension = 512,  -- Max pixels on longest side for compression (Option A: aggressive token economy)
-        max_image_age_hours = 24  -- Skip images older than 24 hours
+        max_image_age_hours = 168  -- Skip images older than 24 hours
     }
 
     local BASE_PARAMS = {
