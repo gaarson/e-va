@@ -37,16 +37,21 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     if turn >= 3 then ctx:clear_turn_requested_files() end
 
     if config.PICTURES_DIR then
+        local t_img = socket.gettime()
         ctx:load_images(config.PROJECT_ROOT .. "/" .. config.PICTURES_DIR)
+        local img_elapsed = socket.gettime() - t_img
+        local img_count = ctx.images and #ctx.images or 0
+        logger.info(string.format("[TURN DIAG] Image loading: %d images loaded, %.3fs elapsed", img_count, img_elapsed))
     end
-
     local executor = require("command_executor").new(ctx, agent_name)
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
-
+    local t_build = socket.gettime()
     local context_data = ctx:build_context(agent_name, agent_cfg, available_tokens)
+    local build_elapsed = socket.gettime() - t_build
     local messages = context_data.messages
     local total_ctx_tokens = context_data.total_tokens
+    logger.info(string.format("[TURN DIAG] build_context: %.3fs elapsed, tokens=%d", build_elapsed, total_ctx_tokens))
 
     logger.log_context(turn, agent_name .. "_PROMPT", json:encode({
         turn = turn, agent = agent_name, tokens = total_ctx_tokens, payload = messages

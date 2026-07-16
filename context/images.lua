@@ -10,9 +10,7 @@ local logger = require("logger")
 
 
 -- ============================================================================
-
 -- LOAD IMAGES FROM DIRECTORY
-
 -- ============================================================================
 
 function M.load_images(ctx, dir_path)
@@ -21,7 +19,13 @@ function M.load_images(ctx, dir_path)
         ctx.images_loaded = false
         return
     end
+    local socket = require("socket")
+    local t_load = socket.gettime()
     local raw_images = utils.load_images_from_dir(dir_path)
+    logger.info(string.format("[IMAGE DIAG] Loaded %d raw images from dir", #raw_images))
+    local total_raw = 0
+    for _, img in ipairs(raw_images) do total_raw = total_raw + #(img.base64_data or "") end
+    logger.info(string.format("[IMAGE DIAG] Total raw base64 size: %d bytes (%.1f KB)", total_raw, total_raw / 1024))
     local max_bytes = (ctx.config.IMAGE_CONFIG and ctx.config.IMAGE_CONFIG.max_images_base64_bytes) or (4 * 1024 * 1024)
     local max_age_hours = (ctx.config.IMAGE_CONFIG and ctx.config.IMAGE_CONFIG.max_image_age_hours) or 24
 
@@ -68,8 +72,11 @@ function M.load_images(ctx, dir_path)
         end
     end
 
+    logger.info(string.format("[IMAGE DIAG] Budget filter: %d images passed, total b64 size: %d bytes (%.1f KB)", #filtered, total_b64, total_b64 / 1024))
     ctx.images = filtered
     ctx.images_loaded = (#ctx.images > 0)
+    local elapsed = socket.gettime() - t_load
+    logger.info(string.format("[IMAGE DIAG] load_images completed: %d images, %.3fs elapsed", #filtered, elapsed))
 end
 
 
@@ -87,10 +94,20 @@ function M.add_image(ctx, base64_data, mime_type)
         logger.warn(string.format("[IMAGE] Image cap reached (%d). Rejecting new image.", max_imgs))
         return
     end
-    -- Compute inline hash for deduplication
+    -- Compute inline hash for deduplication (sampled: first 256 bytes + every 64th byte)
+    local socket = require("socket")
+    local t_hash = socket.gettime()
     local sum = 0
-    for i = 1, #base64_data do sum = (sum + string.byte(base64_data, i)) % 4294967295 end
-    local hash = string.format("%08x_%d", sum, #base64_data)
+    local len = #base64_data
+    local step = 64
+    for i = 1, len do
+        if i <= 256 or i % step == 0 then
+            sum = (sum + string.byte(base64_data, i)) % 4294967295
+        end
+    end
+    local hash = string.format("%08x_%d", sum, len)
+    local hash_elapsed = socket.gettime() - t_hash
+    logger.info(string.format("[IMAGE DIAG] add_image hash: b64_len=%d, hash=%s, time=%.4fs", len, hash, hash_elapsed))
     table.insert(ctx.images, { base64_data = base64_data, mime_type = mime_type, hash = hash })
     ctx.images_loaded = true
 end
@@ -150,7 +167,12 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
     if #new_images == 0 then
         return messages, 0
     end
-
+    local socket = require("socket")
+    local t_inject = socket.gettime()
+    -- Log injection details
+    local total_inject_b64 = 0
+    for _, img in ipairs(new_images) do total_inject_b64 = total_inject_b64 + #(img.base64_data or "") end
+    logger.info(string.format("[IMAGE DIAG] Injecting %d new images, total b64 size: %d bytes (%.1f KB)", #new_images, total_inject_b64, total_inject_b64 / 1024))
     local formatted_images = {}
     for _, img in ipairs(new_images) do
         table.insert(formatted_images, {
@@ -198,10 +220,11 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
         if b64_len < 50 * 1024 then
             total_image_tokens = total_image_tokens + 85
         else
-            total_image_tokens = total_image_tokens + math.ceil(b64_len * tokens_per_byte)
+        total_image_tokens = total_image_tokens + math.ceil(b64_len * tokens_per_byte)
         end
     end
-
+    local inject_elapsed = socket.gettime() - t_inject
+    logger.info(string.format("[IMAGE DIAG] inject_images_into_messages completed: %.3fs elapsed", inject_elapsed))
     return messages, total_image_tokens
 end
 

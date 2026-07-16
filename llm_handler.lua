@@ -23,7 +23,17 @@ local function _request_hash(profile, messages, options)
             table.insert(parts, msg.role or "")
             local content = msg.content or ""
             if type(content) == "table" then
-                content = json:encode(content)
+                -- Structural metadata only: skip base64 image data to avoid CPU thrashing
+                local text_total_len = 0
+                local img_count = 0
+                for _, part in ipairs(content) do
+                    if part.type == "text" then
+                        text_total_len = text_total_len + #(part.text or "")
+                    elseif part.type == "image_url" then
+                        img_count = img_count + 1
+                    end
+                end
+                content = string.format("imgs=%d;textlen=%d", img_count, text_total_len)
             end
             table.insert(parts, content)
         end
@@ -62,10 +72,34 @@ function M.send_request(profile, messages, options)
     if not profile or not profile.url then
         return nil, "Invalid Profile"
     end
-
+    logger.info(string.format("[LLM REQ] send_request called, model=%s, messages=%d", profile.model, messages and #messages or 0))
     -- DEDUPLICATION CHECK: prevent identical in-flight requests
     local socket = require("socket")
+    local t_hash = socket.gettime()
     local req_hash = _request_hash(profile, messages, options)
+    local hash_elapsed = socket.gettime() - t_hash
+    -- Log message size stats for diagnosis
+    local total_msg_size = 0
+    local img_msg_count = 0
+    if messages then
+        for _, msg in ipairs(messages) do
+            local c = msg.content or ""
+            if type(c) == "table" then
+                img_msg_count = img_msg_count + 1
+                for _, part in ipairs(c) do
+                    if part.type == "image_url" then
+                        total_msg_size = total_msg_size + #(part.image_url and part.image_url.url or "")
+                    elseif part.type == "text" then
+                        total_msg_size = total_msg_size + #(part.text or "")
+                    end
+                end
+            else
+                total_msg_size = total_msg_size + #tostring(c)
+            end
+        end
+    end
+    logger.info(string.format("[HASH DIAG] _request_hash: time=%.4fs, msgs=%d, img_msgs=%d, total_size=%d bytes (%.1f KB)",
+        hash_elapsed, messages and #messages or 0, img_msg_count, total_msg_size, total_msg_size / 1024))
     local now = socket.gettime()
 
     -- Periodic cleanup of stale entries
@@ -97,20 +131,19 @@ function M.send_request(profile, messages, options)
     req.headers:upsert("accept", "text/event-stream")
 
     local payload = provider.build_payload(profile, messages, options)
-
+    local t_encode = socket.gettime()
     local body = json:encode(payload)
-
-    -- Pre-flight validation: ensure body is valid JSON before sending
-    local ok, decoded = pcall(json.decode, json, body)
-    if not ok then
-        logger:error("PRE-FLIGHT VALIDATION FAILED: Constructed JSON body is invalid. Error: " .. tostring(decoded))
-        return nil, "Invalid JSON body constructed for API request"
-    end
-
+    local encode_elapsed = socket.gettime() - t_encode
+    logger.info(string.format("[SEND DIAG] json.encode: %.3fs, body_size=%d bytes (%.1f KB)", encode_elapsed, #body, #body/1024))
     req:set_body(body)
-
+    -- Remove Expect: 100-continue to prevent hanging on backends that don't support it
+    req.headers:delete("expect")
     local conn_timeout = (profile.params and profile.params.connection_timeout) or 30
+    logger.info("[SEND DIAG] Calling req:go with timeout=" .. conn_timeout)
+    local t_send = socket.gettime()
     local headers, stream = req:go(conn_timeout)
+    local send_elapsed = socket.gettime() - t_send
+    logger.info(string.format("[SEND DIAG] req:go completed: %.3fs", send_elapsed))
     if not headers then
         _in_flight_requests[req_hash] = nil
         return nil, "Connection failed during body transmission"

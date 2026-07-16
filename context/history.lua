@@ -3,6 +3,7 @@
 -- All functions take ctx (the context_flow instance) as the first argument.
 local M = {}
 local utils = require("utils")
+local inspect = require("inspect")
 local compressor = require("context_compressor")
 local logger = require("logger")
 local config_mod = require("context.config")
@@ -157,6 +158,8 @@ function M.is_duplicate_command(ctx, cmd)
     local normalized = (cmd or ""):gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("^%s+", ""):gsub("%s+$", "")
     if normalized == "" then return false end
     local exceptions = ctx.flow_config.command_flow.dedup_exceptions or { "task_complete" }
+    -- logger.info('NORMALIZES %s', normalized)
+    logger.info('EXPEMAF %s', inspect(exceptions))
     -- Check against exception patterns (exact + wildcard prefix)
     if _matches_exception(normalized, exceptions) then
         return false

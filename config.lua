@@ -41,7 +41,10 @@ function M.get()
             reinforcement_interval = 5,
             -- Commands exempt from dedup. Patterns ending with '*' are treated as prefix wildcards
             -- (e.g., "mcp_browser_*" exempts all mcp_browser_* variants like mcp_browser_go_to, mcp_browser_click, etc.)
-            dedup_exceptions = { "task_complete", "delegate_plan", "mcp_browser_*" },
+            -- "shell*" exempts all shell:* commands (shell:ls, shell:npm run build, etc.)
+            -- "task_complete*" exempts task_complete and task_complete:... variants
+            -- "delegate_plan*" exempts delegate_plan and delegate_plan:... variants
+            dedup_exceptions = { "task_complete*", "delegate_plan*", "shell*", "mcp_browser_*", "search*" },
         },
         token_estimation = {
             chars_per_token = 3.5,
@@ -245,6 +248,7 @@ function M.get()
               "create_file",
               "shell",
               "read_file",
+              "mcp_browser_*", 
               "read_chunk",
               "search",
               "task_complete",

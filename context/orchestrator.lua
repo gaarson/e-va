@@ -5,6 +5,7 @@
 local M = {}
 local history = require("context.history")
 local state_mod = require("context.state")
+
 -- ============================================================================
 -- OPTIMIZE CONTEXT
 -- ============================================================================
@@ -34,4 +35,5 @@ function M.optimize_context(ctx, instructions)
         for _, path in ipairs(instructions.unpin_files) do history.unpin_file(ctx, path) end
     end
 end
+
 return M

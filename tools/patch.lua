@@ -93,7 +93,6 @@ local function register(registry)
 
     end,
     [[
-
     MULTI-STAGE GUIDE FOR `patch`:
 
     1. INTENT PHASE: In PAYLOAD_HINT, specify the EXACT file path, target lines/functions, and WHY the change is needed.
