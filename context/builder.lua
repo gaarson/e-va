@@ -9,6 +9,21 @@ local images = require("context.images")
 -- ============================================================================
 -- CONTEXT BUILDING
 -- ============================================================================
+--- Extracts file paths already present in chat_buffer history messages by scanning for <file_context path="..."> tags.
+-- @param chat_buffer table of message tables with content strings
+-- @return set (table with boolean values) of file paths already in history
+local function extract_file_paths_from_chat_buffer(chat_buffer)
+    local paths = {}
+    local pattern = '<file_context%s+path="([^"]+)"'
+    for _, msg in ipairs(chat_buffer) do
+        if msg.content then
+            for path in msg.content:gmatch(pattern) do
+                paths[path] = true
+            end
+        end
+    end
+    return paths
+end
 function M.build_context(ctx, agent_name, agent_cfg, available_tokens)
     local system_prompt = M.get_system_prompt(ctx, agent_cfg)
     local messages = { { role = "system", content = system_prompt } }
@@ -16,15 +31,12 @@ function M.build_context(ctx, agent_name, agent_cfg, available_tokens)
     local current_cost = 0
     local history = ctx.history[agent_name] or {}
     local estimate = function(t) return ctx:estimate_tokens(t, agent_cfg) end
-    -- 1. Estimate size of mandatory blocks
-    local recency = M.get_recency_block(ctx)
-    local recency_cost = estimate(recency)
+    -- 1. Load history from the end FIRST (needed for deduplication)
+    local overhead_estimate = math.ceil(#system_prompt / ctx.flow_config.token_estimation.chars_per_token)
     local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools, agent_cfg)
     local manifest_cost = estimate(tools_manifest)
-    -- 2. Calculate real budget for history
-    local overhead = recency_cost + manifest_cost + math.ceil(#system_prompt / ctx.flow_config.token_estimation.chars_per_token)
-    local chat_budget = math.max(0, available_tokens - overhead - math.floor(available_tokens * 0.1)) -- 10% reserve
-    -- 3. Load history from the end
+    local chat_budget = math.max(0, available_tokens - overhead_estimate - manifest_cost - math.floor(available_tokens * 0.15)) -- 15% reserve for recency
+    -- 2. Load history from the end
     for i = #history, 1, -1 do
         local msg = history[i]
         local cost = estimate(msg.content)
@@ -33,7 +45,14 @@ function M.build_context(ctx, agent_name, agent_cfg, available_tokens)
             current_cost = current_cost + cost
         else break end
     end
-    -- 4. Inject recency
+    -- 3. Collect file paths already present in chat_buffer for deduplication
+    local already_present_paths = extract_file_paths_from_chat_buffer(chat_buffer)
+    -- 4. Estimate size of mandatory blocks (recency now knows about duplicates)
+    local recency = M.get_recency_block(ctx, already_present_paths)
+    local recency_cost = estimate(recency)
+    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools, agent_cfg)
+    local manifest_cost = estimate(tools_manifest)
+    -- 5. Inject recency
     local inject_fn = strategies.INJECTION_STRATEGIES[ctx.flow_config.context_injection.mode] or strategies.INJECTION_STRATEGIES.append_to_last_user
     inject_fn(chat_buffer, recency, "")
     -- Add handoff or initiation
@@ -66,7 +85,12 @@ end
 -- ============================================================================
 -- RECENCY BLOCK
 -- ============================================================================
-function M.get_recency_block(ctx)
+--- Builds the recency block with deduplication against files already present in chat history.
+-- @param ctx ContextFlow instance
+-- @param already_present_paths optional set of file paths already in chat_buffer (to avoid duplication)
+-- @return string recency block content
+function M.get_recency_block(ctx, already_present_paths)
+    already_present_paths = already_present_paths or {}
     local parts = {}
     -- System state
     if ctx.execution_plan and #ctx.execution_plan > 0 then
@@ -87,7 +111,10 @@ function M.get_recency_block(ctx)
     end
     if ctx.flow_config.storage.include_pinned_in_recency then
         for path,_ in pairs(ctx.pinned_files) do
-            if not ctx.turn_requested_files[path] and ctx.knowledge_base[path] then
+            -- Skip if already present in chat history (deduplication)
+            if already_present_paths[path] then
+                -- Skip this file, it's already in history
+            elseif not ctx.turn_requested_files[path] and ctx.knowledge_base[path] then
                 local content = ctx.knowledge_base[path]
                 local is_plan_target = plan_target_files[path]
                 -- For files that are BOTH pinned AND in execution_plan: show FULL content

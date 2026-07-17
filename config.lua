@@ -241,7 +241,7 @@ function M.get()
             -- model = "gemma4-12B",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             use_selective_multi_stage = true,
-            multi_stage_tools = { "create_file" },
+            multi_stage_tools = { "create_file", "patch" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch",

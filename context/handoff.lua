@@ -169,6 +169,9 @@ function M.inject_handoff_files(ctx, agent_name)
     if not next(files_to_pass) then return end
     local parts = {}
     local hist = history.get_history(ctx, agent_name)
+    local handoff_cfg = ctx.config.HANDOFF or {}
+    local lazy_mode = handoff_cfg.lazy_mode or false
+    local max_handoff_file_size = handoff_cfg.max_handoff_file_size or 50000
     -- Build set of execution_plan target files for prioritization
     local plan_target_files = {}
     if ctx.execution_plan and #ctx.execution_plan > 0 then
@@ -181,6 +184,8 @@ function M.inject_handoff_files(ctx, agent_name)
     end
     -- PINNED_TARGETS list for the summary section
     local pinned_targets = {}
+    -- LAZY_FILES list for lazy-mode summary
+    local lazy_files = {}
     -- Helper: check if file is already in history
     local function is_in_history(path)
         local escaped_path = path:gsub("[%(%)%.%%%+%-%*%?%[%^%$%|]", "%%%1")
@@ -192,23 +197,54 @@ function M.inject_handoff_files(ctx, agent_name)
         end
         return false
     end
-    -- Helper: determine status and inject file content
+    -- Helper: determine if a file should be injected lazily (metadata only)
+    local function should_be_lazy(path, content)
+        -- Plan targets are NEVER lazy (always full content)
+        if plan_target_files[path] then return false end
+        -- Files exceeding max_handoff_file_size are always lazy
+        if #content > max_handoff_file_size then return true end
+        -- If lazy_mode is enabled, non-plan files are lazy
+        if lazy_mode then return true end
+        return false
+    end
+    -- Helper: determine status
+    local function get_status(path)
+        if ctx.pinned_files[path] then return "PINNED"
+        elseif ctx.file_states[path] == "RECENTLY_MODIFIED" then return "RECENTLY_MODIFIED" end
+        return "READ_ONLY"
+    end
+    -- Helper: calculate line count
+    local function count_lines(content)
+        return select(2, content:gsub("\n", "\n"))
+    end
+    -- Helper: inject file (either full content or lazy metadata)
     local function inject_file(path, content)
         if is_in_history(path) then return end
-        local status = "READ_ONLY"
-        if ctx.pinned_files[path] then status = "PINNED"
-        elseif ctx.file_states[path] == "RECENTLY_MODIFIED" then status = "RECENTLY_MODIFIED" end
-        -- Ensure file is pinned
+        local status = get_status(path)
+        local line_count = count_lines(content)
+        -- Ensure file is pinned in knowledge base
         history.pin_file(ctx, path)
-        -- Calculate line count for metadata
-        local line_count = select(2, content:gsub("\n", "\n"))
-        -- For plan target files: ALWAYS show full content (no truncation)
-        -- For non-plan files: also show full content (handoff files should be complete)
-        local display_content = content
-        table.insert(parts, string.format(
-            "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
-            path, status, display_content
-        ))
+        -- Post-handoff KB eviction: if enabled and file is not a plan target,
+        -- remove from knowledge_base to free memory (it's already in agent history)
+        local evict = handoff_cfg.evict_from_kb_after_handoff and not plan_target_files[path]
+        if should_be_lazy(path, content) then
+            -- LAZY MODE: inject only metadata (path, line count, status)
+            table.insert(parts, string.format(
+                "<handoff_file path=\"%s\" lines=\"%d\" status=\"%s\"/>",
+                path, line_count, status
+            ))
+            table.insert(lazy_files, string.format("%s (%d lines, %s)", path, line_count, status))
+        else
+            -- FULL MODE: inject complete file content
+            table.insert(parts, string.format(
+                "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
+                path, status, content
+            ))
+        end
+        -- Evict from KB if configured (file is already in agent's history)
+        if evict then
+            ctx.knowledge_base[path] = nil
+        end
         -- Track pinned targets for summary
         if plan_target_files[path] then
             table.insert(pinned_targets, string.format("%s (%d lines)", path, line_count))
@@ -236,7 +272,16 @@ function M.inject_handoff_files(ctx, agent_name)
             end
             pinned_targets_section = pinned_targets_section .. "</PINNED_TARGETS>"
         end
-        local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n") .. pinned_targets_section
+        -- Build LAZY_FILES summary section
+        local lazy_files_section = ""
+        if #lazy_files > 0 then
+            lazy_files_section = "\n<LAZY_HANDOFF_FILES>\nThe following files are available but NOT fully loaded. Use read_file to load their content on demand:\n"
+            for _, lf in ipairs(lazy_files) do
+                lazy_files_section = lazy_files_section .. "  - " .. lf .. "\n"
+            end
+            lazy_files_section = lazy_files_section .. "</LAZY_HANDOFF_FILES>"
+        end
+        local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n") .. pinned_targets_section .. lazy_files_section
         history.add_message(ctx, agent_name, "user", block)
     end
 end

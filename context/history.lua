@@ -158,13 +158,16 @@ function M.is_duplicate_command(ctx, cmd)
     local normalized = (cmd or ""):gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("^%s+", ""):gsub("%s+$", "")
     if normalized == "" then return false end
     local exceptions = ctx.flow_config.command_flow.dedup_exceptions or { "task_complete" }
-    -- logger.info('NORMALIZES %s', normalized)
+    logger.info(string.format('[DEDUP DEBUG] Normalized command: "%s"', normalized))
     logger.info('EXPEMAF %s', inspect(exceptions))
     -- Check against exception patterns (exact + wildcard prefix)
-    if _matches_exception(normalized, exceptions) then
+    local is_exception = _matches_exception(normalized, exceptions)
+    logger.info(string.format('[DEDUP DEBUG] _matches_exception result: %s', tostring(is_exception)))
+    if is_exception then
         return false
     end
     for _, prev_cmd in ipairs(ctx.executed_commands) do
+        logger.info(string.format('[DEDUP DEBUG] Comparing against prev_cmd: "%s" (match=%s)', prev_cmd, tostring(prev_cmd == normalized)))
         if prev_cmd == normalized then return true end
     end
     return false

@@ -43,11 +43,21 @@ function M.run_bootstrap(config, ctx, logger, execute_pipeline_fn, run_agent_tur
         token = arch_agent.token or nil,
         params = {
             stream = true,
-            temperature = 0.7,
-            max_tokens = 8192,
+            temperature = 0.25,
+            max_tokens = 16384,
         },
         prompt_file = "prompts/bootstrapper.md",
-        allowed_tools = {"shell"}
+        allowed_tools = {
+            "shell",
+            "explore_tree",
+            "read_file",
+            "read_chunk",
+            "search",
+            "create_file",
+            "pin",
+            "unpin",
+            "optimize_context"
+        }
     }
 
     config.PIPELINE = {

@@ -199,13 +199,10 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
                 if config.HANDOFF.pass_knowledge_base or config.HANDOFF.pass_pinned_files or config.HANDOFF.pass_requested_files then
                     local next_agent = config.PIPELINE[current_stage_idx + 1] and config.PIPELINE[current_stage_idx + 1].agents[1] or "CODER"
                     ctx:inject_handoff_files(next_agent)
-                    -- Second layer: pin all handoff files for the receiving agent
-                    local handoff_files = ctx:get_handoff_files()
-                    if handoff_files then
-                        for path, _ in pairs(handoff_files) do
-                            ctx:pin_file(path)
-                        end
-                    end
+                    -- NOTE: Removed auto-pin loop here. Handoff files are already injected into
+                    -- the receiving agent's history as <file_context> blocks. Pinning them additionally
+                    -- would cause them to be re-injected via the recency block every turn, creating duplication.
+                    -- The recency-aware deduplication in builder.lua handles this correctly.
                 end
             end
 
