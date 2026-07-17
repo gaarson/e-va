@@ -119,17 +119,8 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
     history.add_executed_command(ctx, cmd)
     -- 3.5. Circuit breaker: track failures and successes
     if cb_config and cb_config.enabled and tool_name then
-        local output_str = res.output or ""
         local is_failure = false
-        -- Check for error indicators in output
-        if output_str:match("[Ee][Rr][Rr][Oo][Rr]") or
-           output_str:match("[Ff][Aa][Ii][Ll][Ee][Dd]") or
-           output_str:match("[Pp][Aa][Tt][Cc][Hh] [Ff][Aa][Ii][Ll][Ee][Dd]") or
-           output_str:match("[Dd][Ii][Ss][Kk] [Ee][Rr][Rr][Oo][Rr]") or
-           output_str:match("[Ff][Aa][Tt][Aa][Ll]") then
-            is_failure = true
-        end
-        -- Also check signal for failure indicators
+        -- Only check signal for failure indicators (avoid false positives from output content)
         if res.signal and (res.signal == "ERROR" or res.signal == "FAILURE") then
             is_failure = true
         end
