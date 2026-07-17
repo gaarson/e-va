@@ -73,29 +73,28 @@ WORKDIR /opt/e-va
 RUN make
 
 RUN chmod +x /opt/e-va/e-va
-
 # Устанавливаем chrome-devtools-mcp
 RUN npm install -g chrome-devtools-mcp@latest
-
 WORKDIR /workspace
-
 ENV AGENT_HOME=/opt/e-va
 ENV PROJECT_ROOT=/workspace
 ENV CHROME_PATH=/usr/bin/google-chrome-stable
-
 VOLUME ["/workspace/.e-va-conf"]
-
-RUN echo "chromeuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/chromeuser \
+# SECURITY: Restrict sudo to only Chrome-related commands
+# chromeuser needs sudo only for Chrome sandbox bypass scenarios
+# Resource limits: consider using --memory and --cpus flags at runtime
+# Example: docker run --memory 4g --cpus 2 e-va-agent
+RUN echo "chromeuser ALL=(ALL) NOPASSWD: /usr/bin/google-chrome-stable, /usr/bin/google-chrome-stable-orig" > /etc/sudoers.d/chromeuser \
     && chmod 0440 /etc/sudoers.d/chromeuser
-
 # Create workspace directory with correct ownership BEFORE switching user
 RUN mkdir -p /workspace && chown chromeuser:chromeuser /workspace
 RUN mkdir -p /opt/e-va/logs && chown chromeuser:chromeuser /opt/e-va/logs
 USER chromeuser
-# Healthcheck: Verify the agent process (lua) is running
-# We check for the lua process because tini is PID 1 and e-va is a bash wrapper
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["bash", "-c", "pgrep -f 'lua.*agent\\.lua' || exit 1"]
+# Healthcheck: Verify core binaries exist (does NOT require agent to be running)
+# This allows the container to report healthy even during idle periods
+# For runtime agent verification, use: pgrep -f 'lua.*agent\.lua'
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["bash", "-c", "test -x /opt/e-va/e-va && test -f /opt/e-va/agent.lua && test -x /usr/bin/google-chrome-stable && test -x /usr/bin/tini || exit 1"]
 # Оборачиваем вызов в tini для корректного завершения зомби-процессов Chrome
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/e-va/e-va"]
 CMD ["--pipe", "."]

@@ -43,11 +43,11 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
             if msg.role == "user" and msg.content and #msg.content > 10 then
                 -- Look for tool output markers that match the command
                 if tool_name then
-                    if msg.content:match("\[" .. tool_name:upper() .. "\]") or
-                       msg.content:match("\[OUTPUT\]") or
-                       msg.content:match("\[RESULT\]") or
-                       msg.content:match("^\[SEARCH") or
-                       msg.content:match("^\[SYSTEM") then
+                    if msg.content:match("%[" .. tool_name:upper() .. "%]") or
+                       msg.content:match("%[OUTPUT%]") or
+                       msg.content:match("%[RESULT%]") or
+                       msg.content:match("^%[SEARCH") or
+                       msg.content:match("^%[SYSTEM") then
                         prev_output = msg.content
                         break
                     end

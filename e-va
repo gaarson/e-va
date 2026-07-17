@@ -24,6 +24,15 @@ if [ ! -f "$AGENT_HOME/config.lua" ]; then
     echo "[FATAL] Core file config.lua not found in $AGENT_HOME." >&2
     exit 1
 fi
+# --- SAFETY CHECK: Protect Core Agent Files ---
+# Ensure AGENT_HOME is not writable by the current user to prevent accidental self-modification
+# In Docker, AGENT_HOME (/opt/e-va) is owned by root, so this should pass for chromeuser.
+# If running locally as root, this check helps prevent destructive edits.
+if [ -w "$AGENT_HOME" ]; then
+    echo "[WARNING] AGENT_HOME ($AGENT_HOME) is writable by current user." >&2
+    echo "[WARNING] This poses a risk of accidental self-modification." >&2
+    # We do not exit here to allow local development flexibility, but we log the warning.
+fi
 if [ -n "$GIT_EVA_URL" ]; then echo "Cloning $GIT_EVA_URL ..."; rm -rf /app/*; rm -rf /app/.* 2>/dev/null; git clone "$GIT_EVA_URL" /tmp/repo; cp -a /tmp/repo/. /app/; rm -rf /tmp/repo; fi
 
 # --- PIPE MODE DOCUMENTATION ---
