@@ -51,18 +51,15 @@ RULES:
 - If multiple changes in the same file, output multiple SEARCH/REPLACE blocks sequentially.
 ]], create_file = [[
 PAYLOAD FORMAT FOR `create_file`:
-
-Line 1: FILE PATH (relative or absolute)
-Line 2+: Complete file content.
-
+Output ONLY the complete file content. DO NOT include the file path.
+The file path is handled automatically by the system.
 RULES:
-- First line must be the file path.
-- Second line onwards: the COMPLETE file content.
+- Output ONLY the file content, starting from the first line.
 - No wrappers, no explanations, no markdown fences.
 - Content must be syntactically valid for the target language.
 - If the file already exists, it will be overwritten (backup created if configured).
 - Directories will be auto-created if they don't exist.
-
+- Do NOT include the file path in your output.
 ]], delegate_plan = [[
 PAYLOAD FORMAT FOR `delegate_plan`:
 
@@ -539,7 +536,7 @@ function M:feed_response(llm_response)
         self.intent     = intent
         self.intent_raw = intent.raw
         -- Capture file_path from intent for patch/create_file tools
-        if intent.TOOL == "patch" and intent.FILE_PATH and utils.trim(intent.FILE_PATH) ~= "" then
+        if (intent.TOOL == "patch" or intent.TOOL == "create_file") and intent.FILE_PATH and utils.trim(intent.FILE_PATH) ~= "" then
             self.file_path = utils.trim(intent.FILE_PATH)
         end
         self.state      = M.STATES.INTENT_READY
@@ -555,9 +552,9 @@ function M:feed_response(llm_response)
             return { stage = "error", message = "Payload validation failed: " .. err_msg }
         end
         self.state   = M.STATES.COMMAND_READY
-        -- If file_path is pre-known for patch tool, prepend it to payload for the tool handler
+        -- If file_path is pre-known for patch/create_file tools, prepend it to payload for the tool handler
         local effective_payload = self.payload
-        if self.intent.TOOL == "patch" and self.file_path and self.file_path ~= "" then
+        if (self.intent.TOOL == "patch" or self.intent.TOOL == "create_file") and self.file_path and self.file_path ~= "" then
             effective_payload = self.file_path .. "\n" .. self.payload
         end
         return { stage = "execute", tool = self.intent.TOOL, payload = effective_payload }

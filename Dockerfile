@@ -1,7 +1,12 @@
 FROM debian:trixie-slim
-
-# Системные зависимости + Chrome зависимости
-# Добавили `tini` для управления процессами
+LABEL org.opencontainers.image.title="E-va Agent" \
+      org.opencontainers.image.description="Autonomous Lua-based AI agent with browser automation" \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.vendor="E-va"
+STOPSIGNAL SIGQUIT
+SHELL ["/bin/bash", "-c"]
+# System dependencies + Chrome dependencies
+# Added `tini` for process management
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     lua5.1 \
@@ -83,10 +88,14 @@ VOLUME ["/workspace/.e-va-conf"]
 RUN echo "chromeuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/chromeuser \
     && chmod 0440 /etc/sudoers.d/chromeuser
 
+# Create workspace directory with correct ownership BEFORE switching user
+RUN mkdir -p /workspace && chown chromeuser:chromeuser /workspace
 RUN mkdir -p /opt/e-va/logs && chown chromeuser:chromeuser /opt/e-va/logs
-
 USER chromeuser
-
+# Healthcheck: Verify the agent process (lua) is running
+# We check for the lua process because tini is PID 1 and e-va is a bash wrapper
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["bash", "-c", "pgrep -f 'lua.*agent\\.lua' || exit 1"]
 # Оборачиваем вызов в tini для корректного завершения зомби-процессов Chrome
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/e-va/e-va"]
 CMD ["--pipe", "."]

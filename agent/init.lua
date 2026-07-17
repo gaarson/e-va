@@ -41,12 +41,14 @@ end
 
 
 -- 4. Load Custom Tools
-
 custom_tools_loader.load_custom_tools(config, require("tool_registry"), utils, ContextFlow, logger)
-
-
 -- 5. Parse CLI Args
-local cli_args = {...}
+-- Since agent.init is loaded via require() from agent.lua, varargs (...) are empty.
+-- Use the global arg table instead, skipping arg[0] (script name).
+local cli_args = {}
+for i = 1, #arg do
+    cli_args[i] = arg[i]
+end
 local parsed = cli_parser.parse_args(cli_args, config, logger)
 -- 6. Handle Pipe Mode (Must be before session restoration)
 if parsed.is_pipe then
