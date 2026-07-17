@@ -46,13 +46,14 @@ custom_tools_loader.load_custom_tools(config, require("tool_registry"), utils, C
 
 
 -- 5. Parse CLI Args
-
 local cli_args = {...}
 local parsed = cli_parser.parse_args(cli_args, config, logger)
-
-
--- 6. Load Instruction from task.txt if not provided
-
+-- 6. Handle Pipe Mode (Must be before session restoration)
+if parsed.is_pipe then
+    task_module.run_pipe_mode(ctx, config, utils, logger, pipeline_module.execute_pipeline, turn_module.run_agent_turn, STATE_FILE)
+    return -- Exit after pipe mode finishes (or breaks)
+end
+-- 7. Load Instruction from task.txt if not provided
 local instruction = parsed.instruction
 
 if not instruction then

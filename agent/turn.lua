@@ -255,6 +255,10 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     elseif result.type == "ERROR" then
         logger.error("Agent execution error: " .. (result.message or "Unknown error"))
         return "ERROR"
+    elseif result.type == "CIRCUIT_BREAKER" then
+        logger.warn(string.format("[CIRCUIT BREAKER] Tool in cooldown. Message injected into history."))
+        save_state()
+        return "AUTO_LOOP"
     elseif result.type == "DUPLICATE" then
         logger.warn(string.format("[DEDUP] Blocked duplicate command. Message injected into history."))
         save_state()

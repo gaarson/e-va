@@ -90,7 +90,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
                         tool_name_cb, remaining
                     )
                     history.add_message(ctx, agent_name, "user", cb_msg)
-                    return { type = "DUPLICATE", message = cb_msg }
+                    return { type = "CIRCUIT_BREAKER", message = cb_msg }
                 end
             end
         end

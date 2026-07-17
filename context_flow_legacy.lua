@@ -337,6 +337,24 @@ function M:get_history(agent_name)
     return self.history[agent_name] or {}
 end
 
+-- Remove consecutive duplicate messages (same role AND same content)
+function M:deduplicate_consecutive_messages(agent_name)
+    local history = self:get_history(agent_name)
+    if #history < 2 then return 0 end
+    local removed = 0
+    local i = #history
+    while i >= 2 do
+        if history[i].role == history[i-1].role and history[i].content == history[i-1].content then
+            table.remove(history, i)
+            removed = removed + 1
+        end
+        i = i - 1
+    end
+    if removed > 0 then
+        logger.info(string.format("[DEDUP CONSECUTIVE] Removed %d consecutive duplicate message(s) for agent '%s'", removed, agent_name))
+    end
+    return removed
+end
 function M:prune_history(agent_name)
     local history = self:get_history(agent_name)
     local limits = self.flow_config.storage
@@ -346,6 +364,8 @@ function M:prune_history(agent_name)
     if self.flow_config.compression and self.flow_config.compression.enabled then
         self:compress_history(agent_name)
     end
+    -- STEP 1.5: Remove consecutive duplicate messages
+    self:deduplicate_consecutive_messages(agent_name)
     -- STEP 2: Apply importance-weighted pruning (smarter than fifo)
     M.PRUNE_STRATEGIES.importance_weighted(history, limits, estimate)
     -- STEP 3: Squash large patches and outputs to save tokens
@@ -457,13 +477,32 @@ local function _normalize_cmd(cmd)
     if not cmd then return "" end
     return cmd:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("^%s+", ""):gsub("%s+$", "")
 end
+-- Helper: check if a normalized command matches any exception pattern.
+-- Patterns ending with '*' are treated as prefix wildcards.
+local function _matches_exception(normalized, exceptions)
+    for _, exc in ipairs(exceptions) do
+        if exc:sub(-1) == "*" then
+            -- Wildcard prefix pattern: strip trailing '*' and check prefix
+            local prefix = exc:sub(1, #exc - 1)
+            if normalized:sub(1, #prefix) == prefix then
+                return true
+            end
+        else
+            -- Exact match
+            if normalized == exc then
+                return true
+            end
+        end
+    end
+    return false
+end
 function M:is_duplicate_command(cmd)
     local normalized = _normalize_cmd(cmd)
     if normalized == "" then return false end
-    -- Check config-driven dedup exceptions
+    -- Check config-driven dedup exceptions (supports wildcard patterns like "shell*")
     local exceptions = self.flow_config.command_flow.dedup_exceptions or { "task_complete" }
-    for _, exc in ipairs(exceptions) do
-        if normalized == exc then return false end
+    if _matches_exception(normalized, exceptions) then
+        return false
     end
     for _, prev_cmd in ipairs(self.executed_commands) do
         if prev_cmd == normalized then
@@ -475,6 +514,11 @@ end
 function M:add_executed_command(cmd)
     local normalized = _normalize_cmd(cmd)
     if normalized == "" then return end
+    -- Do NOT record commands that match exception patterns (they are ephemeral)
+    local exceptions = self.flow_config.command_flow.dedup_exceptions or { "task_complete" }
+    if _matches_exception(normalized, exceptions) then
+        return
+    end
     table.insert(self.executed_commands, normalized)
     -- FIFO: keep max 20 entries
     if #self.executed_commands > 20 then

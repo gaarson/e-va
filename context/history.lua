@@ -19,6 +19,23 @@ end
 function M.get_history(ctx, agent_name)
     return ctx.history[agent_name] or {}
 end
+function M.deduplicate_consecutive_messages(ctx, agent_name)
+    local history = M.get_history(ctx, agent_name)
+    if #history < 2 then return 0 end
+    local removed = 0
+    local i = #history
+    while i >= 2 do
+        if history[i].role == history[i-1].role and history[i].content == history[i-1].content then
+            table.remove(history, i)
+            removed = removed + 1
+        end
+        i = i - 1
+    end
+    if removed > 0 then
+        logger.info(string.format("[DEDUP CONSECUTIVE] Removed %d consecutive duplicate message(s) for agent '%s'", removed, agent_name))
+    end
+    return removed
+end
 function M.prune_history(ctx, agent_name)
     local history = M.get_history(ctx, agent_name)
     local limits = ctx.flow_config.storage
@@ -28,6 +45,8 @@ function M.prune_history(ctx, agent_name)
     if ctx.flow_config.compression and ctx.flow_config.compression.enabled then
         M.compress_history(ctx, agent_name)
     end
+    -- STEP 1.5: Remove consecutive duplicate messages
+    M.deduplicate_consecutive_messages(ctx, agent_name)
     -- STEP 2: Apply importance-weighted pruning
     strategies_mod.PRUNE_STRATEGIES.importance_weighted(history, limits, estimate, config_mod.IMPORTANCE_SCORES)
     -- STEP 3: Squash large patches and outputs

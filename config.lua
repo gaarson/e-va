@@ -44,7 +44,7 @@ function M.get()
             -- "shell*" exempts all shell:* commands (shell:ls, shell:npm run build, etc.)
             -- "task_complete*" exempts task_complete and task_complete:... variants
             -- "delegate_plan*" exempts delegate_plan and delegate_plan:... variants
-            dedup_exceptions = { "task_complete*", "delegate_plan*", "shell*", "mcp_browser_*", "search*" },
+            dedup_exceptions = { "task_complete*", "delegate_plan*", "shell*", "mcp_browser_*", "search*", "read_chunk*" },
         },
         token_estimation = {
             chars_per_token = 3.5,
