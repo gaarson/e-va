@@ -134,23 +134,17 @@ function M.get()
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 16384,
-            temperature = 0.2,
-            top_p = 0.95,
-            top_k = 60,
+            temperature = 0.3,
             -- min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
-            repetition_penalty = 1.05
         },
         ENGINEERING = {
             max_tokens = 16384,
             temperature = 0.1,
-            top_p = 0.95,
-            top_k = 60,
             -- min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
-            repetition_penalty = 1.05
             -- presence_penalty = 0.0
         }
     }
