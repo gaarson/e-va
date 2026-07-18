@@ -178,7 +178,6 @@ function M.is_duplicate_command(ctx, cmd)
     if normalized == "" then return false end
     local exceptions = ctx.flow_config.command_flow.dedup_exceptions or { "task_complete" }
     logger.info(string.format('[DEDUP DEBUG] Normalized command: "%s"', normalized))
-    logger.info('EXPEMAF %s', inspect(exceptions))
     -- Check against exception patterns (exact + wildcard prefix)
     local is_exception = _matches_exception(normalized, exceptions)
     logger.info(string.format('[DEDUP DEBUG] _matches_exception result: %s', tostring(is_exception)))
