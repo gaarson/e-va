@@ -6,11 +6,8 @@ local patcher_core = require("patcher_core")
 -- Defined early because it's used by generate_unified_diff
 
 local function fuzzy_line_eq(a, b)
-
     if not a or not b then return false end
-
     return a:gsub("^%s+", ""):gsub("%s+$", "") == b:gsub("^%s+", ""):gsub("%s+$", "")
-
 end
 
 
@@ -28,23 +25,15 @@ function M.generate_unified_diff(old_lines, new_lines, filename)
     -- Early termination: if identical, return empty
 
     if old_len == new_len then
-
         local identical = true
-
         for idx = 1, old_len do
-
             if not fuzzy_line_eq(old_lines[idx], new_lines[idx]) then
-
                 identical = false
-
                 break
-
             end
-
         end
 
         if identical then return "" end
-
     end
 
 
@@ -226,13 +215,9 @@ local function strip_all_empty(lns)
     local result = {}
 
     for _, l in ipairs(lns) do
-
         if not l:match("^%s*$") then
-
             result[#result + 1] = l
-
         end
-
     end
 
     return result
@@ -260,93 +245,56 @@ function M.apply_patch(original_content, llm_response)
     -- Phase 1: Line-based state-machine parsing of SEARCH/REPLACE blocks
 
     local response_lines = to_lines(response)
-
     local state = STATE_OUTSIDE
-
     local search_lines = {}
-
     local replace_lines = {}
-
     local blocks = {}
 
     for i = 1, #response_lines do
-
         local line = response_lines[i]
-
         local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
-
         if state == STATE_OUTSIDE then
-
             if trimmed == "<<<<<<< SEARCH" then
-
                 state = STATE_IN_SEARCH
-
                 search_lines = {}
-
                 replace_lines = {}
-
             end
 
         elseif state == STATE_IN_SEARCH then
-
             if trimmed == "=======" then
-
                 state = STATE_IN_REPLACE
-
             else
-
                 table.insert(search_lines, line)
-
             end
 
         elseif state == STATE_IN_REPLACE then
-
             if trimmed:match("^>>>>>>>") then
-
                 table.insert(blocks, { search_lines = search_lines, replace_lines = replace_lines })
-
                 state = STATE_OUTSIDE
-
             elseif trimmed == "<<<<<<< SEARCH" then
-
                 state = STATE_IN_SEARCH
-
                 search_lines = {}
-
                 replace_lines = {}
-
             else
-
                 table.insert(replace_lines, line)
-
             end
-
         end
-
     end
 
     if state == STATE_IN_REPLACE and #search_lines > 0 then
-
         table.insert(blocks, { search_lines = search_lines, replace_lines = replace_lines })
-
     end
 
     -- Phase 2: Apply each parsed block
 
     for _, block in ipairs(blocks) do
-
         local s_lines = strip_all_empty(block.search_lines)
-
         local r_lines = strip_all_empty(block.replace_lines)
 
         -- Check if search block has any non-empty content
-
         local has_content = false
-
         for _, l in ipairs(s_lines) do
-
             if l:match("%S") then has_content = true; break end
-
         end
 
         if not has_content then
@@ -354,17 +302,12 @@ function M.apply_patch(original_content, llm_response)
             table.insert(errors, "FAILED BLOCK: SEARCH block is empty or whitespace-only.")
 
         else
-
             local s_str = table.concat(s_lines, "\n")
-
             local r_str = table.concat(r_lines, "\n")
 
             if s_str == r_str then
-
                 table.insert(errors, "FAILED BLOCK: SEARCH and REPLACE blocks are EXACTLY identical. No changes needed.")
-
             else
-
                 -- Try C module first (fast, exact contiguous match)
 
                 local s_line, e_line, err_msg = patcher_core.find_unique_fuzzy_block(file_lines, s_lines)
@@ -391,20 +334,10 @@ function M.apply_patch(original_content, llm_response)
 
 
                 elseif err_msg and err_msg:match("^AMBIGUOUS") then
-
-
                     -- AMBIGUOUS MATCH: Fail with error (do NOT silently apply to all)
-
-
                     local snippet = s_str:sub(1, 100):gsub("\n", " ")
-
-
                     if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
-
-
                     table.insert(errors, string.format("FAILED BLOCK: '%s' -> AMBIGUOUS MATCH: Found multiple occurrences. Add more context lines to make the match unique.", snippet))
-
-
 
                 else
                     -- C module failed: try Lua fallback that skips empty lines
@@ -497,15 +430,10 @@ function M.apply_patch(original_content, llm_response)
     else
 
         if #errors > 0 then
-
             return false, "Patch Failed:\n" .. table.concat(errors, "\n")
-
         else
-
             return false, "No valid SEARCH/REPLACE blocks found. Ensure format:\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE"
-
         end
-
     end
 
 end
