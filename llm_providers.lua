@@ -55,7 +55,7 @@ M.register("openai", {
         local delta = part.choices[1].delta
         if not delta then return nil, nil end
 
-        return delta.content, delta.reasoning_content
+        return delta.content, delta.reasoning
     end
 })
 
