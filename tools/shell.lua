@@ -1,7 +1,7 @@
 local utils = require("utils")
 local os = require("os")
 local function register(registry)
-    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts. (1) Safe whitelist bypasses human approval: ls, cat, grep, rg, echo, pwd, ps, find, head, tail, whoami, make, test, npm, cargo. All other commands require human-in-the-loop confirmation. (2) 10-minute timeout (600s) enforced via timeout wrapper — long-running commands are killed. (3) Output truncation: logs exceeding 1,000,000 bytes are truncated to the last 1MB; early output may be lost for very verbose commands. (4) Circuit breaker: if test/build/check commands fail 3 consecutive times, a warning is injected telling the agent to stop blind patching and read the source code first. (5) Exit codes are captured and reported for silent commands. (6) Output is streamed in real-time to the terminal but returned as a single concatenated string to the agent. (7) Interactive mode: use interactive=true to enable interactive CLI sessions (password entry, etc.). Returns WAITING_USER_INPUT signal when interactive input is needed.", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts. (1) Safe whitelist bypasses human approval: ls, cat, grep, rg, echo, pwd, ps, find, head, tail, whoami, make, test, npm, cargo. All other commands require human-in-the-loop confirmation. (2) 10-minute timeout (60s) enforced via timeout wrapper — long-running commands are killed. (3) Output truncation: logs exceeding 1,000,000 bytes are truncated to the last 1MB; early output may be lost for very verbose commands. (4) Circuit breaker: if test/build/check commands fail 3 consecutive times, a warning is injected telling the agent to stop blind patching and read the source code first. (5) Exit codes are captured and reported for silent commands. (6) Output is streamed in real-time to the terminal but returned as a single concatenated string to the agent. (7) Interactive mode: use interactive=true to enable interactive CLI sessions (password entry, etc.). Returns WAITING_USER_INPUT signal when interactive input is needed.", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
         -- Parse arguments: support key=value style for interactive mode
         local interactive = false
         if args:match("interactive%s*=%s*true") then
@@ -41,7 +41,7 @@ local function register(registry)
             local fin = io.open(tmp_in, "w")
             if fin then fin:close() end
             local wrapper_script = string.format(
-                "timeout 600 bash -ic %s < '%s' > '%s' 2>&1; echo $? > '%s'",
+                "timeout 60 bash -ic %s < '%s' > '%s' 2>&1; echo $? > '%s'",
                 utils.shell_quote(cmd), tmp_in, tmp_out, exit_file
             )
             -- For interactive mode, we collect user inputs first, then run
@@ -92,7 +92,7 @@ local function register(registry)
         local tmp_file = os.tmpname()
         local exit_file = tmp_file .. ".exit_code"
         local wrapper_script = string.format(
-            "timeout 600 bash -c %s > '%s' 2>&1; echo $? > '%s'",
+            "timeout 60 bash -c %s > '%s' 2>&1; echo $? > '%s'",
             utils.shell_quote(cmd), tmp_file, exit_file
         )
         os.execute(wrapper_script .. " &")
