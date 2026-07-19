@@ -5,6 +5,7 @@ local M = {}
 local utils = require("utils")
 local history = require("context.history")
 local builder = require("context.builder")
+local json = require("JSON")
 -- ============================================================================
 -- GENERATE HANDOFF MEMO
 -- ============================================================================
@@ -69,6 +70,69 @@ function M.generate_handoff_memo(ctx, agent_name, agent_cfg)
         tokens = tokens + math.ceil(#sec / div)
         if tokens >= max_tokens then break end
     end
+    -- Add structured JSON handoff payload
+    local json_payload = {
+        from_agent = agent_name,
+        execution_plan = {},
+        current_task_index = ctx.current_task_index or 1,
+        files_modified = {},
+        pinned_files = {},
+        knowledge_base_count = 0,
+        errors_encountered = {},
+        decisions = {},
+        last_actions = {},
+        remaining_tasks = 0
+    }
+    -- Execution plan
+    if ctx.execution_plan and #ctx.execution_plan > 0 then
+        for i, task in ipairs(ctx.execution_plan) do
+            local status = "pending"
+            if i < ctx.current_task_index then status = "done"
+            elseif i == ctx.current_task_index then status = "active" end
+            table.insert(json_payload.execution_plan, {
+                step = i,
+                file = tostring(task.file or "?"),
+                instruction = tostring(task.instruction or "?"),
+                status = status
+            })
+        end
+        json_payload.remaining_tasks = #ctx.execution_plan - ctx.current_task_index + 1
+    end
+    -- Files modified
+    for path, state in pairs(ctx.file_states) do
+        if state == "MODIFIED" or state == "CREATED" then
+            table.insert(json_payload.files_modified, { path = path, state = state })
+        end
+    end
+    -- Pinned files
+    for path, _ in pairs(ctx.pinned_files) do
+        table.insert(json_payload.pinned_files, path)
+    end
+    -- Knowledge base count
+    local kb_count = 0
+    for _, _ in pairs(ctx.knowledge_base) do kb_count = kb_count + 1 end
+    json_payload.knowledge_base_count = kb_count
+    -- Last actions
+    for _, a in ipairs(ctx.last_actions) do
+        table.insert(json_payload.last_actions, { type = a.type, summary = a.summary })
+    end
+    -- Decisions from last_actions
+    for _, a in ipairs(ctx.last_actions) do
+        if a.type == "DECISION" then
+            table.insert(json_payload.decisions, a.summary)
+        end
+    end
+    -- Errors from recent tool outputs
+    for _, tool_out in ipairs(ctx.recent_tool_outputs) do
+        if tool_out.output and (tool_out.output:match("[Ee][Rr][Rr][Oo][Rr]") or tool_out.output:match("[Ff][Aa][Ii][Ll][Ee][Dd]")) then
+            table.insert(json_payload.errors_encountered, {
+                message = tool_out.output:sub(1, 200),
+                tool = tool_out.tool
+            })
+        end
+    end
+    local json_str = json:encode(json_payload)
+    table.insert(parts, "<handoff_json>" .. json_str .. "</handoff_json>")
     table.insert(parts, "</handoff_memo>")
     return table.concat(parts, "\n")
 end

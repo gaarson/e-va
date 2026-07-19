@@ -88,7 +88,50 @@ local function register(registry)
                 return { output = "\n[DISK ERROR]: " .. tostring(w_err) }
             end
         else
-            return { output = "\n[PATCH FAILED]: " .. tostring(changes_or_err) }
+            -- Build structured error detail for recovery
+            local file_content = ctx.knowledge_base[rel_path] or ""
+            local error_detail = "\n[PATCH FAILED]: " .. tostring(changes_or_err)
+            -- Extract SEARCH block from patch body for debug info
+            local search_block = patch_body:match("<<<<<<< SEARCH\n(.-)\n=======")
+            local search_preview = ""
+            if search_block then
+                local search_lines = {}
+                for line in search_block:gmatch("[^\r\n]+") do
+                    if #search_lines < 3 then
+                        table.insert(search_lines, line)
+                    end
+                end
+                search_preview = "\n   Your SEARCH block started with:\n   " .. table.concat(search_lines, "\n   ")
+            end
+            -- Show actual file content snippet
+            local file_snippet = ""
+            if #file_content > 0 then
+                local file_lines = {}
+                for line in file_content:gmatch("[^\r\n]+") do
+                    if #file_lines < 10 then
+                        table.insert(file_lines, line)
+                    end
+                end
+                file_snippet = "\n\n   Actual file content (first 10 lines):\n   " .. table.concat(file_lines, "\n   ")
+            end
+            -- Contextual hint
+            local hint = ""
+            local err_str = tostring(changes_or_err)
+            if err_str:match("[Ii][Nn][Oo] [Mm][Aa][Tt][Cc][Hh]") or err_str:match("[Nn]o matching") then
+                hint = "\n\n   HINT: SEARCH block did not match file content. Common causes:\n" ..
+                       "   - Whitespace mismatch (tabs vs spaces)\n" ..
+                       "   - File was modified by a previous patch in this command\n" ..
+                       "   - Not enough unchanged context lines in SEARCH block\n" ..
+                       "   ACTION: Re-read the file with read_file before retrying."
+            elseif err_str:match("[Aa]mbiguous") then
+                hint = "\n\n   HINT: SEARCH block matched multiple locations. Add more unchanged context lines (2-4) to make the match unique."
+            else
+                hint = "\n\n   HINT: Re-read the file with read_file to see current content, then adjust your SEARCH block."
+            end
+            error_detail = error_detail .. search_preview .. file_snippet .. hint .. "\n   --- END DEBUG ---"
+            -- Track patch failure in recent tool outputs for context
+            ctx:add_tool_output("patch", string.format("PATCH FAILED on %s: %s", rel_path, tostring(changes_or_err)))
+            return { output = error_detail, signal = "FAILURE" }
         end
 
     end,

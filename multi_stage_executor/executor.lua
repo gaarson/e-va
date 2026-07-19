@@ -50,9 +50,9 @@ function M.new(ctx, agent_name, opts)
         max_tokens_per_task = opts.max_tokens_per_task or 32000,
 
         budget_mode       = opts.budget_mode or "adaptive",
-
         file_path         = opts.file_path or nil,
-
+        validation_retries = 0,
+        max_validation_retries = opts.max_validation_retries or 2,
         prompts = {
 
             intent    = opts.intent_prompt    or prompts.DEFAULT_INTENT_PROMPT,
@@ -137,15 +137,11 @@ function M:parse_review(text)
 
     verdict = verdict:upper()
 
-    if verdict ~= "APPROVE" and verdict ~= "REVISE" then
-
-        return nil, "Invalid VERDICT: '" .. verdict .. "'. Expected APPROVE or REVISE."
-
+    if verdict ~= "APPROVE" and verdict ~= "REVISE" and verdict ~= "PARTIAL" then
+        return nil, "Invalid VERDICT: '" .. verdict .. "'. Expected APPROVE, REVISE, or PARTIAL."
     end
-
     local correction = nil
-
-    if verdict == "REVISE" then
+    if verdict == "REVISE" or verdict == "PARTIAL" then
 
         correction = parsers.extract_field(block, "CORRECTION")
 
@@ -157,8 +153,7 @@ function M:parse_review(text)
 
     end
 
-    return { verdict = verdict, correction = correction, raw = utils.trim(block) }, nil
-
+    return { verdict = verdict, correction = correction, raw = utils.trim(block), partial_passed = verdict == "PARTIAL" }, nil
 end
 
 
@@ -373,47 +368,43 @@ end
 
 
 function M:feed_response(llm_response)
-
+    -- Estimate tokens used by this response (rough: chars / 4)
+    local tokens_used = 0
+    if llm_response and type(llm_response) == "string" then
+        tokens_used = math.floor(#llm_response / 4)
+    end
     if self.state == states.STATES.INTENT_DRAFT then
-
+        self.total_tokens_used = self.total_tokens_used + tokens_used
         local intent, err = self:parse_intent(llm_response)
-
         if not intent then
-
             return { stage = "error", message = "Intent parse failed: " .. err }
-
         end
-
         self.intent     = intent
-
         self.intent_raw = intent.raw
-
         if (intent.TOOL == "patch" or intent.TOOL == "create_file") and intent.FILE_PATH and utils.trim(intent.FILE_PATH) ~= "" then
-
             self.file_path = utils.trim(intent.FILE_PATH)
-
         end
-
         self.state      = states.STATES.INTENT_READY
-
         return { stage = "generate", prompt = self:build_generate_prompt() }
-
     end
 
     if self.state == states.STATES.INTENT_READY or self.state == states.STATES.REVISING then
-
+        self.total_tokens_used = self.total_tokens_used + tokens_used
         self.payload = parsers.sanitize_payload(llm_response)
-
         local valid, err_msg = parsers.validate_payload(self.intent.TOOL, self.payload)
-
         if not valid then
-
-            logger.warn(string.format("[MULTI-STAGE] Payload validation failed for tool '%s': %s", self.intent.TOOL, err_msg))
-
-            self.state = states.STATES.ERROR
-
-            return { stage = "error", message = "Payload validation failed: " .. err_msg }
-
+            self.validation_retries = self.validation_retries + 1
+            if self.validation_retries > self.max_validation_retries then
+                logger.warn(string.format("[MULTI-STAGE] Payload validation failed after %d retries for tool '%s': %s", self.validation_retries, self.intent.TOOL, err_msg))
+                self.state = states.STATES.ERROR
+                return { stage = "error", message = "Payload validation failed after " .. self.validation_retries .. " retries: " .. err_msg }
+            end
+            logger.warn(string.format("[MULTI-STAGE] Payload validation failed (attempt %d/%d) for tool '%s': %s. Requesting regeneration.", self.validation_retries, self.max_validation_retries, self.intent.TOOL, err_msg))
+            self.corrections[#self.corrections + 1] = "PAYLOAD VALIDATION ERROR: " .. err_msg .. ". Please fix the payload to satisfy validation requirements."
+            self.intent_raw = self:_merge_correction("PAYLOAD VALIDATION ERROR: " .. err_msg .. ". Please fix the payload to satisfy validation requirements.")
+            self.state = states.STATES.REVISING
+            self.iteration = self.iteration + 1
+            return { stage = "generate", prompt = self:build_generate_prompt() }
         end
 
         self.state   = states.STATES.COMMAND_READY
@@ -431,7 +422,7 @@ function M:feed_response(llm_response)
     end
 
     if self.state == states.STATES.REVIEWING then
-
+        self.total_tokens_used = self.total_tokens_used + tokens_used
         local budget = self:calculate_token_budget()
 
         if self.total_tokens_used > budget then
@@ -453,45 +444,45 @@ function M:feed_response(llm_response)
         local review, err = self:parse_review(llm_response)
 
         if not review then
-
             local upper_resp = llm_response:upper()
-
             local inferred_verdict = nil
-
-            if upper_resp:find("APPROVE") and not upper_resp:find("REVISE") then
-
-                inferred_verdict = "APPROVE"
-
-            elseif upper_resp:find("REVISE") or upper_resp:find("REVISION") or upper_resp:find("FAIL") or upper_resp:find("ERROR") then
-
-                inferred_verdict = "REVISE"
-
+            -- (1) Check for explicit VERDICT: line first
+            local verdict_line = llm_response:match("VERDICT:%s*(%S+)")
+            if verdict_line then
+                verdict_line = verdict_line:upper()
+                if verdict_line == "APPROVE" then
+                    inferred_verdict = "APPROVE"
+                elseif verdict_line == "REVISE" then
+                    inferred_verdict = "REVISE"
+                end
             end
-
+            -- (2) Fallback: count occurrences
+            if not inferred_verdict then
+                local _, approve_count = upper_resp:gsub("APPROVE", "")
+                local _, revise_count = upper_resp:gsub("REVISE", "")
+                local _, fail_count = upper_resp:gsub("FAIL", "")
+                -- Check for conditional approval words after APPROVE
+                local has_conditional = upper_resp:find("BUT") or upper_resp:find("HOWEVER") or upper_resp:find("EXCEPT") or upper_resp:find("UNLESS")
+                if revise_count > approve_count or fail_count > approve_count then
+                    inferred_verdict = "REVISE"
+                elseif approve_count > revise_count and not has_conditional then
+                    inferred_verdict = "APPROVE"
+                elseif has_conditional then
+                    inferred_verdict = "REVISE"
+                end
+            end
             if inferred_verdict == "APPROVE" then
-
                 logger.warn("[MULTI-STAGE] Review parse failed but APPROVE inferred from response. Auto-approving.")
-
                 self.state = states.STATES.APPROVED
-
                 return { stage = "done", result = self.last_result, iterations = self.iteration }
-
             elseif inferred_verdict == "REVISE" then
-
                 logger.warn(string.format("[MULTI-STAGE] Review parse failed but REVISE inferred. Using fallback correction: '%s'", err))
-
                 self.review = { verdict = "REVISE", correction = "Reviewer could not be parsed. Correction: " .. err, raw = utils.trim(llm_response) }
-
             else
-
                 logger.warn(string.format("[MULTI-STAGE] Review parse failed and no verdict inferable. Auto-approving to prevent infinite loop. Error: %s", err))
-
                 self.state = states.STATES.APPROVED
-
                 return { stage = "done", result = self.last_result, iterations = self.iteration }
-
             end
-
         else
 
             self.review = review
@@ -499,13 +490,25 @@ function M:feed_response(llm_response)
         end
 
         if self.review.verdict == "APPROVE" then
-
             self.state = states.STATES.APPROVED
-
             return { stage = "done", result = self.last_result, iterations = self.iteration }
-
         end
-
+        if self.review.verdict == "PARTIAL" then
+            -- Partial approval: log which parts passed, treat as REVISE for the failed parts
+            logger.info(string.format("[MULTI-STAGE] PARTIAL approval: some criteria passed, revising failed parts."))
+            self.state = states.STATES.PARTIAL
+            if self.iteration >= self.max_iterations then
+                -- If we've exhausted iterations, force-approve the partial result
+                logger.warn("[MULTI-STAGE] Partial approval with max iterations reached. Force-approving partial result.")
+                self.state = states.STATES.APPROVED
+                return { stage = "done", result = self.last_result, iterations = self.iteration, partial_approval = true }
+            end
+            self.corrections[#self.corrections + 1] = self.review.correction
+            self.intent_raw = self:_merge_correction(self.review.correction)
+            self.state = states.STATES.REVISING
+            self.iteration = self.iteration + 1
+            return { stage = "generate", prompt = self:build_generate_prompt() }
+        end
         if self.review.verdict == "REVISE" then
 
             if self.iteration >= self.max_iterations then
@@ -602,51 +605,72 @@ function M:feed_execution_result(output)
     end
 
     local tool_name = self.intent and self.intent.TOOL or ""
-
     if tool_name == "patch" then
-
         local file_paths_list = {}
-
         if self.file_path and self.file_path ~= "" then
-
             file_paths_list[#file_paths_list + 1] = self.file_path
-
         elseif self.payload then
-
             local first_line = self.payload:match("^[^\r\n]+")
-
             if first_line and utils.trim(first_line) ~= "" then
-
                 file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
-
             end
-
         end
-
         for _, fp in ipairs(file_paths_list) do
-
             local normalized = fp
-
             if not fp:match("^/") then
-
                 normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
-
             end
-
             local content = self.ctx.knowledge_base[normalized]
-
             if content then
-
                 enriched_result = enriched_result .. string.format("\n\n<file_content_after_patch path=\"%s\">\n%s\n</file_content_after_patch>", normalized, content)
-
             else
-
                 enriched_result = enriched_result .. string.format("\n\n[file_content_after_patch path=\"%s\"] File not found in knowledge_base.", normalized)
-
             end
-
         end
-
+    elseif tool_name == "create_file" then
+        -- (c) create_file: verify file exists in knowledge_base and include its content
+        local fp = self.file_path
+        if not fp or fp == "" then
+            local first_line = self.payload:match("^[^\r\n]+")
+            if first_line then fp = utils.trim(first_line) end
+        end
+        if fp then
+            local normalized = fp
+            if not fp:match("^/") then
+                normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
+            end
+            local content = self.ctx.knowledge_base[normalized]
+            if content then
+                enriched_result = enriched_result .. string.format("\n\n<file_content_after_create path=\"%s\">\n%s\n</file_content_after_create>", normalized, content)
+            else
+                enriched_result = enriched_result .. string.format("\n\n[file_content_after_create path=\"%s\"] File not found in knowledge_base after creation.", normalized)
+            end
+        end
+    elseif tool_name == "read_file" then
+        -- (a) read_file: include the file content from knowledge_base
+        local fp = self.file_path
+        if not fp or fp == "" then
+            local first_line = self.payload:match("^[^\r\n]+")
+            if first_line then fp = utils.trim(first_line) end
+        end
+        if fp then
+            local normalized = fp
+            if not fp:match("^/") then
+                normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
+            end
+            local content = self.ctx.knowledge_base[normalized]
+            if content then
+                enriched_result = enriched_result .. string.format("\n\n<file_content_after_read path=\"%s\">\n%s\n</file_content_after_read>", normalized, content)
+            else
+                enriched_result = enriched_result .. string.format("\n\n[file_content_after_read path=\"%s\"] File not found in knowledge_base.", normalized)
+            end
+        end
+    elseif tool_name == "search" then
+        -- (d) search: matched results are already in output, just ensure they're included
+        -- No additional enrichment needed; output already contains results
+    elseif tool_name == "shell" then
+        -- (b) shell: output is already included in enriched_result
+        -- No additional enrichment needed
     end
 
     self.last_result = enriched_result
@@ -659,53 +683,31 @@ end
 
 
 function M:_merge_correction(correction)
-
     local new_corrections = self.corrections
-
     table.insert(new_corrections, correction)
-
     local revision_parts = {}
-
-    if #new_corrections <= 2 then
-
+    if #new_corrections == 1 then
+        table.insert(revision_parts, string.format("Correction #%d:\n%s", 1, new_corrections[1]))
+    elseif #new_corrections == 2 then
         for i, c in ipairs(new_corrections) do
-
             table.insert(revision_parts, string.format("Correction #%d:\n%s", i, c))
-
         end
-
     else
-
+        -- Summarize ALL earlier corrections into a single accumulated paragraph
         local accumulated = {}
-
-        for i = 1, #new_corrections - 2 do
-
+        for i = 1, #new_corrections - 1 do
             table.insert(accumulated, parsers.summarize_correction(new_corrections[i]))
-
         end
-
-        table.insert(revision_parts, "Accumulated reviewer notes (earlier iterations):\n" .. table.concat(accumulated, "\n\n"))
-
-        for i = #new_corrections - 1, #new_corrections do
-
-            table.insert(revision_parts, string.format("Correction #%d:\n%s", i, new_corrections[i]))
-
-        end
-
+        table.insert(revision_parts, "Accumulated reviewer notes (iterations 1-" .. (#new_corrections - 1) .. "):\n" .. table.concat(accumulated, ". ") .. ".")
+        -- Keep only the latest correction in full
+        table.insert(revision_parts, string.format("Correction #%d (latest):\n%s", #new_corrections, new_corrections[#new_corrections]))
     end
-
     return self.intent_raw
-
         .. "\n\n<REVISION iteration=\"" .. self.iteration .. "\">\n"
-
         .. "Previous attempt failed. Reviewer notes:\n"
-
         .. table.concat(revision_parts, "\n\n") .. "\n"
-
         .. "Adjust PAYLOAD accordingly. Keep GOAL and SUCCESS_CRITERIA.\n"
-
         .. "</REVISION>"
-
 end
 
 
@@ -726,11 +728,9 @@ function M:reset()
     self.review       = nil
 
     self.corrections  = {}
-
     self.iteration    = 0
-
+    self.validation_retries = 0
 end
 
 
 return M
-

@@ -201,16 +201,29 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
         step = multi_exec:start_task(last_user_msg, ctx.file_tree or "")
     end
     
-    -- Local save_state helper for this scope
+    -- Local save_state helper for this scope (optimized: save only essential state)
     local function save_state_local()
-        local snap = ctx:snapshot()
-        if snap then
-            local os_mod = require("os")
-            os_mod.execute(string.format("mkdir -p '%s/.e-va-conf'", config.PROJECT_ROOT))
-            local state_file = config.PROJECT_ROOT .. "/.e-va-conf/.state.json"
-            local f = io.open(state_file, "w")
-            if f then f:write(snap); f:close() end
+        local os_mod = require("os")
+        os_mod.execute(string.format("mkdir -p '%s/.e-va-conf'", config.PROJECT_ROOT))
+        local state_file = config.PROJECT_ROOT .. "/.e-va-conf/.state.json"
+        -- Build lightweight snapshot instead of full ctx:snapshot()
+        local lightweight = {
+            task = multi_exec.task or "",
+            intent_tool = multi_exec.intent and multi_exec.intent.TOOL or "",
+            intent_goal = multi_exec.intent and multi_exec.intent.GOAL or "",
+            iteration = multi_exec.iteration or 0,
+            state = multi_exec.state or "",
+            total_tokens_used = multi_exec.total_tokens_used or 0,
+            last_result_summary = "",
+        }
+        if multi_exec.last_result then
+            local lr = tostring(multi_exec.last_result)
+            lightweight.last_result_summary = lr:sub(1, 500)
         end
+        local json = require("JSON")
+        local snap = json:encode(lightweight)
+        local f = io.open(state_file, "w")
+        if f then f:write(snap); f:close() end
     end
     while step.stage ~= "done" and step.stage ~= "error" do
         if step.stage == "intent" or step.stage == "generate" or step.stage == "review" then

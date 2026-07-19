@@ -135,27 +135,42 @@ end
 
 
 function M.compress_message(msg, config)
-
     config = config or helpers.DEFAULT_CONFIG
-
     if not msg or not msg.content then return msg end
-
+    local original_content = msg.content
     msg.content = thinking.compress_assistant_thinking(msg.content, config)
-
     if msg.content:match("^\\[SHELL") or msg.content:match("^\\[SEARCH") or
-
        msg.content:match("^\\[OUTPUT") or msg.content:match("^\\[RESULT") or
-
        msg.content:match("^\\[FILE") then
-
         msg.content = tool_output.compress_tool_output(msg.content, config)
-
     end
-
+    -- Preserve critical entities from original content if it was large
+    if #original_content > 2000 then
+        local entities = helpers._extract_critical_entities(original_content)
+        local has_entities = false
+        local entity_parts = {}
+        if #entities.files > 0 then
+            has_entities = true
+            table.insert(entity_parts, "- Files: " .. table.concat(entities.files, ", "))
+        end
+        if #entities.errors > 0 then
+            has_entities = true
+            table.insert(entity_parts, "- Errors: " .. table.concat(entities.errors, "; "))
+        end
+        if #entities.decisions > 0 then
+            has_entities = true
+            table.insert(entity_parts, "- Decisions: " .. table.concat(entities.decisions, "; "))
+        end
+        if #entities.functions > 0 then
+            has_entities = true
+            table.insert(entity_parts, "- Functions: " .. table.concat(entities.functions, ", "))
+        end
+        if has_entities then
+            msg.content = msg.content .. "\n[PRESERVED_ENTITIES]\n" .. table.concat(entity_parts, "\n") .. "\n[/PRESERVED_ENTITIES]"
+        end
+    end
     return msg
-
 end
 
 
 return M
-

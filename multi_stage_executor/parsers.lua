@@ -277,49 +277,51 @@ end
 
 
 --- Estimate task complexity
-
 local function estimate_complexity(tool_name, payload_hint, file_path)
-
-    local simple_extensions = { ".md", ".txt", ".json", ".cfg", ".yaml", ".toml", ".ini", ".env", ".lock", ".gitignore" }
-
-    local is_simple_ext = false
-
-    if file_path then
-
-        for _, ext in ipairs(simple_extensions) do
-
-            if file_path:match(ext .. "$") then
-
-                is_simple_ext = true
-
-                break
-
-            end
-
-        end
-
+    -- (b) delegate_plan and shell are always complex
+    if tool_name == "delegate_plan" or tool_name == "shell" then
+        return "complex"
     end
-
     local hint_lower = (payload_hint or ""):lower()
-
+    -- (c) payload_hint contains complexity keywords
+    local complex_keywords = { "multiple", "refactor", "rewrite", "large", "comprehensive", "extensive", "all", "entire" }
+    for _, kw in ipairs(complex_keywords) do
+        if hint_lower:match(kw) then
+            return "complex"
+        end
+    end
+    local simple_extensions = { ".md", ".txt", ".json", ".cfg", ".yaml", ".toml", ".ini", ".env", ".lock", ".gitignore" }
+    local is_simple_ext = false
+    if file_path then
+        for _, ext in ipairs(simple_extensions) do
+            if file_path:match(ext .. "$") then
+                is_simple_ext = true
+                break
+            end
+        end
+    end
+    -- (a) if file_path exists in knowledge_base, check file size (>500 lines = complex)
+    if file_path then
+        local kb = require("context_flow").get_global_knowledge_base()
+        if kb then
+            local content = kb[file_path]
+            if content then
+                local line_count = select(2, content:gsub("\n", "\n"))
+                if line_count > 500 then
+                    return "complex"
+                end
+            end
+        end
+    end
     local is_small_payload = hint_lower:match("small") or hint_lower:match("simple") or hint_lower:match("single") or
-
         hint_lower:match("short") or hint_lower:match("<500") or hint_lower:match("<1000")
-
     if is_simple_ext and is_small_payload then
-
         return "simple"
-
     end
-
     if tool_name == "create_file" and is_simple_ext then
-
         return "simple"
-
     end
-
     return "complex"
-
 end
 
 
@@ -339,4 +341,3 @@ M.estimate_complexity = estimate_complexity
 
 
 return M
-

@@ -15,9 +15,8 @@ M.STATES = {
     REVIEWING         = "REVIEWING",
 
     APPROVED          = "APPROVED",
-
+    PARTIAL           = "PARTIAL",
     REVISING          = "REVISING",
-
     COMPLETED         = "COMPLETED",
 
     ERROR             = "ERROR",
@@ -205,4 +204,3 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `delegate_plan`:
 
 
 return M
-
