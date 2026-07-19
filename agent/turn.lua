@@ -118,7 +118,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         print(string.format("\n\27[33m[WARNING] Stream timed out after %d chars of content. Response may be incomplete.\27[0m", #(content or 0)))
     end
 
-    -- SELECTIVE MULTI-STAGE ROUTING
+    -- SELECTIVE MULTI-STAGE ROUTING (Two-phase tool invocation)
     if agent_cfg.use_selective_multi_stage and agent_cfg.multi_stage_tools then
         local executor_parse = require("command_executor").new(ctx, agent_name)
         local parsed_cmd, _ = executor_parse:parse_command(content)
@@ -135,6 +135,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
             if is_multi_stage_tool then
                 logger.info(string.format("[SELECTIVE MULTI-STAGE] Routing tool '%s' through multi-stage executor", tool_name))
                 local file_path = nil
+                local has_payload = false
                 if tool_name == "patch" then
                     local args_part = parsed_cmd:match("^patch:%s*(.*)")
                     if args_part then
@@ -142,9 +143,36 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                         if first_line then
                             file_path = utils.trim(first_line)
                         end
+                        -- Check if there's actual SEARCH/REPLACE content (not just a file path)
+                        if args_part:find("<<<<<<< SEARCH") then
+                            has_payload = true
+                        end
+                    end
+                elseif tool_name == "create_file" then
+                    local args_part = parsed_cmd:match("^create_file:%s*(.*)")
+                    if args_part and utils.trim(args_part) ~= "" then
+                        local first_line = args_part:match("^[^\r\n]+")
+                        if first_line then
+                            file_path = utils.trim(first_line)
+                        end
+                        -- Check if there's content after the file path
+                        local rest = args_part:match("^[^\r\n]+\r?\n(.*)")
+                        if rest and utils.trim(rest) ~= "" then
+                            has_payload = true
+                        end
+                    end
+                elseif tool_name == "delegate_plan" then
+                    local args_part = parsed_cmd:match("^delegate_plan:%s*(.*)")
+                    if args_part and utils.trim(args_part) ~= "" then
+                        has_payload = true
+                    end
+                else
+                    -- For other tools, any args after colon means payload exists
+                    local args_part = parsed_cmd:match("^" .. tool_name .. ":%s*(.*)")
+                    if args_part and utils.trim(args_part) ~= "" then
+                        has_payload = true
                     end
                 end
-
                 local last_user_msg = nil
                 local history = ctx.history[agent_name] or {}
                 for i = #history, 1, -1 do
@@ -154,25 +182,44 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                     end
                 end
                 last_user_msg = last_user_msg or ""
-
-                local task_desc = string.format(
-                    "Original command issued by the agent:\n" ..
-                    "||| COMMAND |||\n%s\n||| END_COMMAND |||\n\n" ..
-                    "Context from conversation:\n%s\n\n" ..
-                    "Refine and re-execute this command. Preserve the tool choice and intent, but ensure the payload is correct and complete.",
-                    parsed_cmd, last_user_msg
-                )
-
+                local task_desc
+                local payload_hint
+                if has_payload then
+                    -- Phase 2: Full command with payload - refine and re-execute
+                    task_desc = string.format(
+                        "Original command issued by the agent:\n" ..
+                        "||| COMMAND |||\n%s\n||| END_COMMAND |||\n\n" ..
+                        "Context from conversation:\n%s\n\n" ..
+                        "Refine and re-execute this command. Preserve the tool choice and intent, but ensure the payload is correct and complete.",
+                        parsed_cmd, last_user_msg
+                    )
+                    payload_hint = "Refine and execute the payload for this tool based on the task context. Use the original command as a starting point."
+                else
+                    -- Phase 1: Tool-only declaration - generate payload from scratch
+                    task_desc = string.format(
+                        "The agent has declared intent to use tool '%s'%s.\n\n" ..
+                        "Context from conversation:\n%s\n\n" ..
+                        "Generate the complete payload for this tool. Determine what needs to be done based on the conversation context and project state.",
+                        tool_name,
+                        file_path and string.format(" on file '%s'", file_path) or "",
+                        last_user_msg
+                    )
+                    payload_hint = string.format(
+                        "Generate a complete, valid payload for tool '%s'%s. " ..
+                        "Analyze the conversation context to determine what changes are needed. " ..
+                        "Ensure the payload is syntactically correct and addresses the current task.",
+                        tool_name,
+                        file_path and string.format(" targeting file '%s'", file_path) or ""
+                    )
+                end
                 local success_criteria = string.format(
                     "Tool '%s' executes successfully without errors. The payload is syntactically valid and produces the expected result.",
                     tool_name
                 )
-
                 local multi_exec = multi_stage_executor.new(ctx, agent_name, {
                     max_iterations = agent_cfg.multi_stage_max_iterations or 3,
                     file_path = file_path
                 })
-
                 return multi_stage.run_multi_stage_loop(
                     multi_exec,
                     agent_name,
@@ -182,7 +229,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                     true,
                     {
                         tool_name = tool_name,
-                        payload_hint = "Refine and execute the payload for this tool based on the task context. Use the original command as a starting point.",
+                        payload_hint = payload_hint,
                         success_criteria = success_criteria,
                         file_path = file_path
                     },

@@ -225,6 +225,14 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
         local f = io.open(state_file, "w")
         if f then f:write(snap); f:close() end
     end
+    -- Fix #5: Attempt state recovery at loop start
+    if multi_exec.load_state then
+        local recovered = multi_exec:load_state()
+        if recovered then
+            deps.logger.info(string.format("[%s] Recovered multi-stage state from disk (iteration=%d, state=%s)",
+                label, multi_exec.iteration, multi_exec.state))
+        end
+    end
     while step.stage ~= "done" and step.stage ~= "error" do
         if step.stage == "intent" or step.stage == "generate" or step.stage == "review" then
             local limits = config.LIMITS
@@ -272,6 +280,8 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
                 content = response_data.choices[1].message.content
             end
             step = multi_exec:feed_response(content)
+            -- Fix #5: Save state after LLM response processing
+            if multi_exec.save_state then multi_exec:save_state() end
         elseif step.stage == "execute" then
             deps.logger.info(string.format("[%s EXECUTE] Tool: %s", label, step.tool))
             -- Wrap execution in pcall + timeout for safety
@@ -291,6 +301,8 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
                 step = multi_exec:feed_execution_result("[EXECUTION ERROR]: " .. tostring(res))
             else
                 step = multi_exec:feed_execution_result(res)
+                -- Fix #5: Save state after tool execution
+                if multi_exec.save_state then multi_exec:save_state() end
                 if res.output then
                     ctx:add_message(agent_name, "user", deps.utils.sanitize_for_json(res.output))
                 end
