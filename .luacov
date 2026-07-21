@@ -1,16 +1,7 @@
 return {
    exclude = {
       "lua_modules",
-      "spec",
+      "__tests__",
+      ".e-va-conf"
    },
-   include = {
-      "agent",
-      "context",
-      "llm_providers",
-      "llm_handler",
-      "logger",
-      "patcher",
-      "tool_registry",
-      "utils",
-   }
 }

@@ -544,6 +544,9 @@ end
 function M:_merge_correction(correction)
     local new_corrections = self.corrections
     table.insert(new_corrections, correction)
+    if not self.intent_raw then
+        self.intent_raw = self.intent and self.intent.raw or ""
+    end
     local revision_parts = {}
     -- Fix #4: Keep full corrections for iterations 1-3 (not 1-2)
     if #new_corrections <= 3 then

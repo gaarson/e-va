@@ -1,8 +1,9 @@
 local utils = require("utils")
 local os = require("os")
+local states = require("multi_stage_executor.states")
 
 local function register(registry)
-    registry.register("create_file", "Creates or overwrites a file with new content", "||| COMMAND |||\ncreate_file:src/new.c\n#include <stdio.h>\nint main() { return 0; }\n\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("create_file", "Creates or overwrites a file with new content", "||| COMMAND |||\ncreate_file:src/new.c\n#include <stdio.h>\nint main() { return 0; }\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local path, new_code = args:match("^([^%s]+)%s*\n(.*)")
         if not path then
             return { output = "\n[ERROR]: Invalid create_file syntax. Use ||| COMMAND |||\ncreate_file:path/to/file\n[code]\n||| END_COMMAND |||" }
@@ -32,16 +33,8 @@ local function register(registry)
             return { output = "\n[ERROR]: " .. tostring(err) }
         end
     end,
-    [[
-    MULTI-STAGE GUIDE FOR `create_file`:
-    1. INTENT PHASE: In PAYLOAD_HINT, specify the EXACT file path, purpose, language, and key sections.
-       Example: "Create src/utils/helpers.lua: utility module with string trimming and path normalization."
-    2. GENERATE PHASE: Output ONLY the complete file content. No wrappers, no markdown fences.
-       If revising, incorporate reviewer corrections - add missing parts, fix syntax.
-    3. CRITICAL: File path must be correct. Content must be syntactically valid for its language.
-    
-    ]]
-)
+    [[When using multi-stage mode: output ONLY create_file:file/path in your COMMAND block WITHOUT any file content. The executor will generate the file content automatically through Intent -> Generate -> Review cycle. Only include file content if you want to skip multi-stage and execute directly.]],
+    states.TOOL_MULTI_STAGE_DOCS.create_file)
 end
 
 return { register = register }

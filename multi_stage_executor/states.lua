@@ -77,6 +77,17 @@ RULES:
 }
 
 
+M.TOOL_MULTI_STAGE_DOCS = {
+    patch = [[
+This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FORM command: output ONLY `patch:file/path` WITHOUT any SEARCH/REPLACE blocks. The system will automatically guide you through Intent → Generate → Review to produce the correct payload. DO NOT include SEARCH/REPLACE blocks in your initial command — the multi-stage pipeline will generate them for you after you specify the goal and file path.
+]],
+   create_file = [[
+This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FORM command: output ONLY `create_file:file/path` WITHOUT any file content. The system will automatically guide you through Intent → Generate → Review to produce the correct file content. DO NOT include file content in your initial command — the multi-stage pipeline will generate it for you after you specify the goal and file path.
+]],
+   delegate_plan = [[
+This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FORM command: output ONLY `delegate_plan` WITHOUT any JSON payload. The system will automatically guide you through Intent → Generate → Review to produce the correct plan and memo. DO NOT include JSON in your initial command — the multi-stage pipeline will generate it for you.
+]],
+}
 M.TOOL_REVIEW_CHECKS = {
     patch = [[
 TOOL-SPECIFIC REVIEW CHECKS FOR `patch`:
@@ -114,8 +125,6 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `delegate_plan`:
 - [ ] Does the memo include: background context, constraints, conventions, known issues?
 - [ ] If revision was requested, were JSON syntax and content issues fixed?
 ]],
-
 }
-
 
 return M

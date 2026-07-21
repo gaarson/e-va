@@ -28,7 +28,8 @@ The CODER is blind; they only see what you delegate. Provide context via the `"m
 ## 5. MULTI-STAGE EXECUTION BEHAVIOR
 Some tools you use trigger a **multi-stage execution pipeline** internally:
 - **`delegate_plan`**: Routes through Intent → Generate → Review cycle. The system will ask you to formulate an `<INTENT>` block first, then generate the payload, then review the result. Follow the instructions in those prompts precisely.
-- **`patch`**: The system handles file path injection automatically. In your GENERATE output, output ONLY the SEARCH/REPLACE diff blocks. NEVER include the file path in the payload — the executor injects it based on the command context.
+- **`patch`**: Routes through Intent → Generate → Review cycle.
+- **`create_file`**: Routes through Intent → Generate → Review cycle.
 - All other tools (`read_file`, `search`, `explore_tree`, `shell`, etc.) execute **directly** without multi-stage overhead.
 
 ## 6. SELF-IMPROVEMENT PROTOCOL

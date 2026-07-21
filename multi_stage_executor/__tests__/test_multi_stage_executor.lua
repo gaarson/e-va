@@ -431,7 +431,7 @@ run_test("feed_response transitions from INTENT_READY to COMMAND_READY", functio
     
     local result = executor:feed_response([[src/main.c
 <<<<<<< SEARCH
-old_code
+new_code
 =======
 new_code
 >>>>>>> REPLACE]])
@@ -555,28 +555,204 @@ end)
 run_test("build_review_prompt includes tool-specific checks", function()
     local ctx = make_mock_ctx()
     local executor = multi_stage.new(ctx, "test_agent")
-    
     executor.intent = { TOOL = "patch", raw = "GOAL: test\nTOOL: patch" }
     executor.intent_raw = executor.intent.raw
     executor.payload = "payload"
     executor.last_result = "result"
-    
     local prompt = executor:build_review_prompt()
-    
     assert_truthy(prompt, "prompt should not be nil")
     assert_contains(prompt, "SEARCH", "patch checks should mention SEARCH")
     assert_contains(prompt, "zero-op", "patch checks should mention zero-op")
+
 end)
+
+run_test("start_task_with_intent produces execute result with file_path prepended for patch", function()
+
+    local ctx = make_mock_ctx()
+
+    local executor = multi_stage.new(ctx, "test_agent")
+
+    
+
+    -- Start with intent (skips intent phase)
+
+    local result = executor:start_task_with_intent(
+
+        "Fix bug", "Context", "patch", "Replace check", "No overflow", "src/main.c"
+
+    )
+
+    
+
+    assert_eq(result.stage, "generate", "should skip to generate stage")
+
+    assert_eq(executor.file_path, "src/main.c", "file_path should be stored")
+
+    
+
+    -- Now feed a payload (simulate generate phase)
+
+    local patch_payload = "<<<<<<< SEARCH\nold_code\n=======\nnew_code\n>>>>>>> REPLACE"
+
+    result = executor:feed_response(patch_payload)
+
+    
+
+    assert_eq(result.stage, "execute", "should transition to execute stage")
+
+    assert_contains(result.payload, "src/main.c", "effective_payload should prepend file path")
+
+    assert_contains(result.payload, "SEARCH", "effective_payload should contain SEARCH block")
+
+end)
+
+run_test("start_task_with_intent produces execute result with file_path prepended for create_file", function()
+
+    local ctx = make_mock_ctx()
+
+    local executor = multi_stage.new(ctx, "test_agent")
+
+    
+
+    local result = executor:start_task_with_intent(
+
+        "Create module", "Context", "create_file", "New lua module", "Module loads", "src/new_mod.lua"
+
+    )
+
+    
+
+    assert_eq(result.stage, "generate", "should skip to generate stage")
+
+    assert_eq(executor.file_path, "src/new_mod.lua", "file_path should be stored")
+
+    
+
+    -- Feed file content payload
+
+    result = executor:feed_response("local M = {}\nreturn M")
+
+    
+
+    assert_eq(result.stage, "execute", "should transition to execute stage")
+
+    assert_contains(result.payload, "src/new_mod.lua", "effective_payload should prepend file path")
+
+    assert_contains(result.payload, "local M", "effective_payload should contain file content")
+
+end)
+
+run_test("payload validation passes for valid patch SEARCH/REPLACE blocks", function()
+
+    local ctx = make_mock_ctx()
+
+    local executor = multi_stage.new(ctx, "test_agent")
+
+    
+
+    executor:start_task_with_intent(
+
+        "Fix bug", "Context", "patch", "Replace check", "No overflow", "src/main.c"
+
+    )
+
+    
+
+    -- Valid patch payload
+
+    local patch_payload = "<<<<<<< SEARCH\nold_code\n=======\nnew_code\n>>>>>>> REPLACE"
+
+    local result = executor:feed_response(patch_payload)
+
+    
+
+    assert_eq(result.stage, "execute", "valid patch payload should pass validation")
+
+end)
+
+run_test("payload validation rejects patch without SEARCH marker", function()
+
+    local ctx = make_mock_ctx()
+
+    local executor = multi_stage.new(ctx, "test_agent")
+
+    
+
+    executor:start_task_with_intent(
+
+        "Fix bug", "Context", "patch", "Replace check", "No overflow", "src/main.c"
+
+    )
+
+    
+
+    -- Invalid: no SEARCH marker
+
+    local result = executor:feed_response("just some random text without search blocks")
+
+    
+
+    -- Should either error or request regeneration (validation failure)
+
+    assert_truthy(result.stage == "error" or result.stage == "generate", "should fail validation or retry")
+
+end)
+
+run_test("effective_payload correctly prepends file_path for patch tool", function()
+
+    local ctx = make_mock_ctx()
+
+    local executor = multi_stage.new(ctx, "test_agent")
+
+    
+
+    executor:start_task_with_intent(
+
+        "Fix bug", "Context", "patch", "Replace check", "No overflow", "src/main.c"
+
+    )
+
+    
+
+    local patch_payload = "<<<<<<< SEARCH\nline1\n=======\nline1_new\n>>>>>>> REPLACE"
+
+    local result = executor:feed_response(patch_payload)
+
+    
+
+    assert_eq(result.stage, "execute", "should reach execute stage")
+
+    -- Verify the payload starts with the file path
+
+    local first_line = result.payload:match("^[^\r\n]+")
+
+    assert_eq(first_line, "src/main.c", "first line of effective_payload should be file path")
+
+end)
+
 -- ============================================================
+
 -- Summary
+
 -- ============================================================
+
 print("\n" .. string.rep("=", 50))
+
 print(string.format("RESULTS: %d/%d tests passed", pass_count, pass_count + fail_count))
+
 if fail_count > 0 then
+
     print("\nFailures:")
+
     for _, f in ipairs(failures) do
+
         print(string.format("  - %s: %s", f.name, f.error))
+
     end
+
 end
+
 print(string.rep("=", 50))
+
 os.exit(fail_count > 0 and 1 or 0)
+

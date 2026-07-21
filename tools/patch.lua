@@ -1,7 +1,7 @@
 
 local utils = require("utils")
-
 local patcher = require("patcher")
+local states = require("multi_stage_executor.states")
 
 
 local function register(registry)
@@ -135,16 +135,8 @@ local function register(registry)
         end
 
     end,
-    [[
-    MULTI-STAGE GUIDE FOR `patch`:
-
-    1. INTENT PHASE: In PAYLOAD_HINT, specify the EXACT file path, target lines/functions, and WHY the change is needed.
-       Example: "Modify src/main.c lines 45-52: replace buffer size check with bounds validation."
-    2. GENERATE PHASE: Output ONLY SEARCH/REPLACE diff blocks. NEVER include the file path in your output.
-       The system automatically injects the file path from the command context.
-       SEARCH must have 2-4 lines of unchanged context.
-    3. CRITICAL: You MUST have read the target file before patching. Never guess file content.
-    ]])
+    [[When using multi-stage mode: output ONLY patch:file/path in your COMMAND block WITHOUT any SEARCH/REPLACE blocks. The executor will generate the payload automatically through Intent -> Generate -> Review cycle. Only include SEARCH/REPLACE blocks if you want to skip multi-stage and execute directly.]],
+    states.TOOL_MULTI_STAGE_DOCS.patch)
 end
 
 return { register = register }

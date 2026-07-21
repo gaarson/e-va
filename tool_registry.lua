@@ -130,11 +130,6 @@ function M.generate_tool_manifest(allowed_tools, agent_cfg)
     if M._manifest_cache_key == cache_key and M._manifest_cache[cache_key] then
         return M._manifest_cache[cache_key]
     end
-    local doc = {
-        "## TOOLCHAIN INTERFACE",
-        "> Commands execute from the **END** of your response. Place final command last.",
-        "Only these tools are available:\n"
-    }
     local has_all = false
     for _, allowed in ipairs(allowed_tools) do
         if allowed == "*" then has_all = true end
@@ -157,6 +152,51 @@ function M.generate_tool_manifest(allowed_tools, agent_cfg)
         end
     end
     table.sort(tools_to_list, function(a, b) return a.name < b.name end)
+    -- Build doc header
+    local doc = {
+        "## TOOLCHAIN INTERFACE",
+        "> Commands execute from the **END** of your response. Place final command last.",
+        "Only these tools are available:\n"
+    }
+    -- Multi-stage tools section: prominent header explaining short-form pattern
+    local ms_tools_in_list = {}
+    for _, item in ipairs(tools_to_list) do
+        if multi_stage_tools[item.name] == true then
+            table.insert(ms_tools_in_list, item.name)
+        end
+    end
+    if #ms_tools_in_list > 0 then
+        table.insert(doc, "")
+        table.insert(doc, "### ⚡ MULTI-STAGE TOOLS (Quality-Controlled)")
+        table.insert(doc, string.format("**Tools**: `%s`", table.concat(ms_tools_in_list, "`, `")))
+        table.insert(doc, "")
+        table.insert(doc, "**IMPORTANT**: These tools are marked `[MS]` and route through an automated **Intent → Generate → Execute → Review** pipeline for quality control.")
+        table.insert(doc, "")
+        table.insert(doc, "**HOW TO USE MULTI-STAGE TOOLS (SHORT-FORM COMMAND)**:")
+        table.insert(doc, "1. Output ONLY the tool name and file path (if applicable) — **NO payload content**.")
+        table.insert(doc, "2. The system will guide you through planning, generation, and review automatically.")
+        table.insert(doc, "")
+        table.insert(doc, "**Examples**:")
+        table.insert(doc, "```")
+        table.insert(doc, "-- ✅ CORRECT (short-form, triggers multi-stage pipeline):")
+        table.insert(doc, "||| COMMAND |||")
+        table.insert(doc, "patch:src/main.c")
+        table.insert(doc, "||| END_COMMAND |||")
+        table.insert(doc, "")
+        table.insert(doc, "-- ✅ CORRECT (short-form for create_file):")
+        table.insert(doc, "||| COMMAND |||")
+        table.insert(doc, "create_file:src/new_module.lua")
+        table.insert(doc, "||| END_COMMAND |||")
+        table.insert(doc, "")
+        table.insert(doc, "-- ❌ WRONG (do NOT include SEARCH/REPLACE blocks or file content):")
+        table.insert(doc, "||| COMMAND |||")
+        table.insert(doc, "patch:src/main.c")
+        table.insert(doc, "<<<<<<< SEARCH")
+        table.insert(doc, "...")
+        table.insert(doc, "||| END_COMMAND |||")
+        table.insert(doc, "```")
+        table.insert(doc, "")
+    end
     for _, item in ipairs(tools_to_list) do
         local is_ms = multi_stage_tools[item.name] == true
         local ms_tag = is_ms and " [MS]" or ""
@@ -197,5 +237,3 @@ end
 M.is_tool_allowed = is_tool_allowed
 
 return M
-
-
