@@ -84,7 +84,7 @@ M.PRUNE_STRATEGIES = {
             for i = 1, #history - 5 do
                 if history[i] and history[i].role == "assistant" then
                     local c = history[i].content or ""
-                    if c:match("||| COMMAND |||\n(patch|create_file):") then
+                    if c:match("||| COMMAND |||\npatch:") or c:match("||| COMMAND |||\ncreate_file:") then
                         history[i].content = "[SYSTEM MEMORY: Previous code mutation squashed to save context.]"
                         total = total - estimate_fn(c) + estimate_fn(history[i].content)
                         if total <= limits.max_history_tokens then break end

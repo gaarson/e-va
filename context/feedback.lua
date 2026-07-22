@@ -11,7 +11,7 @@ function M.record_task_success(ctx, task_index, summary)
     table.insert(ctx.coder_feedback.tasks_completed, {
         task_index = task_index,
         summary = summary or "",
-        timestamp = os.clock()
+        timestamp = os.time()
     })
     if ctx.execution_plan and ctx.execution_plan[task_index] then
         ctx.task_outcomes[task_index] = {
@@ -29,7 +29,7 @@ function M.record_task_failure(ctx, task_index, error_msg)
     table.insert(ctx.coder_feedback.tasks_failed, {
         task_index = task_index,
         error = error_msg or "",
-        timestamp = os.clock()
+        timestamp = os.time()
     })
     if ctx.execution_plan and ctx.execution_plan[task_index] then
         ctx.task_outcomes[task_index] = {
@@ -46,7 +46,7 @@ function M.record_error(ctx, error_msg)
     ctx.coder_feedback.errors_encountered = ctx.coder_feedback.errors_encountered or {}
     table.insert(ctx.coder_feedback.errors_encountered, {
         error = error_msg or "",
-        timestamp = os.clock()
+        timestamp = os.time()
     })
 end
 -- ============================================================================
@@ -56,7 +56,7 @@ function M.record_deviation(ctx, note)
     ctx.coder_feedback.plan_deviations = ctx.coder_feedback.plan_deviations or {}
     table.insert(ctx.coder_feedback.plan_deviations, {
         note = note or "",
-        timestamp = os.clock()
+        timestamp = os.time()
     })
 end
 -- ============================================================================
@@ -66,7 +66,7 @@ function M.add_recommendation(ctx, rec)
     ctx.coder_feedback.recommendations = ctx.coder_feedback.recommendations or {}
     table.insert(ctx.coder_feedback.recommendations, {
         recommendation = rec or "",
-        timestamp = os.clock()
+        timestamp = os.time()
     })
 end
 -- ============================================================================

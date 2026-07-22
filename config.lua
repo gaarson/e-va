@@ -9,7 +9,7 @@ function M.get()
     cfg.MCP_SERVERS = {}
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 225000,
+        MAX_CONTEXT = 180000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
@@ -22,7 +22,7 @@ function M.get()
             max_history_messages = 200,
             max_history_tokens = 50000,
             squash_threshold_messages = 150,
-            squash_threshold_tokens = 180000,
+            squash_threshold_tokens = 150000,
             dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },

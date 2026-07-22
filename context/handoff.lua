@@ -67,7 +67,10 @@ function M.generate_handoff_memo(ctx, agent_name, agent_cfg)
         elseif sec == "agent_summary" then
             table.insert(parts, "<agent_summary>[PROMPT: Please summarize your work in this stage]</agent_summary>")
         end
-        tokens = tokens + math.ceil(#sec / div)
+        -- Count tokens of the actual content just added
+        if #parts > 0 then
+            tokens = tokens + math.ceil(#parts[#parts] / div)
+        end
         if tokens >= max_tokens then break end
     end
     -- Add structured JSON handoff payload
@@ -151,7 +154,11 @@ function M.clear_history_for_stage(ctx, strategy)
         local keep_count = 10
         for agent_name, msgs in pairs(ctx.history) do
             if #msgs > keep_count then
-                ctx.history[agent_name] = { unpack(msgs, #msgs - keep_count + 1, #msgs) }
+                local new_hist = {}
+                for i = #msgs - keep_count + 1, #msgs do
+                    table.insert(new_hist, msgs[i])
+                end
+                ctx.history[agent_name] = new_hist
             end
         end
         ctx.thoughts = {}
@@ -252,8 +259,7 @@ function M.inject_handoff_files(ctx, agent_name)
     local lazy_files = {}
     -- Helper: check if file is already in history
     local function is_in_history(path)
-        local escaped_path = path:gsub("[%(%)%.%%%+%-%*%?%[%^%$%|]", "%%%1")
-        local tag_pattern = "<file_context%s+path=\"" .. escaped_path .. "\""
+        local tag_pattern = "<file_context path=\"" .. path .. "\""
         for _, msg in ipairs(hist) do
             if msg.content and string.find(msg.content, tag_pattern, 1, true) then
                 return true

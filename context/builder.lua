@@ -50,8 +50,6 @@ function M.build_context(ctx, agent_name, agent_cfg, available_tokens)
     -- 4. Estimate size of mandatory blocks (recency now knows about duplicates)
     local recency = M.get_recency_block(ctx, already_present_paths)
     local recency_cost = estimate(recency)
-    local tools_manifest = require("tool_registry").generate_tool_manifest(agent_cfg.allowed_tools, agent_cfg)
-    local manifest_cost = estimate(tools_manifest)
     -- 5. Inject recency
     local inject_fn = strategies.INJECTION_STRATEGIES[ctx.flow_config.context_injection.mode] or strategies.INJECTION_STRATEGIES.append_to_last_user
     inject_fn(chat_buffer, recency, "")

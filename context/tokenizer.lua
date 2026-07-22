@@ -12,6 +12,7 @@ local M = {}
 
 local _token_estimate_cache = {}
 local _cache_order = {}
+local _cache_positions = {}
 local _cache_max_size_default = 1000
 
 local function _get_cache_max_size(flow_config)
@@ -29,27 +30,36 @@ end
 local function _cache_set(text, value, flow_config)
     if not text then return end
     local max_size = _get_cache_max_size(flow_config)
-    -- If already in cache, move to end (update recency)
+    -- If already in cache, move to end (update recency) in O(1)
     if _token_estimate_cache[text] ~= nil then
-        -- Remove from current position in order
-        for i, key in ipairs(_cache_order) do
-            if key == text then
-                table.remove(_cache_order, i)
-                break
-            end
+        local old_pos = _cache_positions[text]
+        local last_pos = #_cache_order
+        if old_pos ~= last_pos then
+            -- Swap with last element
+            local last_key = _cache_order[last_pos]
+            _cache_order[old_pos] = last_key
+            _cache_positions[last_key] = old_pos
+            _cache_order[last_pos] = text
+            _cache_positions[text] = last_pos
         end
-        -- Add to end
-        table.insert(_cache_order, text)
         _token_estimate_cache[text] = value
         return
     end
     -- Evict oldest if at capacity
     if #_cache_order >= max_size then
-        local oldest = table.remove(_cache_order, 1)
+        local oldest = _cache_order[1]
         _token_estimate_cache[oldest] = nil
+        _cache_positions[oldest] = nil
+        -- Shift all positions down by 1 and shift array
+        for i = 1, #_cache_order - 1 do
+            _cache_order[i] = _cache_order[i + 1]
+            _cache_positions[_cache_order[i]] = i
+        end
+        table.remove(_cache_order)
     end
     -- Insert new entry
     table.insert(_cache_order, text)
+    _cache_positions[text] = #_cache_order
     _token_estimate_cache[text] = value
 end
 

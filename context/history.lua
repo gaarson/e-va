@@ -53,6 +53,7 @@ function M.prune_history(ctx, agent_name)
     strategies_mod.PRUNE_STRATEGIES.squash_large_patches(history, limits, estimate)
     strategies_mod.PRUNE_STRATEGIES.squash_large_outputs(history, limits, estimate)
 end
+
 function M.compress_history(ctx, agent_name)
     local history = M.get_history(ctx, agent_name)
     if #history == 0 then return 0 end
@@ -97,9 +98,13 @@ function M.squash_last_mutation(ctx, agent_name)
         local msg = history[i]
         if msg.role == "assistant" then
             local original = msg.content or ""
-            local squashed = original:gsub("||| COMMAND |||\n(patch|create_file):([^%s\n]+)%s*\n.-||| END_COMMAND |||",
-                function(_, file_path) return string.format("\n[SYSTEM MEMORY: %s applied to '%s'.]\n",
-                    (file_path == "patch" and "Patch" or "File"), file_path or "unknown") end)
+            local squashed = original
+            -- Handle patch commands
+            squashed = squashed:gsub("||| COMMAND |||\npatch:([^%s\n]+)%s*\n.-||| END_COMMAND |||",
+                function(file_path) return string.format("\n[SYSTEM MEMORY: Patch applied to '%s'.]\n", file_path or "unknown") end)
+            -- Handle create_file commands
+            squashed = squashed:gsub("||| COMMAND |||\ncreate_file:([^%s\n]+)%s*\n.-||| END_COMMAND |||",
+                function(file_path) return string.format("\n[SYSTEM MEMORY: File created '%s'.]\n", file_path or "unknown") end)
             squashed = utils.trim(squashed:gsub("\n\n+", "\n\n"))
             if original ~= squashed then
                 history[i].content = squashed

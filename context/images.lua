@@ -36,8 +36,8 @@ function M.load_images(ctx, dir_path)
     for _, img in ipairs(raw_images) do
         local safe_path = utils.shell_quote(img.path)
         local mod_time = 0
-        -- Try stat to get modification time
-        local cmd = string.format("stat -c %%Y %s 2>/dev/null", safe_path)
+        -- Try stat to get modification time (cross-platform)
+        local cmd = string.format("stat -c %%Y %s 2>/dev/null || stat -f %%m %s 2>/dev/null", safe_path, safe_path)
         local p = io.popen(cmd)
         if p then
             local t = p:read("*l")
@@ -184,7 +184,7 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
     end
 
     local injected = false
-    for i = 1, #messages do
+    for i = #messages, 1, -1 do
         if messages[i].role == "user" then
             messages[i].content = {
                 { type = "text", text = messages[i].content },
