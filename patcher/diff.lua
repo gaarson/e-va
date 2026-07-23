@@ -61,13 +61,21 @@ function M.generate_unified_diff(old_lines, new_lines, filename)
                     hunk_iters = hunk_iters + 1
                     if hunk_iters > max_hunk_iters then break end
                     local found = false
+                    local found_at = -1
                     for k = j, math.min(j + 3, new_len) do
                         if M.fuzzy_line_eq(old_lines[i], new_lines[k]) then
                             found = true
+                            found_at = k
                             break
                         end
                     end
-                    if found then break end
+                    if found then
+                        if found_at == j then
+                            i = i + 1
+                            j = j + 1
+                        end
+                        break
+                    end
                     i = i + 1
                 end
                 while j <= new_len do

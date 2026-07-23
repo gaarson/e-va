@@ -37,6 +37,7 @@ function M.apply_patch(original_content, llm_response)
                 table.insert(blocks, { search_lines = search_lines, replace_lines = replace_lines })
                 state = matcher.STATE_OUTSIDE
             elseif trimmed == "<<<<<<< SEARCH" then
+                table.insert(blocks, { search_lines = search_lines, replace_lines = replace_lines })
                 state = matcher.STATE_IN_SEARCH
                 search_lines = {}
                 replace_lines = {}
@@ -91,6 +92,7 @@ function M.apply_patch(original_content, llm_response)
                             local span_end = mi
                             while sidx <= #s_lines and fidx <= #file_lines do
                                 if file_lines[fidx]:match("^%s*$") then
+                                    span_end = fidx
                                     fidx = fidx + 1
                                 elseif diff.fuzzy_line_eq(file_lines[fidx], s_lines[sidx]) then
                                     sidx = sidx + 1
@@ -121,6 +123,7 @@ function M.apply_patch(original_content, llm_response)
                                 local span_end = mi
                                 while sidx <= #norm_s_lines and fidx <= #file_lines do
                                     if file_lines[fidx]:match("^%s*$") then
+                                        span_end = fidx
                                         fidx = fidx + 1
                                     else
                                         local file_norm = file_lines[fidx]:gsub("^%s+", ""):gsub("%s+$", "")

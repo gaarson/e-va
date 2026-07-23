@@ -143,26 +143,25 @@ static int l_find_unique_fuzzy_block(lua_State *L) {
 
 /* --- POSIX SIGNAL HANDLING --- */
 static volatile sig_atomic_t sigint_flag = 0;
-static struct timespec last_sigint_ts = {0, 0};
+static volatile sig_atomic_t last_sigint_ms = 0;
 
 static void handle_sigint(int sig) {
     (void)sig;
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-
-    if (last_sigint_ts.tv_sec != 0 || last_sigint_ts.tv_nsec != 0) {
-        long diff_ms = (long)(now.tv_sec - last_sigint_ts.tv_sec) * 1000 +
-                       (long)((now.tv_nsec - last_sigint_ts.tv_nsec) / 1000000);
+    sig_atomic_t now_ms = (sig_atomic_t)(now.tv_sec * 1000 + now.tv_nsec / 1000000);
+    if (last_sigint_ms != 0) {
+        long diff_ms = (long)(now_ms - last_sigint_ms);
         if (diff_ms < 500) {
             _exit(1);
         }
     }
-
-    last_sigint_ts = now;
+    last_sigint_ms = now_ms;
     sigint_flag = 1;
 }
 
-static int l_setup_sigint() {
+static int l_setup_sigint(lua_State *L) {
+    (void)L;
     struct sigaction sa;
     sa.sa_handler = handle_sigint;
     sigemptyset(&sa.sa_mask);
@@ -181,6 +180,7 @@ static int l_consume_sigint(lua_State *L) {
 static volatile sig_atomic_t esc_flag = 0;
 static pthread_t esc_thread_id;
 static volatile int esc_monitor_active = 0;
+static int esc_thread_created = 0;
 static int esc_tty_fd = -1;
 static struct termios original_termios;
 static int termios_saved = 0;
@@ -259,6 +259,11 @@ done:
 }
 
 static int l_setup_esc_monitor(lua_State *L) {
+    /* Prevent double setup */
+    if (esc_monitor_active) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
     /* Setup SIGUSR1 handler */
     struct sigaction sa;
     sa.sa_handler = handle_sigusr1;
@@ -276,7 +281,7 @@ static int l_setup_esc_monitor(lua_State *L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    
+    esc_thread_created = 1;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -290,15 +295,16 @@ static int l_consume_esc(lua_State *L) {
 static int l_teardown_esc_monitor(lua_State *L) {
     (void)L;
     esc_monitor_active = 0;
-    
+    if (!esc_thread_created) {
+        return 0;
+    }
     /* Wake the thread if it's blocked on read */
     if (esc_tty_fd >= 0) {
         pthread_kill(esc_thread_id, SIGUSR1);
     }
-    
     /* Wait for thread to finish */
     pthread_join(esc_thread_id, NULL);
-    
+    esc_thread_created = 0;
     return 0;
 }
 
