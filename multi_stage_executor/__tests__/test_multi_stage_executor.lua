@@ -2,29 +2,11 @@
 -- Comprehensive test suite for multi_stage_executor and related modules
 -- Standalone: no external test framework, plain Lua with assert() and print()
 package.path = package.path .. ";../?.lua;../../?.lua;../../tools/?.lua"
--- Mock tool_registry BEFORE requiring multi_stage_executor
--- This ensures the registry is available when multi_stage_executor loads
-package.preload["tool_registry"] = function()
-    local M = {}
-    M.tools = {
-        patch = { name = "patch", desc = "Apply patches" },
-        create_file = { name = "create_file", desc = "Create files" },
-        shell = { name = "shell", desc = "Run shell commands" },
-        read_file = { name = "read_file", desc = "Read files" },
-        delegate_plan = { name = "delegate_plan", desc = "Delegate plans" },
-    }
-    function M.is_tool_allowed(agent_cfg, tool_name)
-        if not agent_cfg or not agent_cfg.allowed_tools then return true end
-        for _, t in ipairs(agent_cfg.allowed_tools) do
-            if t == tool_name then return true end
-        end
-        return false
-    end
-    return M
-end
 local patcher = require("patcher")
 local multi_stage = require("multi_stage_executor")
 local utils = require("utils")
+-- Register all tools so registry.tools entries exist for validation
+require("tools").init(nil)
 -- ============================================================
 -- Test Harness
 -- ============================================================
@@ -755,4 +737,3 @@ end
 print(string.rep("=", 50))
 
 os.exit(fail_count > 0 and 1 or 0)
-
