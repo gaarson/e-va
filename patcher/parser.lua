@@ -7,7 +7,7 @@ function M.apply_patch(original_content, llm_response)
     local start_time = os.clock()
     local TIMEOUT_SECONDS = 5
     local content = original_content:gsub("\r\n", "\n"):gsub("\r", "\n")
-    local response = llm_response:gsub("\r\n", "\n"):gsub("\r", "\n")
+    local response = llm_response and llm_response:gsub("\r\n", "\n"):gsub("\r", "\n") or ""
     local changes_count = 0
     local errors = {}
     local original_lines = diff.to_lines(content)
@@ -33,14 +33,9 @@ function M.apply_patch(original_content, llm_response)
                 table.insert(search_lines, line)
             end
         elseif state == matcher.STATE_IN_REPLACE then
-            if trimmed:match("^>>>>>>>") then
+            if trimmed == ">>>>>>> REPLACE" then
                 table.insert(blocks, { search_lines = search_lines, replace_lines = replace_lines })
                 state = matcher.STATE_OUTSIDE
-            elseif trimmed == "<<<<<<< SEARCH" then
-                table.insert(blocks, { search_lines = search_lines, replace_lines = replace_lines })
-                state = matcher.STATE_IN_SEARCH
-                search_lines = {}
-                replace_lines = {}
             else
                 table.insert(replace_lines, line)
             end
@@ -54,7 +49,7 @@ function M.apply_patch(original_content, llm_response)
         local r_lines = matcher.strip_all_empty(block.replace_lines)
         local has_content = false
         for _, l in ipairs(s_lines) do
-            if l:match("%S") then has_content = true; break end
+            if l and l:match("%S") then has_content = true; break end
         end
         if not has_content then
             table.insert(errors, "FAILED BLOCK: SEARCH block is empty or whitespace-only.")
@@ -112,7 +107,9 @@ function M.apply_patch(original_content, llm_response)
                     else
                         local norm_s_lines = {}
                         for _, sl in ipairs(s_lines) do
-                            table.insert(norm_s_lines, sl:gsub("^%s+", ""):gsub("%s+$", ""))
+                            if sl then
+                                table.insert(norm_s_lines, (sl:gsub("^%s+", ""):gsub("%s+$", "")))
+                            end
                         end
                         local norm_matches = matcher.find_all_matches_skip_empty(file_lines, norm_s_lines)
                         if #norm_matches > 0 then
