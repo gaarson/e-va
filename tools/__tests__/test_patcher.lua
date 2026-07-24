@@ -1,6 +1,7 @@
 -- Comprehensive tests for patcher.lua (Lua-level fuzzy patch engine)
 -- Run with: ./run_tests.sh tools/__tests__/test_patcher.lua
 local patcher = require("patcher")
+local utils = require("utils")
 -- Helper: create a mock ctx with knowledge_base
 local function mock_ctx(content)
     return {

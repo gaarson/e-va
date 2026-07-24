@@ -1,41 +1,12 @@
 -- Comprehensive tests for multi_stage_executor.lua
 -- Run with: ./run_tests.sh tools/__tests__/test_multi_stage_executor.lua
 local M = {}
--- Mock dependencies
-local mock_utils = {
-    trim = function(s)
-        if not s then return "" end
-        return s:gsub("^%s*(.-)%s*$", "%1")
-    end,
-    normalize_path = function(root, path)
-        return path:gsub("^./", "")
-    end
-}
-local mock_registry = {
-    tools = {
-        patch = { desc = "Applies diffs" },
-        create_file = { desc = "Creates files" },
-        delegate_plan = { desc = "Delegates plans" },
-        shell = { desc = "Shell commands" },
-    },
-    is_tool_allowed = function(agent_cfg, tool_name)
-        if not agent_cfg or not agent_cfg.allowed_tools then return true end
-        for _, t in ipairs(agent_cfg.allowed_tools) do
-            if t == tool_name then return true end
-        end
-        return false
-    end
-}
-local mock_logger = {
-    info = function(...) end,
-    warn = function(...) end,
-    error = function(...) end,
-}
--- Install mocks into package.loaded BEFORE requiring multi_stage_executor
-package.loaded["utils"] = mock_utils
-package.loaded["tool_registry"] = mock_registry
-package.loaded["registry"] = mock_registry  -- Also alias for compatibility
-package.loaded["logger"] = mock_logger
+-- Require real modules for luacov coverage
+local utils = require("utils")
+local tool_registry = require("tool_registry")
+local logger = require("logger")
+-- Register all tools so registry.tools entries exist for validation
+require("tools").init(nil)
 -- Mock ctx
 local function mock_ctx()
     return {
@@ -56,11 +27,6 @@ local function mock_ctx()
         end
     }
 end
--- Override requires for testing
-local old_require = _G.require
-package.preload["utils"] = function() return mock_utils end
-package.preload["registry"] = function() return mock_registry end
-package.preload["logger"] = function() return mock_logger end
 local multi_stage = require("multi_stage_executor")
 local passed = 0
 local failed = 0
@@ -657,13 +623,13 @@ do
     assert_truthy(diff_str, "Diff string is returned")
     assert_truthy(diff_str:find("-line 2"), "Diff contains removed line")
     assert_truthy(diff_str:find("+CHANGED"), "Diff contains added line")
-    -- Test 12.2: Failed patch returns error message as 3rd value
+    -- Test 12.2: Failed patch returns error message as 2nd value
     local original = "line 1\nline 2\nline 3\n"
     local patch_body = "<<<<<<< SEARCH\nNONEXISTENT\n=======\nCHANGED\n>>>>>>> REPLACE"
     ok, new_content, changes, diff_str = patcher.apply_patch(original, patch_body)
     assert_falsy(ok, "Patch fails for nonexistent search")
-    assert_truthy(changes, "Error message is returned as 3rd value")
-    assert_truthy(tostring(changes):find("FAILED"), "Error message contains FAILED")
+    assert_truthy(new_content, "Error message is returned as 2nd value")
+    assert_truthy(tostring(new_content):find("FAILED"), "Error message contains FAILED")
     -- Test 12.3: Zero-op patch (SEARCH == REPLACE) fails
     local original = "line 1\nline 2\nline 3\n"
     local patch_body = "<<<<<<< SEARCH\nline 2\n=======\nline 2\n>>>>>>> REPLACE"
