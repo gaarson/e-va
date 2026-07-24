@@ -49,12 +49,23 @@ function M.escape_json_string(str)
 end
 function M.sanitize_for_json(str)
     if type(str) ~= "string" then return tostring(str) end
-    str = str:gsub("\0", "")
+    -- Remove null bytes first (Lua gsub doesn't match \0, so we iterate)
+    local cleaned = {}
+    for i = 1, #str do
+        local b = string.byte(str, i)
+        if b ~= 0 then table.insert(cleaned, string.char(b)) end
+    end
+    str = table.concat(cleaned)
     local out = {}
     local i = 1
     while i <= #str do
         local byte = string.byte(str, i)
-        if byte <= 0x7F then
+        if byte <= 0x1F then
+            -- Control characters (0x01-0x1F): escape as \uXXXX
+            table.insert(out, string.format("\\u%04x", byte))
+            i = i + 1
+        elseif byte <= 0x7F then
+            -- Normal ASCII printable characters (0x20-0x7F)
             table.insert(out, string.char(byte))
             i = i + 1
         elseif byte >= 0xC2 and byte <= 0xDF then
