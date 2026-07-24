@@ -20,7 +20,7 @@ local function _score_message(msg, idx, total, importance_scores)
         if content:match("^TASK:") or content:match("^QUESTION:") or content:match("%?%s*$") then
             return importance_scores.USER_QUESTION
         end
-        if content:match("^\\[OUTPUT\\]") or content:match("^\\[RESULT\\]") or content:match("^\\[SYSTEM") then
+        if content:match("^%[OUTPUT%]") or content:match("^%[RESULT%]") or content:match("^%[SYSTEM") then
             return importance_scores.TOOL_OUTPUT
         end
         return importance_scores.USER_QUESTION
@@ -28,7 +28,7 @@ local function _score_message(msg, idx, total, importance_scores)
         if content:match("||| COMMAND |||") then
             return importance_scores.ASSISTANT_REASONING + 10
         end
-        if content:match("^\\[SYSTEM MEMORY:") then
+        if content:match("^%[SYSTEM MEMORY:") then
             return importance_scores.SQUASHED_MUTATION
         end
         return importance_scores.ASSISTANT_REASONING
@@ -103,21 +103,21 @@ M.PRUNE_STRATEGIES = {
                 local c = msg.content or ""
                 local original_len = #c
                 -- Squash large shell outputs (>2KB)
-                if c:match("^\\[SHELL OUTPUT\\]") or c:match("^\\[SHELL STDOUT") then
+                if c:match("^%[SHELL OUTPUT%]") or c:match("^%[SHELL STDOUT") then
                     if original_len > 2048 then
                         local line_count = select(2, c:gsub("\n", "\n"))
                         msg.content = string.format("[OUTPUT SUMMARIZED: Shell output truncated (%d lines, %d bytes)]", line_count, original_len)
                         total = total - estimate_fn(c) + estimate_fn(msg.content)
                     end
                 -- Squash large search results (>1KB)
-                elseif c:match("^\\[SEARCH RESULTS\\]") or c:match("^=== SEARCH DIGEST ===") then
+                elseif c:match("^%[SEARCH RESULTS%]") or c:match("^=== SEARCH DIGEST ===") then
                     if original_len > 1024 then
                         local line_count = select(2, c:gsub("\n", "\n"))
                         msg.content = string.format("[OUTPUT SUMMARIZED: Search results truncated (%d lines, %d bytes)]", line_count, original_len)
                         total = total - estimate_fn(c) + estimate_fn(msg.content)
                     end
                 -- Squash large tool outputs (>2KB)
-                elseif c:match("^\\[OUTPUT\\]") or c:match("^\\[RESULT\\]") then
+                elseif c:match("^%[OUTPUT%]") or c:match("^%[RESULT%]") then
                     if original_len > 2048 then
                         local line_count = select(2, c:gsub("\n", "\n"))
                         msg.content = string.format("[OUTPUT SUMMARIZED: Tool output truncated (%d lines, %d bytes)]", line_count, original_len)

@@ -19,7 +19,7 @@ function M.compress_history_window(history, config)
             local original_len = #msg.content
             if helpers._is_task_critical(msg) then
                 msg.content = thinking.compress_assistant_thinking(msg.content, config)
-                if msg.content:match("^\\[") then
+                if msg.content:match("^%[") then
                     msg.content = tool_output.compress_tool_output(msg.content, config)
                 end
             else
@@ -34,7 +34,7 @@ function M.compress_history_window(history, config)
         if msg and msg.content then
             local original_len = #msg.content
             msg.content = thinking.compress_assistant_thinking(msg.content, config)
-            if msg.content:match("^\\[") then
+            if msg.content:match("^%[") then
                 msg.content = tool_output.compress_tool_output(msg.content, config)
             end
             tokens_saved = tokens_saved + (original_len - #msg.content)
@@ -56,8 +56,8 @@ function M.is_compressible(msg, config)
     if len < 200 then return false end
     if content:match("||| COMMAND |||") then return false end
     if msg.role == "system" and len < 500 then return false end
-    if config.compress_thinking_blocks and content:match("<thinking>") then return true end
-    if content:match("^\\[SHELL") or content:match("^\\[SEARCH") or content:match("^\\[OUTPUT") or content:match("^\\[RESULT") then
+    if config.compress_thinking_blocks and (content:match("<thinking>") or content:match("<think>")) then return true end
+    if content:match("^%[SHELL") or content:match("^%[SEARCH") or content:match("^%[OUTPUT") or content:match("^%[RESULT") then
         if len > config.max_tool_output_bytes then return true end
     end
     if len > 5000 then return true end
@@ -68,9 +68,9 @@ function M.compress_message(msg, config)
     if not msg or not msg.content then return msg end
     local original_content = msg.content
     msg.content = thinking.compress_assistant_thinking(msg.content, config)
-    if msg.content:match("^\\[SHELL") or msg.content:match("^\\[SEARCH") or
-       msg.content:match("^\\[OUTPUT") or msg.content:match("^\\[RESULT") or
-       msg.content:match("^\\[FILE") then
+    if msg.content:match("^%[SHELL") or msg.content:match("^%[SEARCH") or
+       msg.content:match("^%[OUTPUT") or msg.content:match("^%[RESULT") or
+       msg.content:match("^%[FILE") then
         msg.content = tool_output.compress_tool_output(msg.content, config)
     end
     -- Preserve critical entities from original content if it was large

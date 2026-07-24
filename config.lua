@@ -9,7 +9,7 @@ function M.get()
     cfg.MCP_SERVERS = {}
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 180000,
+        MAX_CONTEXT = 120000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
@@ -22,7 +22,7 @@ function M.get()
             max_history_messages = 200,
             max_history_tokens = 50000,
             squash_threshold_messages = 150,
-            squash_threshold_tokens = 150000,
+            squash_threshold_tokens = 90000,
             dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },
@@ -70,12 +70,12 @@ function M.get()
             reasoning = {
                 context_injection = { mode = "separate_message" },
                 command_flow = { strict_parsing = true, max_retries = 5 },
-                storage = { squash_threshold_tokens = 120000 }
+                storage = { squash_threshold_tokens = 90000 }
             },
             coding = {
                 context_injection = { mode = "append_to_last_user", max_recency_tokens = 20000 },
                 command_flow = { auto_squash_on_mutation = true, reinforcement_interval = 3 },
-                storage = { max_history_tokens = 100000 }
+                storage = { max_history_tokens = 40000 }
             }
         }
     }
@@ -134,18 +134,24 @@ function M.get()
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 16384,
-            temperature = 0.3,
+            temperature = 0.2,
+            top_p = 0.95,
+            top_k = 60,
             -- min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
+            repetition_penalty = 1.05
         },
         ENGINEERING = {
             max_tokens = 16384,
             temperature = 0.1,
+            top_p = 0.95,
+            top_k = 60,
             -- min_p = 0.02,
             chat_template_kwargs = {enable_thinking = false},
             -- presence_penalty = 0.0
+            repetition_penalty = 1.05
         }
     }
 
@@ -165,11 +171,11 @@ function M.get()
     -- Добавь в возвращаемую таблицу cfg:
     cfg.OPTIMIZER_AGENT = {
         name = "OPTIMIZER",
-        url = "https://zo-diak.com/ai/v1/chat/completions",
-        -- url = "http://192.168.0.102:8000/v1/chat/completions",
-        token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+        -- url = "https://zo-diak.com/ai/v1/chat/completions",
+        url = "http://192.168.0.102:8000/v1/chat/completions",
+        -- token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
         is_reasoning = true,
-        model = "Qwen3.5-27B-AWQ",
+        model = "local_model",
         -- is_reasoning = true,
         params = {
             stream = true,
@@ -179,23 +185,6 @@ function M.get()
         }
     }
 
-    -- MULTI-STAGE EXECUTOR CONFIGURATION:
-    -- To enable multi-stage execution (Intent -> Generate -> Execute -> Review loop) for an agent,
-    -- add these fields to the agent's config table:
-    --
-    --   use_multi_stage = true,                  -- Enable multi-stage mode
-    --   multi_stage_max_iterations = 3,          -- Max review/revise cycles (default: 3)
-    --
-    -- Example:
-    --   CODER = {
-    --       ...
-    --       use_multi_stage = true,
-    --       multi_stage_max_iterations = 5,
-    --   }
-    --
-    -- Multi-stage mode requires the agent to have tools registered in tool_registry.lua.
-    -- The executor will guide the agent through: INTENT planning -> PAYLOAD generation -> EXECUTION -> REVIEW.
-
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
@@ -204,7 +193,7 @@ function M.get()
             -- token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             -- model = "Qwen3.5-27B-AWQ",
-            model = "gemma4-12B",
+            model = "local_model",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             -- use_selective_multi_stage = true,
@@ -232,7 +221,7 @@ function M.get()
             -- token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
             -- model = "Qwen3.5-27B-AWQ",
-            model = "gemma4-12B",
+            model = "local_model",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             -- use_selective_multi_stage = true,
             -- multi_stage_tools = { "create_file", "patch" },

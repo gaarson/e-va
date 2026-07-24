@@ -1,7 +1,20 @@
-return {
-   exclude = {
-      "lua_modules",
-      "__tests__",
-      ".e-va-conf"
-   },
+
+luacov_flag = "count"
+
+
+exclude = {
+
+    "lua_modules/",
+
+    "/usr/",
+
+    "/tmp/",
+
+    "luarocks",
+
+    "__tests__/",
+
+    "/test_",
+
 }
+

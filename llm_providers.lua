@@ -51,11 +51,13 @@ M.register("openai", {
         local json = require("JSON")
         local ok, part = pcall(json.decode, json, json_str)
         if not ok or not part or not part.choices or not part.choices[1] then return nil, nil end
-
         local delta = part.choices[1].delta
         if not delta then return nil, nil end
-
-        return delta.content, delta.reasoning
+        local reasoning = delta.reasoning_content
+        if reasoning == nil then reasoning = nil
+        elseif reasoning == "" then reasoning = ""
+        end
+        return delta.content, reasoning
     end
 })
 
