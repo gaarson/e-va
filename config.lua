@@ -9,7 +9,7 @@ function M.get()
     cfg.MCP_SERVERS = {}
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 120000,
+        MAX_CONTEXT = 200000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
@@ -19,10 +19,10 @@ function M.get()
 
     cfg.CONTEXT_FLOW = {
         storage = {
-            max_history_messages = 200,
+            max_history_messages = 100,
             max_history_tokens = 50000,
-            squash_threshold_messages = 150,
-            squash_threshold_tokens = 90000,
+            squash_threshold_messages = 80,
+            squash_threshold_tokens = 120000,
             dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },
@@ -37,7 +37,7 @@ function M.get()
             strict_parsing = true,
             max_retries = 3,
             auto_squash_on_mutation = true,
-            continuation_prompt = "check maybe you stuck or what maybe command invalid",
+            continuation_prompt = "check maybe you stuck or what maybe command invalid, dont forget optimize context sometime",
             reinforcement_interval = 5,
             -- Commands exempt from dedup. Patterns ending with '*' are treated as prefix wildcards
             -- (e.g., "mcp_browser_*" exempts all mcp_browser_* variants like mcp_browser_go_to, mcp_browser_click, etc.)
@@ -171,11 +171,12 @@ function M.get()
     -- Добавь в возвращаемую таблицу cfg:
     cfg.OPTIMIZER_AGENT = {
         name = "OPTIMIZER",
-        -- url = "https://zo-diak.com/ai/v1/chat/completions",
-        url = "http://192.168.0.102:8000/v1/chat/completions",
-        -- token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-        is_reasoning = true,
-        model = "local_model",
+        url = "https://zo-diak.com/ai/v1/chat/completions",
+        -- url = "http://192.168.0.102:8000/v1/chat/completions",
+        token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+        -- is_reasoning = true,
+        model = "Qwen3.5-27B-AWQ",
+        -- model = "local_model",
         -- is_reasoning = true,
         params = {
             stream = true,
@@ -188,12 +189,12 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            -- url = "https://zo-diak.com/ai/v1/chat/completions",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
-            -- token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            url = "https://zo-diak.com/ai/v1/chat/completions",
+            -- url = "http://192.168.0.102:8000/v1/chat/completions",
+            token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
-            -- model = "Qwen3.5-27B-AWQ",
-            model = "local_model",
+            model = "Qwen3.5-27B-AWQ",
+            -- model = "local_model",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             -- use_selective_multi_stage = true,
@@ -216,12 +217,12 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
-            -- url = "https://zo-diak.com/ai/v1/chat/completions",
-            -- token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            -- url = "http://192.168.0.102:8000/v1/chat/completions",
+            url = "https://zo-diak.com/ai/v1/chat/completions",
+            token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
-            -- model = "Qwen3.5-27B-AWQ",
-            model = "local_model",
+            model = "Qwen3.5-27B-AWQ",
+            -- model = "local_model",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             -- use_selective_multi_stage = true,
             -- multi_stage_tools = { "create_file", "patch" },
