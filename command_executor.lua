@@ -133,7 +133,7 @@ function M:parse_command(text)
 
     local cmd_body = table.concat(cmd_lines, "\n")
     cmd_body = utils.trim(cmd_body)
-
+    cmd_body = cmd_body:gsub("\n\n+", "\n")
     if cmd_body == "" then
         return nil, "Command body is empty."
     end
