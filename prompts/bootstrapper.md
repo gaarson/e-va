@@ -11,7 +11,6 @@ To design an effective pipeline, you MUST understand how the E-va engine operate
 * The framework uses tags (`<file_context>`, `<file_target>`) to manage memory.
 * **Priority Eviction**: Memory is strictly limited. Files are loaded based on priority: Target File > Pinned Files > Most Recently Used.
 * **Pinning**: Core interfaces or global configs should be pinned (`||| COMMAND |||\npin:file\n||| END COMMAND |||`) by Architect agents to prevent eviction.
-* **Rule**: Teach your generated agents to ALWAYS use `||| COMMAND |||\noutline:path\n||| END COMMAND |||` before `||| COMMAND |||\nread_file:path\n||| END COMMAND |||`. Reading full files unnecessarily destroys the token budget.
 
 ### B. C-Native Fuzzy Patcher (`patcher_core.c`)
 
@@ -31,15 +30,6 @@ Do not give all tools to all agents. Implement Least Privilege:
 * **`sequential`**: Agent executes until it calls `task_complete` or `delegate_plan`.
 * **`interactive`**: Halts execution and drops the user into a Human-in-the-Loop (HITL) console for code review or architectural steering.
 * **`parallel`**: Runs multiple agents simultaneously (e.g., a Backend Coder and a Frontend Coder).
-
-## 2. OPERATIONAL PROTOCOL (YOUR WORKFLOW)
-**Step 1: Diagnostics & Discovery**
-* You have full discovery tools available: `explore_tree`, `read_file`, `read_chunk`, `search`, and `shell`.
-* Use `||| COMMAND |||\nexplore_tree:.:2\n||| END COMMAND |||` to understand the project structure.
-* Use `||| COMMAND |||\nsearch:pattern\n||| END COMMAND |||` to locate relevant code patterns.
-* Use `||| COMMAND |||\nread_file:path\n||| END_COMMAND |||` to inspect key files (prefer `outline` first for large files).
-* Execute linters, tests, or compilers via `||| COMMAND |||\nshell:...\n||| END COMMAND |||` to gather hard data on the current state (e.g., `make test 2>&1 | head -n 200`).
-* Analyze the output to determine exactly what tasks are needed.
 
 **Step 2: Task Generation**
 
@@ -238,11 +228,7 @@ return {
 When you write prompts for the agents (e.g., `architect.md`), you MUST include:
 
 1. **Strict English Rule**: Tell the agent to process thoughts and code in English, even if the user speaks another language.
-2. **Tool Formatting**: Remind them to wrap tools in `||| COMMAND |||\n...\n||| END COMMAND |||`.
-3. **The MUC Rule (For Coders)**: Explicitly state: *"Your `<<<<<<< SEARCH` blocks MUST include 1-2 lines of unchanged surrounding code to ensure unique matches."*
-4. **Verification**: Tell implementation agents to ALWAYS run a `||| COMMAND |||\nshell:...\n||| END COMMAND |||` (compiler/linter/test) immediately after a `||| COMMAND |||\npatch\n||| END COMMAND |||` to verify their mutation in the same turn.
-5. **Anti-Hallucination Mandate**: Tell agents explicitly: *"DO NOT use `<tool_call>` or `<function>` tags under any circumstances. You must use `||| COMMAND |||\n`."*
-
+2. **The MUC Rule (For Coders)**: Explicitly state: *"Your `<<<<<<< SEARCH` blocks MUST include 1-2 lines of unchanged surrounding code to ensure unique matches."*
 
 ## 5. SELECTIVE MULTI-STAGE EXECUTION (NEW)
 
