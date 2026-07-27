@@ -112,7 +112,10 @@ function M.get_recency_block(ctx, already_present_paths)
             -- Skip if already present in chat history (deduplication)
             if already_present_paths[path] then
                 -- Skip this file, it's already in history
-            elseif not ctx.turn_requested_files[path] and ctx.knowledge_base[path] then
+            -- Skip files requested in the current turn (they will appear via tool output)
+            elseif ctx.turn_requested_files[path] then
+                -- Skip: file was just read this turn, content coming via tool output
+            elseif ctx.knowledge_base[path] then
                 local content = ctx.knowledge_base[path]
                 local is_plan_target = plan_target_files[path]
                 -- For files that are BOTH pinned AND in execution_plan: show FULL content

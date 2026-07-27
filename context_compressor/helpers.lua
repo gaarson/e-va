@@ -132,6 +132,25 @@ function M._extract_critical_entities(content)
     end
     return entities
 end
+--- Compresses a <file_context> block to a lightweight reference.
+-- Used when the same file appears in a more recent message.
+-- @param content The message content
+-- @return string with file_context blocks replaced by references
+function M._compress_stale_file_contexts(content)
+    if not content or #content < 100 then return content end
+    local result = content
+    -- Match <file_context path="..." ...>...</file_context> blocks
+    result = result:gsub('<file_context%s+path="([^"]+)"[^>]->([%s\S]*)</file_context>',
+        function(path, inner)
+            if #inner > 3000 then
+                return string.format('[FILE CONTEXT: %s - see latest version in conversation]', path)
+            end
+            -- Small blocks: keep as-is
+            return string.format('<file_context path="%s">%s</file_context>', path, inner)
+        end
+    )
+    return result
+end
 function M._summarize_message(msg, config)
     local role = msg.role or "unknown"
     local content = msg.content or ""

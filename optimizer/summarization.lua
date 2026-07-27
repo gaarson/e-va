@@ -85,7 +85,7 @@ Output the summary as plain text without any markdown formatting.
     if not content then return nil end
     local summary = utils.trim(content:gsub("`+", ""))
     if #summary > 0 then
-        if #M._summary_cache >= M.M._summary_cache_max then
+        if #M._summary_cache >= M._summary_cache_max then
             for k in pairs(M._summary_cache) do
                 M._summary_cache[k] = nil
                 break

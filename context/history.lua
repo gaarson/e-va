@@ -36,6 +36,46 @@ function M.deduplicate_consecutive_messages(ctx, agent_name)
     end
     return removed
 end
+function M.deduplicate_file_contexts(ctx, agent_name)
+    local history = M.get_history(ctx, agent_name)
+    if #history < 2 then return 0 end
+    local removed = 0
+    -- Collect all file_context paths and their most recent message index
+    local latest_occurrence = {} -- path -> message index
+    for i = 1, #history do
+        local msg = history[i]
+        if msg and msg.content then
+            for path in msg.content:gmatch('<file_context%s+path="([^"]+)"') do
+                latest_occurrence[path] = i  -- keep updating to get the latest
+            end
+        end
+    end
+    -- Remove <file_context> blocks from older messages where a newer one exists
+    for i = 1, #history do
+        local msg = history[i]
+        if msg and msg.content and #msg.content > 100 then
+            local original = msg.content
+            -- For each file_context in this message, check if it's the latest occurrence
+            local new_content = msg.content
+            for path, latest_idx in pairs(latest_occurrence) do
+                if latest_idx > i then
+                    -- This is an older occurrence; remove the file_context block
+                    new_content = new_content:gsub('<file_context%s+path="' .. path .. '"[^>]->[^<]-</file_context>', '')
+                end
+            end
+            -- Clean up extra whitespace
+            new_content = new_content:gsub("\n\n\n+", "\n\n")
+            if new_content ~= original then
+                msg.content = utils.trim(new_content)
+                removed = removed + 1
+            end
+        end
+    end
+    if removed > 0 then
+        logger.info(string.format("[DEDUP FILE CONTEXTS] Cleaned %d message(s) with stale file_context blocks for agent '%s'", removed, agent_name))
+    end
+    return removed
+end
 function M.prune_history(ctx, agent_name)
     local history = M.get_history(ctx, agent_name)
     local limits = ctx.flow_config.storage
@@ -47,6 +87,8 @@ function M.prune_history(ctx, agent_name)
     end
     -- STEP 1.5: Remove consecutive duplicate messages
     M.deduplicate_consecutive_messages(ctx, agent_name)
+    -- STEP 1.6: Deduplicate file_context blocks (keep only latest occurrence per path)
+    M.deduplicate_file_contexts(ctx, agent_name)
     -- STEP 2: Apply importance-weighted pruning
     strategies_mod.PRUNE_STRATEGIES.importance_weighted(history, limits, estimate, config_mod.IMPORTANCE_SCORES)
     -- STEP 3: Squash large patches and outputs

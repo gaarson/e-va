@@ -1,21 +1,14 @@
 local utils = require("utils")
 	local json = require("JSON")
 	local optimizer = require("optimizer")
-	
+	local orchestrator = require("context.orchestrator")
 	local function register(registry)
-    registry.register("optimize_context", 
-        "Optimizes the current context by removing unnecessary files, updating the task summary, or pinning critical files. Use this when the context is getting too large or when you want to ensure critical information is preserved.", 
-        "||| COMMAND |||\noptimize_context:{\"remove_files\": [\"path/to/file1.txt\"], \"pin_files\": [\"path/to/core.h\"], \"update_summary\": \"New summary text\"}\n||| END_COMMAND |||", 
+    registry.register("optimize_context",
+        "Optimizes the current context by removing unnecessary files, updating the task summary, pinning/unpinning files, or summarizing conversation history. Use this when the context is getting too large or when you want to ensure critical information is preserved. Supports: remove_files, pin_files, unpin_files, update_summary, summarize_history (with agent_name and keep_count).",
+        "||| COMMAND |||\noptimize_context:{\"remove_files\": [\"path/to/file1.txt\"], \"pin_files\": [\"path/to/core.h\"], \"update_summary\": \"New summary text\", \"summarize_history\": {\"agent_name\": \"architect\", \"keep_count\": 10}}\n||| END_COMMAND |||",
 	        function(args, ctx, agent_name)
-	            -- PRIMARY PATH: LLM-driven optimization if OPTIMIZER_AGENT is configured
-	            if ctx.config and ctx.config.OPTIMIZER_AGENT then
-	                optimizer.analyze_and_optimize(ctx, ctx.config)
-	                return { output = "\n[SYSTEM]: Context optimized via LLM agent." }
-            end
-
-            -- FALLBACK PATH: Manual JSON parsing when no OPTIMIZER_AGENT
+	            -- ALWAYS parse explicit JSON instructions first
 	            local instructions = {}
-
 	            local json_match = utils.trim(args:gsub("`+", ""))
             
             if json_match ~= "" then
@@ -26,41 +19,15 @@ local utils = require("utils")
                     return { output = "\n[ERROR]: Invalid JSON format for optimize_context. Use: {\"remove_files\": [...], \"pin_files\": [...], \"update_summary\": \"...\"}" }
                 end
             end
-
-            local actions_taken = {}
-
-            -- 1. Удаляем файлы из памяти
-            if instructions.remove_files and type(instructions.remove_files) == "table" then
-                for _, file_path in ipairs(instructions.remove_files) do
-                    if ctx.knowledge_base[file_path] then
-                        ctx.knowledge_base[file_path] = nil
-                        ctx.file_states[file_path] = nil
-                        ctx.file_access_rank[file_path] = nil
-                        table.insert(actions_taken, "Removed file from memory: " .. file_path)
-                    end
-                end
+            -- Delegate explicit instructions to orchestrator (handles remove_files, pin_files, unpin_files, update_summary, summarize_history)
+            if next(instructions) then
+                orchestrator.optimize_context(ctx, instructions)
             end
-
-            -- 2. Пиним файлы
-            if instructions.pin_files and type(instructions.pin_files) == "table" then
-                for _, file_path in ipairs(instructions.pin_files) do
-                    if ctx:pin_file(file_path) then
-                        table.insert(actions_taken, "Pinned file: " .. file_path)
-                    end
-                end
+            -- OPTIONALLY run LLM-driven optimization if OPTIMIZER_AGENT is configured
+            if ctx.config and ctx.config.OPTIMIZER_AGENT then
+                optimizer.analyze_and_optimize(ctx, ctx.config)
             end
-
-            -- 3. Обновляем саммари
-            if instructions.update_summary and type(instructions.update_summary) == "string" then
-                ctx:update_summary(instructions.update_summary)
-                table.insert(actions_taken, "Updated task summary")
-            end
-
-            if #actions_taken == 0 then
-                return { output = "\n[SYSTEM]: No optimizations were applied. The context is already optimal." }
-            end
-
-            return { output = "\n[SYSTEM]: Context optimized successfully.\nActions taken:\n" .. table.concat(actions_taken, "\n") }
+            return { output = "\n[SYSTEM]: Context optimized." }
         end
     )
 end

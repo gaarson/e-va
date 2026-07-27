@@ -13,7 +13,7 @@ M.DEFAULT_CONFIG = {
         max_recent_tool_outputs = 5,
     },
     context_injection = {
-        mode = "append_to_last_user",
+        mode = "stable_append",
         recency_block_enabled = true,
         search_digest_enabled = true,
         max_recency_tokens = 4000,
@@ -55,7 +55,7 @@ M.DEFAULT_CONFIG = {
             storage = { squash_threshold_tokens = 100000 }
         },
         coding = {
-            context_injection = { mode = "append_to_last_user", max_recency_tokens = 6000 },
+            context_injection = { mode = "stable_append", max_recency_tokens = 6000 },
             command_flow = { auto_squash_on_mutation = true, reinforcement_interval = 3 },
             storage = { max_history_tokens = 120000 }
         },

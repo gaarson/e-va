@@ -147,16 +147,41 @@ M.INJECTION_STRATEGIES = {
         for i = #messages, 1, -1 do
             if messages[i].role == "user" then
                 local content = messages[i].content
-                -- Remove previous dynamic blocks to avoid accumulation
-                content = content:gsub("<execution_plan>([%s\S]*)</execution_plan>", "")
-                content = content:gsub("<last_actions>([%s\S]*)</last_actions>", "")
-                content = content:gsub("<file_context[^>]->([%s\S]*)</file_context>", "")
-                content = content:gsub("\n\n+", "\n\n")
-                content = utils.trim(content)
-                messages[i].content = (content ~= "" and content .. "\n\n" or "") .. block
+                -- STABLE_ANCHOR: Check if <dynamic_context> tag already exists
+                if content:match("<dynamic_context>") then
+                    -- Replace ONLY the content between <dynamic_context> and </dynamic_context>
+                    content = content:gsub("<dynamic_context>.-</dynamic_context>",
+                        "<dynamic_context>\n" .. block .. "\n</dynamic_context>")
+                    messages[i].content = content
+                else
+                    -- Remove previous raw dynamic blocks to avoid accumulation, then wrap in anchor
+                    content = content:gsub("<execution_plan>([%s\S]*)</execution_plan>", "")
+                    content = content:gsub("<last_actions>([%s\S]*)</last_actions>", "")
+                    content = content:gsub("<file_context[^>]->([%s\S]*)</file_context>", "")
+                    content = content:gsub("\n\n+", "\n\n")
+                    content = utils.trim(content)
+                    messages[i].content = (content ~= "" and content .. "\n\n" or "") ..
+                        "<dynamic_context>\n" .. block .. "\n</dynamic_context>"
+                end
                 break
             end
         end
+    end,
+    stable_append = function(messages, recency, digest)
+        -- Appends dynamic content as a SEPARATE user message at the end.
+        -- This is the most cache-friendly strategy because it leaves all
+        -- prior messages completely untouched, preserving their KV-cache entries.
+        local block = recency
+        if digest and digest ~= "" then block = block .. "\n\n" .. digest end
+        if block == "" then return end
+        -- Remove any previous dynamic_context message to avoid accumulation
+        for i = #messages, 1, -1 do
+            if messages[i].role == "user" and messages[i].content:match("^<dynamic_context>") then
+                table.remove(messages, i)
+                break
+            end
+        end
+        table.insert(messages, { role = "user", content = "<dynamic_context>\n" .. block .. "\n</dynamic_context>" })
     end,
     hybrid_insert = function(messages, recency, digest)
         local block = recency
