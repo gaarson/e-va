@@ -181,7 +181,7 @@ function M.get()
             stream = true,
             temperature = 0.1,
             chat_template_kwargs = {enable_thinking = false},
-            max_tokens = 2048
+            max_tokens = 16384
         }
     }
 

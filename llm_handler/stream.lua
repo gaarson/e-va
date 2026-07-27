@@ -12,7 +12,7 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     local was_interrupted = false
     local last_part = nil
     local first_token_received = false
-    local STREAM_TIMEOUT = (profile.params and profile.params.stream_timeout) or 120
+    local STREAM_TIMEOUT = (profile.params and profile.params.stream_timeout) or 600
     local is_timeout = false
     local last_activity_time = socket.gettime()
     local BUFFER_LIMIT = 65536 -- 64KB
