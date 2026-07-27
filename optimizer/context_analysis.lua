@@ -112,7 +112,7 @@ Respond STRICTLY with a valid JSON object. Do not include any markdown formattin
     }
     M._last_llm_call_time = os.time()
     local res, err = llm_handler.send_request(opt_agent, messages, {
-        override_params = { stream = false, temperature = 0.1, stream_timeout = 30 }
+        override_params = { stream = false, temperature = 0.1, stream_timeout = 300 }
     })
     if not res then
         logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
@@ -182,7 +182,7 @@ Return the summary as plain text without any markdown formatting or extra text.
         { role = "user", content = prompt }
     }
     M._last_llm_call_time = os.time()
-    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1, stream_timeout = 30 } })
+    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.1, stream_timeout = 300 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to get response: " .. tostring(err))
         return nil
@@ -256,7 +256,7 @@ Output ONLY the message text, nothing else.
         { role = "user", content = prompt }
     }
     M._last_llm_call_time = os.time()
-    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.3, max_tokens = 256, stream_timeout = 30 } })
+    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.3, max_tokens = 256, stream_timeout = 300 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to generate continuation prompt: " .. tostring(err))
         return nil

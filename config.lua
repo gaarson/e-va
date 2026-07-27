@@ -62,7 +62,7 @@ function M.get()
             llm_summarization = {
                 enabled = true,
                 min_message_length = 5000,  -- Only summarize very long messages with LLM
-                rate_limit_seconds = 30,
+                rate_limit_seconds = 300,
                 max_summaries_per_turn = 3,
             },
         },
@@ -169,13 +169,12 @@ function M.get()
     }
 
     -- Добавь в возвращаемую таблицу cfg:
-    cfg.OPTIMIZER_AGENT = {
-        name = "OPTIMIZER",
-        url = "https://zo-diak.com/ai/v1/chat/completions",
-        -- url = "http://192.168.0.102:8000/v1/chat/completions",
-        token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
-        -- is_reasoning = true,
-        model = "Qwen3.5-27B-AWQ",
+        cfg.OPTIMIZER_AGENT = {
+            name = "OPTIMIZER",
+            url = os.getenv("LLM_BASE_URL") or "https://zo-diak.com/ai/v1/chat/completions",
+            token = os.getenv("LLM_API_KEY") or "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            -- is_reasoning = true,
+            model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
         -- model = "local_model",
         -- is_reasoning = true,
         params = {
@@ -189,12 +188,10 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            url = "https://zo-diak.com/ai/v1/chat/completions",
-            -- url = "http://192.168.0.102:8000/v1/chat/completions",
-            token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            url = os.getenv("LLM_BASE_URL") or "https://zo-diak.com/ai/v1/chat/completions",
+            token = os.getenv("LLM_API_KEY") or "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
-            model = "Qwen3.5-27B-AWQ",
-            -- model = "local_model",
+            model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             -- use_selective_multi_stage = true,
@@ -217,12 +214,10 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            -- url = "http://192.168.0.102:8000/v1/chat/completions",
-            url = "https://zo-diak.com/ai/v1/chat/completions",
-            token = "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            url = os.getenv("LLM_BASE_URL") or "https://zo-diak.com/ai/v1/chat/completions",
+            token = os.getenv("LLM_API_KEY") or "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
             -- is_reasoning = true,
-            model = "Qwen3.5-27B-AWQ",
-            -- model = "local_model",
+            model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             -- use_selective_multi_stage = true,
             -- multi_stage_tools = { "create_file", "patch" },

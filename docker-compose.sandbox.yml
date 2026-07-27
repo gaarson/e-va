@@ -1,0 +1,31 @@
+services:
+  eva-sandbox:
+    image: e-va-agent
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eva-sandbox
+    volumes:
+      - ./sandbox-workspace:/workspace
+      - ${ENV_FILE:-.env}:/opt/e-va/.env:ro
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://192.168.0.102:8000/v1/chat/completions}
+      - LLM_MODEL=${LLM_MODEL:-local_model}
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+    healthcheck:
+      test: ["CMD-SHELL", "test -x /opt/e-va/e-va && test -f /opt/e-va/agent.lua && test -x /usr/bin/google-chrome-stable || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    stdin_open: true
+    tty: true
+    command: ["--pipe", "."]

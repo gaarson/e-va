@@ -39,7 +39,7 @@ function M.summarize_message(msg, config)
         return M._summary_cache[content_hash]
     end
     local now = os.time()
-    local rate_limit = (config and config.COMPRESSION and config.COMPRESSION.llm_summarization and config.COMPRESSION.llm_summarization.rate_limit_seconds) or 30
+    local rate_limit = (config and config.COMPRESSION and config.COMPRESSION.llm_summarization and config.COMPRESSION.llm_summarization.rate_limit_seconds) or 300
     if now - M._last_llm_call_time < rate_limit then
         logger.info("[OPTIMIZER] SKIPPED: Rate limited for LLM summarization.")
         return nil
@@ -75,7 +75,7 @@ Output the summary as plain text without any markdown formatting.
     M._last_llm_call_time = os.time()
     M._llm_summarization_count = M._llm_summarization_count + 1
     local res, err = llm_handler.send_request(opt_agent, messages, {
-        override_params = { stream = false, temperature = 0.1, max_tokens = 512, stream_timeout = 30 }
+        override_params = { stream = false, temperature = 0.1, max_tokens = 512, stream_timeout = 300 }
     })
     if not res then
         logger.warn("[OPTIMIZER] Failed to summarize message: " .. tostring(err))
@@ -107,7 +107,7 @@ function M.summarize_conversation_segment(messages, max_tokens, config)
         return ""
     end
     local now = os.time()
-    local rate_limit = (config and config.COMPRESSION and config.COMPRESSION.llm_summarization and config.COMPRESSION.llm_summarization.rate_limit_seconds) or 30
+    local rate_limit = (config and config.COMPRESSION and config.COMPRESSION.llm_summarization and config.COMPRESSION.llm_summarization.rate_limit_seconds) or 300
     if now - M._last_llm_call_time < rate_limit then
         logger.info("[OPTIMIZER] SKIPPED: Rate limited for segment summarization.")
         return ""
@@ -146,7 +146,7 @@ Output the summary as plain text without any markdown formatting.
     }
     M._last_llm_call_time = os.time()
     local res, err = llm_handler.send_request(opt_agent, messages, {
-        override_params = { stream = false, temperature = 0.1, max_tokens = 1024, stream_timeout = 30 }
+        override_params = { stream = false, temperature = 0.1, max_tokens = 1024, stream_timeout = 300 }
     })
     if not res then
         logger.warn("[OPTIMIZER] Failed to summarize conversation segment: " .. tostring(err))
