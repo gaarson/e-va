@@ -21,34 +21,44 @@ function M.stream_token_printer(agent_cfg)
         io.write("\n\27[0m")
         io.stdout:flush()
     end
+    local FLUSH_THRESHOLD = 100
+    local chars_since_flush = 0
     local function on_token(t)
         print_buf = print_buf .. t
+        chars_since_flush = chars_since_flush + #t
         while #print_buf > 0 do
             if not in_thought then
                 local s, e = print_buf:find(tag_open)
                 if s then
                     io.write(print_buf:sub(1, s - 1) .. "\27[90m" .. tag_open)
+                    io.stdout:flush()
                     print_buf = print_buf:sub(e + 1)
+                    chars_since_flush = chars_since_flush - (s - 1 + #tag_open)
                     in_thought = true
-                elseif #print_buf > #tag_open then
+                elseif chars_since_flush >= FLUSH_THRESHOLD or #print_buf > #tag_open then
                     local safe_len = #print_buf - #tag_open
                     io.write(print_buf:sub(1, safe_len))
+                    io.stdout:flush()
+                    chars_since_flush = chars_since_flush - safe_len
                     print_buf = print_buf:sub(safe_len + 1)
                 else break end
             else
                 local s, e = print_buf:find(tag_close)
                 if s then
                     io.write(print_buf:sub(1, s - 1) .. tag_close .. "\27[0m")
+                    io.stdout:flush()
                     print_buf = print_buf:sub(e + 1)
+                    chars_since_flush = chars_since_flush - (s - 1 + #tag_close)
                     in_thought = false
-                elseif #print_buf > #tag_close then
+                elseif chars_since_flush >= FLUSH_THRESHOLD or #print_buf > #tag_close then
                     local safe_len = #print_buf - #tag_close
                     io.write(print_buf:sub(1, safe_len))
+                    io.stdout:flush()
+                    chars_since_flush = chars_since_flush - safe_len
                     print_buf = print_buf:sub(safe_len + 1)
                 else break end
             end
         end
-        io.stdout:flush()
     end
     local printer = {
         on_token = on_token,

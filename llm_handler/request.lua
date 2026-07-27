@@ -61,6 +61,8 @@ function M.send_request(profile, messages, options)
     if profile.token then req.headers:upsert("Authorization", "Bearer " .. profile.token) end
     req.headers:upsert("content-type", "application/json")
     req.headers:upsert("accept", "text/event-stream")
+    req.headers:upsert("cache-control", "no-cache")
+    req.headers:upsert("connection", "keep-alive")
     local payload = provider.build_payload(profile, messages, options)
     local t_encode = socket.gettime()
     local body = json:encode(payload)
@@ -79,6 +81,9 @@ function M.send_request(profile, messages, options)
         return nil, "Connection failed during body transmission"
     end
     local status = headers:get(":status")
+    local content_type = headers:get("content-type") or ""
+    local transfer_encoding = headers:get("transfer-encoding") or ""
+    logger.info(string.format("[RESPONSE HEADERS] status=%s, content-type=%s, transfer-encoding=%s", status, content_type, transfer_encoding))
     if status ~= "200" then
         local err_body = ""
         if stream_obj then
@@ -115,8 +120,13 @@ function M.send_request(profile, messages, options)
         dedup._in_flight_requests[req_hash] = nil
         return response
     end
-    local result = stream.process_stream(stream_obj, profile, provider, on_token_cb)
-    
+    local ok, result_or_err = pcall(stream.process_stream, stream_obj, profile, provider, on_token_cb)
+    if not ok then
+        dedup._in_flight_requests[req_hash] = nil
+        logger.error(string.format("[STREAM ERROR] Lua error during stream processing: %s", tostring(result_or_err)))
+        return nil, "STREAM_PROCESSING_ERROR"
+    end
+    local result = result_or_err
     dedup._in_flight_requests[req_hash] = nil
     if result.usage then
         local u = result.usage
