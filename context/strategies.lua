@@ -13,6 +13,8 @@ local function _score_message(msg, idx, total, importance_scores)
     local role = msg.role or ""
     local content = msg.content or ""
     importance_scores = importance_scores or M.IMPORTANCE_SCORES
+    -- TASK: messages are ALWAYS high priority, regardless of position
+    if role == "user" and content:match("^TASK:") then return 100 end
     -- First 3 messages are always high priority (task initiation)
     if idx <= 3 then return 100 end
     -- Role-based scoring

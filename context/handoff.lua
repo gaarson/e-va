@@ -6,6 +6,8 @@ local utils = require("utils")
 local history = require("context.history")
 local builder = require("context.builder")
 local json = require("JSON")
+local summarization = require("optimizer.summarization")
+local comp_helpers = require("context_compressor.helpers")
 -- ============================================================================
 -- GENERATE HANDOFF MEMO
 -- ============================================================================
@@ -155,6 +157,76 @@ function M.clear_history_for_stage(ctx, strategy)
         for agent_name, msgs in pairs(ctx.history) do
             if #msgs > keep_count then
                 local new_hist = {}
+                for i = #msgs - keep_count + 1, #msgs do
+                    table.insert(new_hist, msgs[i])
+                end
+                ctx.history[agent_name] = new_hist
+            end
+        end
+        ctx.thoughts = {}
+        ctx.recent_tool_outputs = {}
+        ctx.turn_requested_files = {}
+    elseif strategy == "smart" then
+        local keep_count = 10
+        for agent_name, msgs in pairs(ctx.history) do
+            if #msgs <= keep_count then
+                -- Nothing to summarize, skip this agent
+            else
+                -- Identify messages that will be removed (oldest beyond keep_count)
+                local removed_msgs = {}
+                for i = 1, #msgs - keep_count do
+                    table.insert(removed_msgs, msgs[i])
+                end
+                -- Find and preserve the task anchor (first user message containing 'TASK:')
+                local task_anchor = nil
+                for _, msg in ipairs(removed_msgs) do
+                    if msg.role == "user" and msg.content and msg.content:match("^TASK:") then
+                        task_anchor = msg
+                        break
+                    end
+                end
+                -- Filter out task anchor from removed messages before summarizing
+                local msgs_to_summarize = {}
+                for _, msg in ipairs(removed_msgs) do
+                    if msg ~= task_anchor then
+                        table.insert(msgs_to_summarize, msg)
+                    end
+                end
+                -- Attempt LLM summarization of removed messages
+                local summary_text = ""
+                if #msgs_to_summarize > 0 then
+                    local cfg = ctx.config or {}
+                    local ok, result = pcall(summarization.summarize_conversation_segment, msgs_to_summarize, nil, cfg)
+                    if ok and result and #result > 0 then
+                        summary_text = result
+                    else
+                        -- Fallback: use context_compressor.helpers._summarize_message for each removed message
+                        local fallback_parts = {}
+                        for _, msg in ipairs(msgs_to_summarize) do
+                            local part = comp_helpers._summarize_message(msg, nil)
+                            if part and #part > 0 then
+                                table.insert(fallback_parts, part)
+                            end
+                        end
+                        if #fallback_parts > 0 then
+                            summary_text = table.concat(fallback_parts, ". ")
+                        end
+                    end
+                end
+                -- Build the new history: task anchor (if found) + summary + kept messages
+                local new_hist = {}
+                -- Inject task anchor first if it exists
+                if task_anchor then
+                    table.insert(new_hist, task_anchor)
+                end
+                -- Inject summary as a system message
+                if #summary_text > 0 then
+                    table.insert(new_hist, {
+                        role = "system",
+                        content = string.format("[CONTEXT SUMMARY: Summarized from %d removed messages]\n%s", #removed_msgs, summary_text)
+                    })
+                end
+                -- Append the kept (most recent) messages
                 for i = #msgs - keep_count + 1, #msgs do
                     table.insert(new_hist, msgs[i])
                 end

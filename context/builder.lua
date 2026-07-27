@@ -92,7 +92,7 @@ function M.get_recency_block(ctx, already_present_paths)
     local parts = {}
     -- System state
     if ctx.execution_plan and #ctx.execution_plan > 0 then
-        table.insert(parts, "<execution_plan>" .. M.get_plan_text(ctx) .. "</execution_plan>")
+        table.insert(parts, "<execution_plan>\n" .. M.get_plan_text(ctx) .. "\n</execution_plan>")
     end
     if #ctx.last_actions > 0 then
         table.insert(parts, "<last_actions>" .. M.get_actions_text(ctx) .. "</last_actions>")

@@ -88,9 +88,10 @@ function M.get()
 
     cfg.HANDOFF = {
         enabled = true,
-        clear_history = "per_stage",
+        clear_history = "smart",
+        preserve_task_anchor = true,
         memo_sections = { "execution_plan", "decisions", "files_modified", "remaining_tasks", "pinned_files" },
-        max_memo_tokens = 4000,
+        max_memo_tokens = 12000,
         pass_knowledge_base = true,        -- Передавать все файлы из базы знаний
         pass_pinned_files = true,          -- Передавать зафиксированные файлы
         pass_requested_files = true,       -- Передавать файлы, запрошенные на предыдущем этапе
