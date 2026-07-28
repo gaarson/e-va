@@ -213,21 +213,23 @@ end
 -- ============================================================================
 function M.get_plan_text(ctx)
     if not ctx.execution_plan or #ctx.execution_plan == 0 then return "" end
-    local t = ""
+    local parts = {}
     for i, task in ipairs(ctx.execution_plan) do
         local mark = (i < ctx.current_task_index) and "[x]" or (i == ctx.current_task_index) and "[>]" or "[ ]"
-        t = t .. string.format("%s Step %d: %s -> %s\n", mark, i, tostring(task.file or "?"), tostring(task.instruction or "?"))
+        table.insert(parts, string.format("%s Step %d: %s -> %s", mark, i, tostring(task.file or "?"), tostring(task.instruction or "?")))
     end
-    return t
+    return table.concat(parts, "\n")
 end
 -- ============================================================================
 -- ACTIONS TEXT
 -- ============================================================================
 function M.get_actions_text(ctx)
     if #ctx.last_actions == 0 then return "" end
-    local t = "\n=== LAST ACTIONS ===\n"
-    for _, a in ipairs(ctx.last_actions) do t = t .. string.format("- %s: %s\n", a.type, a.summary) end
-    return t
+    local parts = {"\n=== LAST ACTIONS ==="}
+    for _, a in ipairs(ctx.last_actions) do
+        table.insert(parts, string.format("- %s: %s", a.type, a.summary))
+    end
+    return table.concat(parts, "\n")
 end
 -- ============================================================================
 -- FILE CONTEXT
@@ -253,8 +255,11 @@ function M.get_memory_block(ctx, max_tokens)
     local current_tokens = 0
     local memory_parts = {}
     if next(ctx.pinned_files) then
-        local pinned_text = "\n=== PINNED FILES ===\n"
-        for path, _ in pairs(ctx.pinned_files) do pinned_text = pinned_text .. string.format("- %s\n", path) end
+        local pinned_parts = {"\n=== PINNED FILES ==="}
+        for path, _ in pairs(ctx.pinned_files) do
+            table.insert(pinned_parts, string.format("- %s", path))
+        end
+        local pinned_text = table.concat(pinned_parts, "\n")
         local cost = ctx:estimate_tokens(pinned_text)
         if current_tokens + cost < max_tokens then table.insert(memory_parts, pinned_text); current_tokens = current_tokens + cost end
     end
@@ -285,17 +290,18 @@ end
 -- SYSTEM STATE XML
 -- ============================================================================
 function M.build_system_state_xml(ctx)
-    local xml = "<system_state>"
+    local parts = {"<system_state>"}
     if ctx.task_summary and ctx.task_summary ~= "" then
-        xml = xml .. "\n  <task_summary>" .. ctx.task_summary .. "\n  </task_summary>"
+        table.insert(parts, "  <task_summary>" .. ctx.task_summary .. "  </task_summary>")
     end
     if ctx.execution_plan and #ctx.execution_plan > 0 then
-        xml = xml .. "\n  <execution_plan>" .. M.get_plan_text(ctx) .. "\n  </execution_plan>"
+        table.insert(parts, "  <execution_plan>" .. M.get_plan_text(ctx) .. "  </execution_plan>")
     end
     if #ctx.last_actions > 0 then
-        xml = xml .. "\n  <last_actions>" .. M.get_actions_text(ctx) .. "\n  </last_actions>"
+        table.insert(parts, "  <last_actions>" .. M.get_actions_text(ctx) .. "  </last_actions>")
     end
-    return xml .. "\n</system_state>"
+    table.insert(parts, "</system_state>")
+    return table.concat(parts, "\n")
 end
 -- ============================================================================
 -- RECENCY TOOL OUTPUTS
@@ -324,18 +330,20 @@ end
 -- CHANGES SUMMARY
 -- ============================================================================
 function M.get_changes_summary(ctx)
-    local text = "\n=== CHANGES SUMMARY ===\n"
+    local parts = {"\n=== CHANGES SUMMARY ==="}
     for path, state in pairs(ctx.file_states) do
-        if state == "RECENTLY_MODIFIED" then text = text .. string.format("- %s: modified\n", path) end
+        if state == "RECENTLY_MODIFIED" then
+            table.insert(parts, string.format("- %s: modified", path))
+        end
     end
-    return text
+    return table.concat(parts, "\n")
 end
 -- ============================================================================
 -- INSIGHTS SUMMARY
 -- ============================================================================
 function M.get_insights_summary(ctx)
     if not next(ctx.search_history) then return "" end
-    local text = "\n=== SEARCH INSIGHTS ===\n"
+    local parts = {"\n=== SEARCH INSIGHTS ==="}
     for query, result in pairs(ctx.search_history) do
         local lines = {}
         for line in result:gmatch("[^\r\n]+") do
@@ -343,20 +351,21 @@ function M.get_insights_summary(ctx)
             local compressed = pure:gsub("^%s+", ""):gsub("%s+", " ")
             if compressed ~= "" then table.insert(lines, compressed) end
         end
-        text = text .. string.format("- %s: %s\n", query, table.concat(lines, "; "))
+        table.insert(parts, string.format("- %s: %s", query, table.concat(lines, "; ")))
     end
-    return text
+    return table.concat(parts, "\n")
 end
 -- ============================================================================
 -- RECENT THOUGHTS TEXT
 -- ============================================================================
 function M.get_recent_thoughts_text(ctx)
     if not ctx.thoughts or #ctx.thoughts == 0 then return "" end
-    local text = "\n=== RECENT THOUGHTS ===\n"
+    local parts = {"\n=== RECENT THOUGHTS ==="}
     local start_idx = math.max(1, #ctx.thoughts - 140)
     for i = start_idx, #ctx.thoughts do
-        text = text .. string.format("-----\n%s\n", ctx.thoughts[i].content)
+        table.insert(parts, "-----")
+        table.insert(parts, ctx.thoughts[i].content)
     end
-    return text
+    return table.concat(parts, "\n")
 end
 return M

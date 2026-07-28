@@ -22,14 +22,17 @@ end
 function M.deduplicate_consecutive_messages(ctx, agent_name)
     local history = M.get_history(ctx, agent_name)
     if #history < 2 then return 0 end
-    local removed = 0
-    local i = #history
-    while i >= 2 do
-        if history[i].role == history[i-1].role and history[i].content == history[i-1].content then
-            table.remove(history, i)
-            removed = removed + 1
+    local write_idx = 1
+    history[1] = history[1]  -- keep first
+    for i = 2, #history do
+        if history[i].role ~= history[write_idx].role or history[i].content ~= history[write_idx].content then
+            write_idx = write_idx + 1
+            history[write_idx] = history[i]
         end
-        i = i - 1
+    end
+    local removed = #history - write_idx
+    for i = #history, write_idx + 1, -1 do
+        history[i] = nil
     end
     if removed > 0 then
         logger.info(string.format("[DEDUP CONSECUTIVE] Removed %d consecutive duplicate message(s) for agent '%s'", removed, agent_name))
@@ -185,10 +188,11 @@ end
 -- ============================================================================
 function M.add_tool_output(ctx, tool_name, output)
     if not output or output == "" then return end
-    local max_len = 10000000
+    local max_len = (ctx.flow_config.compression and ctx.flow_config.compression.max_tool_output_bytes) or 2048
     local truncated = #output > max_len and output:sub(1, max_len) .. "\n...[TRUNCATED]" or output
     table.insert(ctx.recent_tool_outputs, { tool = tool_name, output = truncated })
-    if #ctx.recent_tool_outputs > ctx.flow_config.storage.max_recent_tool_outputs then
+    local max_outputs = ctx.flow_config.storage.max_recent_tool_outputs or 50
+    while #ctx.recent_tool_outputs > max_outputs do
         table.remove(ctx.recent_tool_outputs, 1)
     end
 end
@@ -256,7 +260,24 @@ end
 function M.has_searched(ctx, query)
     return ctx.search_history[query] ~= nil
 end
+local SEARCH_HISTORY_MAX = 100
 function M.add_search_result(ctx, query, result)
+    if ctx.search_history[query] == nil then
+        -- New entry: check if we need to evict
+        local count = 0
+        for _ in pairs(ctx.search_history) do count = count + 1 end
+        if count >= SEARCH_HISTORY_MAX then
+            -- Evict oldest entry (first key in iteration order)
+            local oldest_key = nil
+            for k in pairs(ctx.search_history) do
+                oldest_key = k
+                break
+            end
+            if oldest_key then
+                ctx.search_history[oldest_key] = nil
+            end
+        end
+    end
     ctx.search_history[query] = result
 end
 -- ============================================================================

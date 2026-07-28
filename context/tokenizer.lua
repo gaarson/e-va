@@ -5,44 +5,84 @@
 -- All functions take ctx (the context_flow instance) as the first argument.
 
 local M = {}
-
 -- ============================================================================
--- LRU CACHE FOR TOKEN ESTIMATES
+-- LRU CACHE FOR TOKEN ESTIMATES (HASH-BASED KEYS)
 -- ============================================================================
-
-local _token_estimate_cache = {}
-local _cache_order = {}
-local _cache_positions = {}
+local bit32 = bit32 or require("bit32") or {}
+if not bit32.bxor then
+    local function bxor(a, b)
+        local result, bit = 0, 1
+        a, b = math.floor(a), math.floor(b)
+        while a > 0 or b > 0 do
+            if (a % 2) ~= (b % 2) then result = result + bit end
+            a = math.floor(a / 2)
+            b = math.floor(b / 2)
+            bit = bit * 2
+        end
+        return result
+    end
+    local function band(a, b)
+        local result, bit = 0, 1
+        a, b = math.floor(a), math.floor(b)
+        while a > 0 and b > 0 do
+            if (a % 2) == 1 and (b % 2) == 1 then result = result + bit end
+            a = math.floor(a / 2)
+            b = math.floor(b / 2)
+            bit = bit * 2
+        end
+        return result
+    end
+    bit32.bxor = bxor
+    bit32.band = band
+end
+local _token_estimate_cache = {}   -- hash -> { prefix, len, value }
+local _cache_order = {}            -- ordered list of hashes
+local _cache_positions = {}        -- hash -> position in _cache_order
 local _cache_max_size_default = 1000
-
+-- FNV-1a 32-bit hash for fast, deterministic text hashing
+local function _text_hash(text)
+    local hash = 2166136261  -- FNV offset basis
+    for i = 1, #text do
+        hash = bit32.bxor(hash, string.byte(text, i))
+        hash = bit32.band(hash * 16777619, 0xFFFFFFFF)  -- FNV prime, mask to 32 bits
+    end
+    return hash
+end
 local function _get_cache_max_size(flow_config)
     if flow_config and flow_config.token_estimation and flow_config.token_estimation.cache_size then
         return flow_config.token_estimation.cache_size
     end
     return _cache_max_size_default
 end
-
 local function _cache_get(text)
     if not text then return nil end
-    return _token_estimate_cache[text]
+    local h = _text_hash(text)
+    local entry = _token_estimate_cache[h]
+    if entry and entry.prefix == text:sub(1, 50) and entry.len == #text then
+        return entry.value
+    end
+    return nil
 end
-
 local function _cache_set(text, value, flow_config)
     if not text then return end
+    local h = _text_hash(text)
     local max_size = _get_cache_max_size(flow_config)
-    -- If already in cache, move to end (update recency) in O(1)
-    if _token_estimate_cache[text] ~= nil then
-        local old_pos = _cache_positions[text]
+    local prefix = text:sub(1, 50)
+    local len = #text
+    -- If already in cache (hash + collision check), move to end (update recency) in O(1)
+    local existing = _token_estimate_cache[h]
+    if existing and existing.prefix == prefix and existing.len == len then
+        local old_pos = _cache_positions[h]
         local last_pos = #_cache_order
         if old_pos ~= last_pos then
             -- Swap with last element
             local last_key = _cache_order[last_pos]
             _cache_order[old_pos] = last_key
             _cache_positions[last_key] = old_pos
-            _cache_order[last_pos] = text
-            _cache_positions[text] = last_pos
+            _cache_order[last_pos] = h
+            _cache_positions[h] = last_pos
         end
-        _token_estimate_cache[text] = value
+        _token_estimate_cache[h].value = value
         return
     end
     -- Evict oldest if at capacity
@@ -57,10 +97,10 @@ local function _cache_set(text, value, flow_config)
         end
         table.remove(_cache_order)
     end
-    -- Insert new entry
-    table.insert(_cache_order, text)
-    _cache_positions[text] = #_cache_order
-    _token_estimate_cache[text] = value
+    -- Insert new entry (keyed by hash, collision-safe via prefix+len)
+    table.insert(_cache_order, h)
+    _cache_positions[h] = #_cache_order
+    _token_estimate_cache[h] = { prefix = prefix, len = len, value = value }
 end
 
 -- ============================================================================

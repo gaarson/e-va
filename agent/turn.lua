@@ -7,6 +7,8 @@ local context_optimizer = require("context_optimizer")
 local optimizer = require("optimizer")
 local multi_stage_executor = require("multi_stage_executor")
 local multi_stage = require("agent.multi_stage")
+local tool_registry = require("tool_registry")
+local command_executor = require("command_executor")
 
 local M = {}
 
@@ -27,7 +29,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         llm = llm,
         context_optimizer = context_optimizer,
         optimizer = optimizer,
-        registry = require("tool_registry")
+        registry = tool_registry
     }
     ctx.consecutive_recoveries = 0
     local synced_files = ctx:sync_files()
@@ -43,7 +45,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         local img_count = ctx.images and #ctx.images or 0
         logger.info(string.format("[TURN DIAG] Image loading: %d images loaded, %.3fs elapsed", img_count, img_elapsed))
     end
-    local executor = require("command_executor").new(ctx, agent_name)
+    local executor = command_executor.new(ctx, agent_name)
     local limits = config.LIMITS
     local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
     local t_build = socket.gettime()
@@ -120,7 +122,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
 
     -- SELECTIVE MULTI-STAGE ROUTING (Two-phase tool invocation)
     if agent_cfg.use_selective_multi_stage and agent_cfg.multi_stage_tools then
-        local executor_parse = require("command_executor").new(ctx, agent_name)
+                local executor_parse = command_executor.new(ctx, agent_name)
         local parsed_cmd, _ = executor_parse:parse_command(content)
         if parsed_cmd then
             local tool_name = parsed_cmd:match("^([^:]+)") or parsed_cmd

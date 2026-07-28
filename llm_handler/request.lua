@@ -106,7 +106,12 @@ function M.send_request(profile, messages, options)
             logger.warn("[NON-STREAM] Error reading response body: " .. tostring(err))
             return nil, "HTTP_BODY_READ_ERROR"
         end
-        local response = json:decode(body_str)
+        local ok, response = pcall(json.decode, json, body_str)
+        if not ok then
+            dedup._in_flight_requests[req_hash] = nil
+            logger.error("[JSON PARSE ERROR] Malformed LLM response: " .. tostring(response))
+            return nil, "MALFORMED_JSON_RESPONSE"
+        end
         if response and response.usage then
             local u = response.usage
             local pt = u.prompt_tokens or 0

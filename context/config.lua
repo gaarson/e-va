@@ -10,7 +10,7 @@ M.DEFAULT_CONFIG = {
         squash_threshold_tokens = 50000,
         dedup_tool_outputs = true,
         include_pinned_in_recency = true,
-        max_recent_tool_outputs = 5,
+        max_recent_tool_outputs = 50,
     },
     context_injection = {
         mode = "stable_append",

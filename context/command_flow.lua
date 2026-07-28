@@ -6,6 +6,21 @@ local utils = require("utils")
 local registry = require("tool_registry")
 local history = require("context.history")
 -- ============================================================================
+-- VALIDATE TOOL RESPONSE (helper)
+-- ============================================================================
+local function _validate_tool_response(res)
+    if type(res) ~= "table" then
+        return false, "Tool response is not a table (got " .. type(res) .. ")"
+    end
+    if res.output ~= nil and type(res.output) ~= "string" then
+        return false, "Tool output must be a string, got: " .. type(res.output)
+    end
+    if res.signal ~= nil and type(res.signal) ~= "string" then
+        return false, "Tool signal must be a string, got: " .. type(res.signal)
+    end
+    return true, nil
+end
+-- ============================================================================
 -- NORMALIZE COMMAND (helper)
 -- ============================================================================
 local function _normalize_cmd(cmd)
@@ -95,9 +110,33 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
             end
         end
     end
-    -- 3. Execution
-    local res = registry.execute(cmd, ctx, agent_name)
+    -- 3. Execution (wrapped in pcall for safety)
     local tool_name = cmd:match("^([^:]+)")
+    local ok, res_or_err = pcall(function()
+        return registry.execute(cmd, ctx, agent_name)
+    end)
+    if not ok then
+        -- registry.execute threw an error — log it and return a safe error result
+        local logger = require("logger")
+        logger.error(string.format("[COMMAND_FLOW] registry.execute threw an error for tool '%s': %s",
+            tool_name or "unknown", tostring(res_or_err)))
+        history.add_message(ctx, agent_name, "user",
+            string.format("[SYSTEM: TOOL ERROR] Tool '%s' encountered an internal error: %s",
+                tool_name or "unknown", tostring(res_or_err)))
+        return { type = "ERROR", message = "Tool execution failed: " .. tostring(res_or_err) }
+    end
+    local res = res_or_err
+    -- Validate tool response schema
+    local valid, val_err = _validate_tool_response(res)
+    if not valid then
+        local logger = require("logger")
+        logger.error(string.format("[COMMAND_FLOW] Invalid tool response from '%s': %s",
+            tool_name or "unknown", val_err))
+        history.add_message(ctx, agent_name, "user",
+            string.format("[SYSTEM: TOOL ERROR] Tool '%s' returned invalid response: %s",
+                tool_name or "unknown", val_err))
+        return { type = "ERROR", message = "Invalid tool response: " .. val_err }
+    end
     -- Save assistant response (trimmed if there was a command)
     local hist_content = raw_content
     if cmd:match("||| COMMAND |||") then

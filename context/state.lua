@@ -7,28 +7,46 @@ local utils = require("utils")
 -- ============================================================================
 -- SNAPSHOT
 -- ============================================================================
+-- DESIGN DECISION: knowledge_base is NOT serialized into the snapshot.
+-- Including full file contents makes snapshots huge and slow to serialize/deserialize.
+-- Instead, we store only the list of known file paths. On restore (load_from_snapshot),
+-- files are re-read from disk lazily when accessed. This keeps snapshots lightweight
+-- and ensures the agent always works with the latest on-disk file versions.
 function M.snapshot(ctx)
-    return json:encode({
-        knowledge_base = ctx.knowledge_base,
-        file_access_rank = ctx.file_access_rank,
-        global_access_counter = ctx.global_access_counter,
-        file_states = ctx.file_states,
-        search_history = ctx.search_history,
-        history = ctx.history,
-        thoughts = ctx.thoughts,
-        execution_plan = ctx.execution_plan,
-        current_task_index = ctx.current_task_index,
-        promoted_files = ctx.promoted_files,
-        pinned_files = ctx.pinned_files,
-        last_actions = ctx.last_actions,
-        handoff_memo = ctx.handoff_memo,
-        test_failures = ctx.test_failures,
-        turn_requested_files = ctx.turn_requested_files,
-        calibration_data = ctx.calibration_data,
-        coder_feedback = ctx.coder_feedback,
-        task_outcomes = ctx.task_outcomes,
-        executed_commands = ctx.executed_commands
-    })
+    -- Store only file paths, not full contents
+    local kb_paths = {}
+    if ctx.knowledge_base then
+        for path, _ in pairs(ctx.knowledge_base) do
+            table.insert(kb_paths, path)
+        end
+    end
+    local ok, result = pcall(function()
+        return json:encode({
+            knowledge_base_paths = kb_paths,
+            file_access_rank = ctx.file_access_rank,
+            global_access_counter = ctx.global_access_counter,
+            file_states = ctx.file_states,
+            search_history = ctx.search_history,
+            history = ctx.history,
+            thoughts = ctx.thoughts,
+            execution_plan = ctx.execution_plan,
+            current_task_index = ctx.current_task_index,
+            promoted_files = ctx.promoted_files,
+            pinned_files = ctx.pinned_files,
+            last_actions = ctx.last_actions,
+            handoff_memo = ctx.handoff_memo,
+            test_failures = ctx.test_failures,
+            turn_requested_files = ctx.turn_requested_files,
+            calibration_data = ctx.calibration_data,
+            coder_feedback = ctx.coder_feedback,
+            task_outcomes = ctx.task_outcomes,
+            executed_commands = ctx.executed_commands
+        })
+    end)
+    if not ok then
+        return nil, "JSON encoding failed: " .. tostring(result)
+    end
+    return result
 end
 -- ============================================================================
 -- LOAD FROM SNAPSHOT
@@ -36,7 +54,17 @@ end
 function M.load_from_snapshot(ctx, json_str)
     local ok, state = pcall(function() return json:decode(json_str) end)
     if not ok or not state then return false, "Corrupted JSON" end
-    ctx.knowledge_base = state.knowledge_base or {}
+    -- Restore knowledge_base as empty; files will be re-read from disk on demand.
+    -- state.knowledge_base_paths tells us which files were known previously.
+    ctx.knowledge_base = ctx.knowledge_base or {}
+    if state.knowledge_base_paths then
+        -- Optionally pre-populate file_states for known paths so the system knows they exist
+        for _, path in ipairs(state.knowledge_base_paths) do
+            if not ctx.file_states[path] then
+                ctx.file_states[path] = "KNOWN"
+            end
+        end
+    end
     ctx.file_access_rank = state.file_access_rank or {}
     ctx.global_access_counter = state.global_access_counter or 0
     ctx.file_states = state.file_states or {}
@@ -70,6 +98,7 @@ function M.reset(ctx)
     ctx.task_summary = ""
     ctx.history = {}
     ctx.knowledge_base = {}
+    ctx.knowledge_base_paths = {}
     ctx.file_states = {}
     ctx.pinned_files = {}
     ctx.search_history = {}

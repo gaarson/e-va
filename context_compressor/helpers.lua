@@ -50,7 +50,7 @@ function M._extract_critical_entities(content)
     if M._is_already_compressed(content) then return entities end
     -- Strip existing [PRESERVED_ENTITIES] blocks before extraction
     -- Use [^]* to match ANY character including newlines (multi-line blocks)
-    local clean_content = content:gsub("%[PRESERVED_ENTITIES%][^]*%[/PRESERVED_ENTITIES%]", "")
+    local clean_content = content:gsub("%[PRESERVED_ENTITIES%].-%[/PRESERVED_ENTITIES%]", "")
     -- Extract file paths with stricter regex - only known source/config/doc extensions
     for fp in clean_content:gmatch("([^%s,;:\"`>%)]+%.(lua|c|h|cpp|hpp|ts|tsx|js|jsx|py|sh|yml|yaml|json|toml|md|txt|css|scss|html|xml|sql|go|rs|rb|java))") do
         if not fp:match("^http") and not fp:match("^https") then
@@ -181,7 +181,7 @@ function M._summarize_message(msg, config)
     local content = msg.content or ""
     local has_command = content:match("||| COMMAND |||")
     local has_thinking = content:match("<thinking>")
-    local tool_output = content:match("^\\[([A-Z_]+)")
+    local tool_output = content:match("^%[([A-Z_]+)")
     local summary_parts = {}
     table.insert(summary_parts, string.format("[COMPRESSED %s message, %d bytes]", role, #content))
     if has_command then
@@ -202,7 +202,7 @@ function M._summarize_message(msg, config)
     if preserve_entities then
         -- Strip existing [PRESERVED_ENTITIES] blocks to avoid re-extracting already-preserved data
         -- Use [^]* to match ANY character including newlines (multi-line blocks)
-        local clean_content = content:gsub("%[PRESERVED_ENTITIES%][^]*%[/PRESERVED_ENTITIES%]", "")
+        local clean_content = content:gsub("%[PRESERVED_ENTITIES%].-%[/PRESERVED_ENTITIES%]", "")
         local entities = M._extract_critical_entities(clean_content)
         -- Append files (limit to 5)
         if #entities.files > 0 then

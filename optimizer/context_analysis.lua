@@ -245,7 +245,7 @@ TASK SUMMARY: %s
 CURRENT PLAN: %s
 RECENT ACTIONS: %s
 LAST ASSISTANT MESSAGE: %s
-Generate a single concise message (1-3 sentences) that:
+Generate a single concise message that:
 1. Acknowledges the current state
 2. Asks a specific question or gives a clear direction
 3. Helps the agent continue productively
@@ -256,7 +256,7 @@ Output ONLY the message text, nothing else.
         { role = "user", content = prompt }
     }
     M._last_llm_call_time = os.time()
-    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.3, max_tokens = 256, stream_timeout = 600 } })
+    local res, err = llm_handler.send_request(opt_agent, messages, { override_params = { stream = false, temperature = 0.3, max_tokens = 8192, stream_timeout = 600 } })
     if not res then
         logger.warn("[OPTIMIZER] Failed to generate continuation prompt: " .. tostring(err))
         return nil

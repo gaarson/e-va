@@ -141,25 +141,96 @@ function M:parse_command(text)
     return cmd_body, nil
 end
 
+-- Input sanitization: check for dangerous patterns in shell commands
+local function _sanitize_shell_command(args)
+    if not args then return true, nil end
+    local logger = require("logger")
+    local dangerous_patterns = {
+        { pattern = "sudo%s+", desc = "uses sudo", severity = "BLOCK" },
+        { pattern = "rm%s+-rf%s+/?$", desc = "rm -rf on root", severity = "BLOCK" },
+        { pattern = ">+/etc/", desc = "redirects to /etc/", severity = "BLOCK" },
+        { pattern = ">+/usr/bin/", desc = "redirects to /usr/bin/", severity = "BLOCK" },
+        { pattern = ">+/usr/sbin/", desc = "redirects to /usr/sbin/", severity = "BLOCK" },
+        { pattern = "%-%-.*(/etc/)", desc = "writes to /etc/", severity = "WARN" },
+        { pattern = "chmod%s+[0-7]*777", desc = "world-writable chmod", severity = "WARN" },
+        { pattern = "curl.*%|.*sh", desc = "pipe curl to shell", severity = "BLOCK" },
+        { pattern = "wget.*%|.*sh", desc = "pipe wget to shell", severity = "BLOCK" },
+    }
+    for _, rule in ipairs(dangerous_patterns) do
+        if args:match(rule.pattern) then
+            if rule.severity == "BLOCK" then
+                logger.error(string.format("[SANITIZE BLOCKED] Dangerous shell command: %s", rule.desc))
+                return false, string.format("Command blocked for safety: %s", rule.desc)
+            else
+                logger.warn(string.format("[SANITIZE] Suspicious shell command detected: %s", rule.desc))
+            end
+        end
+    end
+    return true, nil
+end
+-- Input sanitization: validate patch command has proper SEARCH/REPLACE blocks
+local function _validate_patch_format(args)
+    if not args then return false, "Patch command has no arguments" end
+    -- Must contain at least one SEARCH/REPLACE pair
+    if not args:match("<<<<<<< SEARCH") then
+        return false, "Patch command missing '<<<<<<< SEARCH' marker"
+    end
+    if not args:match(">>>>>>> REPLACE") then
+        return false, "Patch command missing '>>>>>>> REPLACE' marker"
+    end
+    -- Count markers — must have equal numbers
+    local search_count = 0
+    for _ in args:gmatch("<<<<<<< SEARCH") do search_count = search_count + 1 end
+    local replace_count = 0
+    for _ in args:gmatch(">>>>>>> REPLACE") do replace_count = replace_count + 1 end
+    if search_count ~= replace_count then
+        return false, string.format("Mismatched SEARCH/REPLACE blocks: %d SEARCH vs %d REPLACE", search_count, replace_count)
+    end
+    -- Must have ======= separator(s)
+    local eq_count = 0
+    for _ in args:gmatch("=======\n?") do eq_count = eq_count + 1 end
+    if eq_count < search_count then
+        return false, "Patch command missing '=======' separator(s)"
+    end
+    return true, nil
+end
 -- Валидация: существует ли такой тул и разрешен ли он?
 function M:validate_command(cmd)
     -- Парсим до первого двоеточия. Если его нет, берем всю строку (например, команда "ask_user" без аргументов)
     local tool_name = cmd:match("^([^:]+)") or cmd
     tool_name = utils.trim(tool_name)
-
     if tool_name == "" then
         return false, "Invalid command format. Expected: tool_name:arguments"
     end
-
     local agent_cfg = self.ctx.config.AGENTS[self.agent_name]
     if not registry.is_tool_allowed(agent_cfg, tool_name) then
         return false, string.format("Unauthorized tool '%s'.", tool_name)
     end
-
     if not registry.tools[tool_name] then
         return false, string.format("Unknown tool '%s'.", tool_name)
     end
-    
+    -- Sanitize shell commands
+    if tool_name == "shell" then
+        local args = cmd:match("^shell:%s*(.*)")
+        if args then
+            local ok, err = _sanitize_shell_command(args)
+            if not ok then
+                return false, err
+            end
+        end
+    end
+    -- Validate patch format
+    if tool_name == "patch" then
+        local args = cmd:match("^patch:%s*(.*)")
+        if args then
+            -- Extract the diff portion (after the file path line)
+            local rest = args:match("^[^\r\n]+\r?\n(.*)") or args
+            local ok, err = _validate_patch_format(rest)
+            if not ok then
+                return false, err
+            end
+        end
+    end
     return true, nil
 end
 

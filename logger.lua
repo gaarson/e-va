@@ -15,6 +15,27 @@ os.execute(string.format("mkdir -p '%s'", log_dir))
 local indent_level = 0
 local logging_enabled = true
 local log_file = nil
+-- Request ID tracing: simple incrementing counter for correlating LLM requests
+local _req_id_counter = 0
+local function _generate_req_id()
+    _req_id_counter = _req_id_counter + 1
+    -- Wrap at 4 billion to avoid overflow issues, format as 8-char hex
+    if _req_id_counter > 0xFFFFFFFF then _req_id_counter = 1 end
+    return string.format("%08x", _req_id_counter)
+end
+-- Per-turn request ID storage: maps agent_name -> current req_id
+local _current_req_ids = {}
+function M.new_request_id(agent_name)
+    local rid = _generate_req_id()
+    _current_req_ids[agent_name or "default"] = rid
+    return rid
+end
+function M.get_request_id(agent_name)
+    return _current_req_ids[agent_name or "default"] or nil
+end
+function M.clear_request_id(agent_name)
+    _current_req_ids[agent_name or "default"] = nil
+end
 
 -- Timestamp helper
 local function get_timestamp()

@@ -50,7 +50,7 @@ function M.summarize_message(msg, config)
         return nil
     end
     logger.info("[OPTIMIZER] Summarizing message with LLM...")
-    local max_input = 8000
+    local max_input = 300000
     local truncated_content = msg.content
     if #msg.content > max_input then
         local half = math.floor(max_input / 2)
@@ -115,7 +115,7 @@ function M.summarize_conversation_segment(messages, max_tokens, config)
     logger.info("[OPTIMIZER] Summarizing conversation segment with LLM...")
     local compact_msgs = {}
     local total_len = 0
-    local max_total = 10000
+    local max_total = 100000
     for i, msg in ipairs(messages) do
         if msg and msg.content then
             local role = msg.role or "unknown"

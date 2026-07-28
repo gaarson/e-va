@@ -1,7 +1,13 @@
 local M = {}
 local os = require("os")
 local utils = require("utils")
-
+local function get_api_key()
+    local key = os.getenv("LLM_API_KEY")
+    if not key or key == "" then
+        error("FATAL: LLM_API_KEY environment variable must be set")
+    end
+    return key
+end
 function M.get()
     local cfg = {}
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
@@ -172,8 +178,8 @@ function M.get()
     -- Добавь в возвращаемую таблицу cfg:
         cfg.OPTIMIZER_AGENT = {
             name = "OPTIMIZER",
-            url = os.getenv("LLM_BASE_URL") or "https://zo-diak.com/ai/v1/chat/completions",
-            token = os.getenv("LLM_API_KEY") or "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            url = os.getenv("LLM_BASE_URL"),
+            token = get_api_key(),
             -- is_reasoning = true,
             model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
         -- model = "local_model",
@@ -189,8 +195,8 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            url = os.getenv("LLM_BASE_URL") or "https://zo-diak.com/ai/v1/chat/completions",
-            token = os.getenv("LLM_API_KEY") or "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            url = os.getenv("LLM_BASE_URL"),
+            token = get_api_key(),
             -- is_reasoning = true,
             model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
@@ -215,8 +221,8 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = os.getenv("LLM_BASE_URL") or "https://zo-diak.com/ai/v1/chat/completions",
-            token = os.getenv("LLM_API_KEY") or "s1usterseczfHUCeu_+coHk13hemAdyRB7jLwT0TC1R5",
+            url = os.getenv("LLM_BASE_URL"),
+            token = get_api_key(),
             -- is_reasoning = true,
             model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),

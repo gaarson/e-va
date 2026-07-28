@@ -45,6 +45,7 @@ function M.new(flow_config, full_config)
     self.file_states = {}
     self.pinned_files = {}
     self.search_history = {}
+    self.search_history_order = {}
     self.thoughts = {}
     self.last_actions = {}
     self.turn_requested_files = {}
@@ -310,4 +311,3 @@ function M:get_execution_plan_text() return self:get_plan_text() end
 function M:get_last_actions_text() return self:get_actions_text() end
 
 return M
-

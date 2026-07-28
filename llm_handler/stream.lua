@@ -4,10 +4,10 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     local patcher_core = require("patcher_core")
     local socket = require("socket")
     local json = require("JSON")
-    local full_content = ""
+    local content_parts = {}
+    local text_parts = {}
+    local reason_parts = {}
     local buffer = ""
-    local full_reason = ""
-    local full_text = ""
     local in_reasoning = false
     local was_interrupted = false
     local last_part = nil
@@ -45,7 +45,7 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                 logger.warn("Generation forcefully interrupted by SIGINT (Ctrl+C).")
             end
             local interrupt_msg = "\n\n\27[33m[SYSTEM: GENERATION INTERRUPTED BY USER]\27[0m\n"
-            full_content = full_content .. interrupt_msg
+            table.insert(content_parts, interrupt_msg)
             if on_token_cb then on_token_cb(interrupt_msg) end
             was_interrupted = true
             break
@@ -69,24 +69,24 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                             if not in_reasoning then
                                 in_reasoning = true
                                 local token = "<think>\n" .. c_reason
-                                full_content = full_content .. token
+                                table.insert(content_parts, token)
                                 if on_token_cb then on_token_cb(token) end
                             else
-                                full_content = full_content .. c_reason
+                                table.insert(content_parts, c_reason)
                                 if on_token_cb then on_token_cb(c_reason) end
                             end
-                            full_reason = full_reason .. c_reason
+                            table.insert(reason_parts, c_reason)
                         elseif c_text and c_text ~= "" then
                             if in_reasoning then
                                 in_reasoning = false
                                 local token = "\n\n" .. c_text
-                                full_content = full_content .. token
+                                table.insert(content_parts, token)
                                 if on_token_cb then on_token_cb(token) end
                             else
-                                full_content = full_content .. c_text
+                                table.insert(content_parts, c_text)
                                 if on_token_cb then on_token_cb(c_text) end
                             end
-                            full_text = full_text .. c_text
+                            table.insert(text_parts, c_text)
                         end
                     end
                 end
@@ -112,13 +112,13 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                         if not in_reasoning then
                             in_reasoning = true
                             local token = "<think>\n" .. c_reason
-                            full_content = full_content .. token
+                            table.insert(content_parts, token)
                             if on_token_cb then on_token_cb(token) end
                         else
-                            full_content = full_content .. c_reason
+                            table.insert(content_parts, c_reason)
                             if on_token_cb then on_token_cb(c_reason) end
                         end
-                        full_reason = full_reason .. c_reason
+                        table.insert(reason_parts, c_reason)
                         if not first_token_received then
                             logger.info("[STREAM] First token received")
                             first_token_received = true
@@ -127,13 +127,13 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                         if in_reasoning then
                             in_reasoning = false
                             local token = "\n\n" .. c_text
-                            full_content = full_content .. token
+                            table.insert(content_parts, token)
                             if on_token_cb then on_token_cb(token) end
                         else
-                            full_content = full_content .. c_text
+                            table.insert(content_parts, c_text)
                             if on_token_cb then on_token_cb(c_text) end
                         end
-                        full_text = full_text .. c_text
+                        table.insert(text_parts, c_text)
                         if not first_token_received then
                             logger.info("[STREAM] First token received")
                             first_token_received = true
@@ -163,24 +163,24 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                     if not in_reasoning then
                         in_reasoning = true
                         local token = "<think>\n" .. c_reason
-                        full_content = full_content .. token
+                        table.insert(content_parts, token)
                         if on_token_cb then on_token_cb(token) end
                     else
-                        full_content = full_content .. c_reason
+                        table.insert(content_parts, c_reason)
                         if on_token_cb then on_token_cb(c_reason) end
                     end
-                    full_reason = full_reason .. c_reason
+                    table.insert(reason_parts, c_reason)
                 elseif c_text and c_text ~= "" then
                     if in_reasoning then
                         in_reasoning = false
                         local token = "\n\n" .. c_text
-                        full_content = full_content .. token
+                        table.insert(content_parts, token)
                         if on_token_cb then on_token_cb(token) end
                     else
-                        full_content = full_content .. c_text
+                        table.insert(content_parts, c_text)
                         if on_token_cb then on_token_cb(c_text) end
                     end
-                    full_text = full_text .. c_text
+                    table.insert(text_parts, c_text)
                 end
             end
         end
@@ -191,6 +191,9 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     if patcher_core.teardown_esc_monitor then
         patcher_core.teardown_esc_monitor()
     end
+    local full_content = table.concat(content_parts)
+    local full_text = table.concat(text_parts)
+    local full_reason = table.concat(reason_parts)
     if full_content == "" or full_content:match("^%s*$") then
         logger.warn("[STREAM EMPTY] HTTP 200 received but full_content is empty.")
         if last_part then
