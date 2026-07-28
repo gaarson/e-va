@@ -2,7 +2,10 @@
 #!/bin/bash
 
 PROJECT_ROOT="$(pwd)"
-
+# Default test environment variables (override with real ones if set)
+export LLM_API_KEY="${LLM_API_KEY:-test_api_key_placeholder}"
+export LLM_BASE_URL="${LLM_BASE_URL:-http://localhost:8000/v1/chat/completions}"
+export LLM_MODEL="${LLM_MODEL:-test-model}"
 LUA_VERSION=$(lua -v 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
 
@@ -45,4 +48,3 @@ fi
 
 
 exit $TEST_STATUS
-

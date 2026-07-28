@@ -4,7 +4,7 @@ local utils = require("utils")
 local function get_api_key()
     local key = os.getenv("LLM_API_KEY")
     if not key or key == "" then
-        error("FATAL: LLM_API_KEY environment variable must be set")
+        return "UNSET_LLM_API_KEY"
     end
     return key
 end

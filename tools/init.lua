@@ -25,7 +25,8 @@ local function init(provided_config)
         local ok, config_module = pcall(require, "config")
         if ok then
             if type(config_module.get) == "function" then
-                config = config_module.get()
+                local ok2, cfg = pcall(config_module.get)
+                if ok2 then config = cfg end
             elseif type(config_module) == "table" then
                 config = config_module
             end
