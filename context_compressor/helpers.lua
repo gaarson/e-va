@@ -34,12 +34,26 @@ function M._is_task_critical(msg)
     if role == "system" then return true end
     return false
 end
+--- Checks if content is already compressed (contains compression markers).
+-- @param content The message content to check
+-- @return boolean true if content appears to be already compressed
+function M._is_already_compressed(content)
+    if not content or #content == 0 then return false end
+    if content:match("%[PRESERVED_ENTITIES%]") then return true end
+    if content:match("%[COMPRESSED ") then return true end
+    return false
+end
 function M._extract_critical_entities(content)
     local entities = { files = {}, errors = {}, tools = {}, functions = {}, decisions = {} }
     if not content or #content == 0 then return entities end
-    -- Extract file paths (e.g., src/file.lua, /path/to/file, file.c, file.h)
-    for fp in content:gmatch("([A-Za-z0-9_./%-]+%.[A-Za-z0-9_]+)") do
-        if fp:match("%.[A-Za-z]+$") and not fp:match("^http") and not fp:match("^https") then
+    -- Skip content that is already compressed to prevent recursive extraction
+    if M._is_already_compressed(content) then return entities end
+    -- Strip existing [PRESERVED_ENTITIES] blocks before extraction
+    -- Use [^]* to match ANY character including newlines (multi-line blocks)
+    local clean_content = content:gsub("%[PRESERVED_ENTITIES%][^]*%[/PRESERVED_ENTITIES%]", "")
+    -- Extract file paths with stricter regex - only known source/config/doc extensions
+    for fp in clean_content:gmatch("([^%s,;:\"`>%)]+%.(lua|c|h|cpp|hpp|ts|tsx|js|jsx|py|sh|yml|yaml|json|toml|md|txt|css|scss|html|xml|sql|go|rs|rb|java))") do
+        if not fp:match("^http") and not fp:match("^https") then
             entities.files[#entities.files + 1] = fp
         end
     end
@@ -53,10 +67,17 @@ function M._extract_critical_entities(content)
         end
     end
     entities.files = unique_files
+    -- Cap files to 10 maximum
+    if #entities.files > 10 then
+        entities.files = { unpack(entities.files, 1, 10) }
+    end
     -- Extract error messages (lines with ERROR, FAILED, FAILURE, error:, failed:)
-    for line in content:gmatch("[^\r\n]+") do
+    for line in clean_content:gmatch("[^\r\n]+") do
         local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if trimmed ~= "" and (
+        -- Skip system log messages
+        if trimmed:match("%[SYSTEM%]") then
+            -- skip this iteration
+        elseif trimmed ~= "" and (
             trimmed:match("[Ee][Rr][Rr][Oo][Rr]") or
             trimmed:match("[Ff][Aa][Ii][Ll][Ee][Dd]") or
             trimmed:match("[Ff][Aa][Ii][Ll][Uu][Rr][Ee]") or
@@ -70,6 +91,10 @@ function M._extract_critical_entities(content)
             entities.errors[#entities.errors + 1] = trimmed
         end
     end
+    -- Cap errors to 5 maximum
+    if #entities.errors > 5 then
+        entities.errors = { unpack(entities.errors, 1, 5) }
+    end
     -- Deduplicate errors
     local seen_errors = {}
     local unique_errors = {}
@@ -81,7 +106,7 @@ function M._extract_critical_entities(content)
     end
     entities.errors = unique_errors
     -- Extract tool names and status
-    for tool_match in content:gmatch("%[([A-Z_]+)%]") do
+    for tool_match in clean_content:gmatch("%[([A-Z_]+)%]") do
         entities.tools[#entities.tools + 1] = tool_match
     end
     for tool_match in content:gmatch("%[([A-Za-z_]+ OUTPUT)%]") do
@@ -98,7 +123,7 @@ function M._extract_critical_entities(content)
     end
     entities.tools = unique_tools
     -- Extract function/method names
-    for fn in content:gmatch("(function%s+[A-Za-z_][A-Za-z0-9_.%-%s]*%()") do
+    for fn in clean_content:gmatch("(function%s+[A-Za-z_][A-Za-z0-9_.%-%s]*%()") do
         local name = fn:gsub("^function%s+", ""):gsub("%($", "")
         entities.functions[#entities.functions + 1] = name
     end
@@ -117,7 +142,7 @@ function M._extract_critical_entities(content)
     end
     entities.functions = unique_fns
     -- Extract key decisions (DECISION:, CONCLUSION:, TODO:, FIXME:, NOTE:)
-    for line in content:gmatch("[^\r\n]+") do
+    for line in clean_content:gmatch("[^\r\n]+") do
         local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
         if trimmed ~= "" and (
             trimmed:match("[Dd][Ee][Cc][Ii][Ss][Ii][Oo][Nn]:") or
@@ -175,7 +200,10 @@ function M._summarize_message(msg, config)
     -- Extract and preserve critical entities
     local preserve_entities = (config and config.preserve_entities ~= false) or true
     if preserve_entities then
-        local entities = M._extract_critical_entities(content)
+        -- Strip existing [PRESERVED_ENTITIES] blocks to avoid re-extracting already-preserved data
+        -- Use [^]* to match ANY character including newlines (multi-line blocks)
+        local clean_content = content:gsub("%[PRESERVED_ENTITIES%][^]*%[/PRESERVED_ENTITIES%]", "")
+        local entities = M._extract_critical_entities(clean_content)
         -- Append files (limit to 5)
         if #entities.files > 0 then
             local file_list = {}

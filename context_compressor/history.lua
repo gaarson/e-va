@@ -2,6 +2,14 @@ local helpers = require("context_compressor.helpers")
 local thinking = require("context_compressor.thinking")
 local tool_output = require("context_compressor.tool_output")
 local M = {}
+--- Strips existing [PRESERVED_ENTITIES] blocks from content
+-- @param content The message content
+-- @return string with PRESERVED_ENTITIES blocks removed
+local function strip_preserved_entities(content)
+    if not content or #content == 0 then return content end
+    -- Use [^]* to match ANY character including newlines (multi-line blocks)
+    return content:gsub("%[PRESERVED_ENTITIES%][^]*%[/PRESERVED_ENTITIES%]", ""):gsub("%s*$", "")
+end
 function M.compress_history_window(history, config)
     config = config or helpers.DEFAULT_CONFIG
     if not history or #history == 0 then return history, 0 end
@@ -16,29 +24,39 @@ function M.compress_history_window(history, config)
     for i = 1, zone3_end - 1 do
         local msg = history[i]
         if msg and msg.content then
-            local original_len = #msg.content
-            if helpers._is_task_critical(msg) then
-                msg.content = thinking.compress_assistant_thinking(msg.content, config)
-                if msg.content:match("^%[") then
-                    msg.content = tool_output.compress_tool_output(msg.content, config)
-                end
+            -- Skip messages that are already compressed to avoid double-compression
+            if helpers._is_already_compressed(msg.content) then
+                -- skip this iteration
             else
-                msg.content = helpers._summarize_message(msg, config)
+                local original_len = #msg.content
+                if helpers._is_task_critical(msg) then
+                    msg.content = thinking.compress_assistant_thinking(msg.content, config)
+                    if msg.content:match("^%[") then
+                        msg.content = tool_output.compress_tool_output(msg.content, config)
+                    end
+                else
+                    msg.content = helpers._summarize_message(msg, config)
+                end
+                tokens_saved = tokens_saved + (original_len - #msg.content)
+                compressed_count = compressed_count + 1
             end
-            tokens_saved = tokens_saved + (original_len - #msg.content)
-            compressed_count = compressed_count + 1
         end
     end
     for i = zone3_end, zone2_end - 1 do
         local msg = history[i]
         if msg and msg.content then
-            local original_len = #msg.content
-            msg.content = thinking.compress_assistant_thinking(msg.content, config)
-            if msg.content:match("^%[") then
-                msg.content = tool_output.compress_tool_output(msg.content, config)
+            -- Skip messages that are already compressed to avoid double-compression
+            if helpers._is_already_compressed(msg.content) then
+                -- skip this iteration
+            else
+                local original_len = #msg.content
+                msg.content = thinking.compress_assistant_thinking(msg.content, config)
+                if msg.content:match("^%[") then
+                    msg.content = tool_output.compress_tool_output(msg.content, config)
+                end
+                tokens_saved = tokens_saved + (original_len - #msg.content)
+                compressed_count = compressed_count + 1
             end
-            tokens_saved = tokens_saved + (original_len - #msg.content)
-            compressed_count = compressed_count + 1
         end
     end
     return history, compressed_count, tokens_saved
@@ -66,6 +84,8 @@ end
 function M.compress_message(msg, config)
     config = config or helpers.DEFAULT_CONFIG
     if not msg or not msg.content then return msg end
+    -- Skip if already compressed
+    if helpers._is_already_compressed(msg.content) then return msg end
     local original_content = msg.content
     msg.content = thinking.compress_assistant_thinking(msg.content, config)
     if msg.content:match("^%[SHELL") or msg.content:match("^%[SEARCH") or
@@ -74,28 +94,33 @@ function M.compress_message(msg, config)
         msg.content = tool_output.compress_tool_output(msg.content, config)
     end
     -- Preserve critical entities from original content if it was large
-    if #original_content > 2000 then
-        local entities = helpers._extract_critical_entities(original_content)
-        local has_entities = false
-        local entity_parts = {}
-        if #entities.files > 0 then
-            has_entities = true
-            table.insert(entity_parts, "- Files: " .. table.concat(entities.files, ", "))
-        end
-        if #entities.errors > 0 then
-            has_entities = true
-            table.insert(entity_parts, "- Errors: " .. table.concat(entities.errors, "; "))
-        end
-        if #entities.decisions > 0 then
-            has_entities = true
-            table.insert(entity_parts, "- Decisions: " .. table.concat(entities.decisions, "; "))
-        end
-        if #entities.functions > 0 then
-            has_entities = true
-            table.insert(entity_parts, "- Functions: " .. table.concat(entities.functions, ", "))
-        end
-        if has_entities then
-            msg.content = msg.content .. "\n[PRESERVED_ENTITIES]\n" .. table.concat(entity_parts, "\n") .. "\n[/PRESERVED_ENTITIES]"
+    -- First, strip any existing [PRESERVED_ENTITIES] blocks to avoid re-extraction
+    local clean_original = strip_preserved_entities(original_content)
+    if #clean_original > 2000 then
+        -- Check if content already has a PRESERVED_ENTITIES block (shouldn't after strip, but safety check)
+        if not msg.content:match("%[PRESERVED_ENTITIES%]") then
+            local entities = helpers._extract_critical_entities(clean_original)
+            local has_entities = false
+            local entity_parts = {}
+            if #entities.files > 0 then
+                has_entities = true
+                table.insert(entity_parts, "- Files: " .. table.concat(entities.files, ", "))
+            end
+            if #entities.errors > 0 then
+                has_entities = true
+                table.insert(entity_parts, "- Errors: " .. table.concat(entities.errors, "; "))
+            end
+            if #entities.decisions > 0 then
+                has_entities = true
+                table.insert(entity_parts, "- Decisions: " .. table.concat(entities.decisions, "; "))
+            end
+            if #entities.functions > 0 then
+                has_entities = true
+                table.insert(entity_parts, "- Functions: " .. table.concat(entities.functions, ", "))
+            end
+            if has_entities then
+                msg.content = msg.content .. "\n[PRESERVED_ENTITIES]\n" .. table.concat(entity_parts, "\n") .. "\n[/PRESERVED_ENTITIES]"
+            end
         end
     end
     return msg
