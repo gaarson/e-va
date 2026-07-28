@@ -77,15 +77,52 @@ function M.load_images(ctx, dir_path)
     ctx.images_loaded = (#ctx.images > 0)
     local elapsed = socket.gettime() - t_load
     logger.info(string.format("[IMAGE DIAG] load_images completed: %d images, %.3fs elapsed", #filtered, elapsed))
+    -- Trim to capacity after loading
+    M.trim_images(ctx)
 end
 
 
 -- ============================================================================
-
--- ADD IMAGE
-
+-- TRIM IMAGES (LRU-style: remove oldest / already-sent images when over capacity)
 -- ============================================================================
-
+function M.trim_images(ctx, max_count, max_total_bytes)
+    max_count = max_count or ((ctx.config.IMAGE_CONFIG and ctx.config.IMAGE_CONFIG.max_images_per_turn) or 10)
+    max_total_bytes = max_total_bytes or ((ctx.config.IMAGE_CONFIG and ctx.config.IMAGE_CONFIG.max_images_base64_bytes) or (4 * 1024 * 1024))
+    -- Phase 1: Drop already-sent images if we have more than 2x the cap
+    local double_cap = max_count * 2
+    if #ctx.images > double_cap and ctx.last_sent_image_hashes and next(ctx.last_sent_image_hashes) then
+        local trimmed = {}
+        for _, img in ipairs(ctx.images) do
+            local h = img.hash or ""
+            if h ~= "" and ctx.last_sent_image_hashes[h] then
+                -- Already sent, safe to drop
+            else
+                table.insert(trimmed, img)
+            end
+        end
+        if #trimmed < #ctx.images then
+            logger.info(string.format("[IMAGE] Dropped %d already-sent images (was %d, now %d)", #ctx.images - #trimmed, #ctx.images, #trimmed))
+            ctx.images = trimmed
+        end
+    end
+    -- Phase 2: Trim oldest images (first in array = oldest) to fit count budget
+    while #ctx.images > max_count do
+        local removed = table.remove(ctx.images, 1)  -- remove oldest (head)
+        logger.info(string.format("[IMAGE] trim_images: removed oldest image (hash=%s) to fit count cap %d", removed.hash or "nil", max_count))
+    end
+    -- Phase 3: Trim oldest images to fit byte budget
+    local total_b64 = 0
+    for _, img in ipairs(ctx.images) do total_b64 = total_b64 + #(img.base64_data or "") end
+    while total_b64 > max_total_bytes and #ctx.images > 0 do
+        local removed = table.remove(ctx.images, 1)  -- remove oldest
+        total_b64 = total_b64 - #(removed.base64_data or "")
+        logger.info(string.format("[IMAGE] trim_images: removed oldest image (hash=%s, %d bytes) to fit byte budget %d", removed.hash or "nil", #(removed.base64_data or ""), max_total_bytes))
+    end
+    ctx.images_loaded = (#ctx.images > 0)
+end
+-- ============================================================================
+-- ADD IMAGE
+-- ============================================================================
 function M.add_image(ctx, base64_data, mime_type)
     if not base64_data or base64_data == "" then return end
     mime_type = mime_type or "image/png"
@@ -186,10 +223,19 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
     local injected = false
     for i = #messages, 1, -1 do
         if messages[i].role == "user" then
-            messages[i].content = {
-                { type = "text", text = messages[i].content },
-                unpack(formatted_images)
-            }
+            local content = messages[i].content
+            if type(content) == "table" then
+                -- Already a multi-part array: append image parts
+                for _, img_part in ipairs(formatted_images) do
+                    table.insert(content, img_part)
+                end
+            else
+                -- String content: wrap into multi-part array with text + images
+                messages[i].content = {
+                    { type = "text", text = content },
+                    unpack(formatted_images)
+                }
+            end
             injected = true
             break
         end
@@ -212,21 +258,64 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
         if h ~= "" then ctx.last_sent_image_hashes[h] = true end
     end
 
-    -- Calculate total image tokens
+    -- Calculate total image tokens using OpenAI tile-based model
+    -- Low-res (short side < 768px, both <= 2048px): 85 tokens flat
+    -- High-res: 85 + 170 * num_tiles (each tile is 512x512)
+    -- We estimate from base64 size: raw_bytes ≈ b64_len * 0.75
+    -- Approximate pixels from raw bytes assuming 3 bytes/pixel (RGB): pixels ≈ raw_bytes / 3
+    -- Tiles ≈ ceil(sqrt(pixels) / 512)^2, capped at 16 (2048x2048 max)
     local total_image_tokens = 0
     for _, img in ipairs(new_images) do
         local b64_len = #(img.base64_data or "")
-        -- OpenAI vision: low res (<50KB base64) = 85 tokens, high res = ~0.004 tokens/byte
-        if b64_len < 50 * 1024 then
+        local raw_bytes = math.floor(b64_len * 0.75)
+        local approx_pixels = math.max(1, math.floor(raw_bytes / 3))
+        -- Estimate dimensions assuming square-ish image
+        local side = math.ceil(math.sqrt(approx_pixels))
+        -- Determine if low-res or high-res
+        -- Low-res heuristic: if estimated side < 768, treat as low-res
+        if side < 768 then
             total_image_tokens = total_image_tokens + 85
         else
-        total_image_tokens = total_image_tokens + math.ceil(b64_len * tokens_per_byte)
+            -- High-res: estimate number of 512x512 tiles
+            local tiles_x = math.ceil(side / 512)
+            local tiles_y = math.ceil(side / 512)
+            -- Cap at 4x4 = 16 tiles (OpenAI limit for 2048x2048)
+            tiles_x = math.min(tiles_x, 4)
+            tiles_y = math.min(tiles_y, 4)
+            local num_tiles = tiles_x * tiles_y
+            total_image_tokens = total_image_tokens + 85 + (170 * num_tiles)
         end
     end
     local inject_elapsed = socket.gettime() - t_inject
     logger.info(string.format("[IMAGE DIAG] inject_images_into_messages completed: %.3fs elapsed", inject_elapsed))
     return messages, total_image_tokens
 end
-
-
+-- ============================================================================
+-- IMAGE SUMMARY (for agent awareness in recency block)
+-- ============================================================================
+function M.get_image_summary(ctx)
+    if not ctx.images or #ctx.images == 0 then
+        return ""
+    end
+    local parts = {}
+    local total_b64 = 0
+    for _, img in ipairs(ctx.images) do
+        total_b64 = total_b64 + #(img.base64_data or "")
+    end
+    table.insert(parts, string.format("[VISUAL CONTEXT: %d image(s) loaded, ~%.1f KB total base64]", #ctx.images, total_b64 / 1024))
+    -- List up to 5 image paths/names
+    local max_list = math.min(#ctx.images, 5)
+    for i = 1, max_list do
+        local img = ctx.images[i]
+        local name = img.path or ("image_" .. i)
+        -- Extract just filename
+        name = name:match("^.*/(.+)$") or name
+        local sz = #(img.base64_data or "")
+        table.insert(parts, string.format("  - %s (%.1f KB, %s)", name, sz / 1024, img.mime_type or "unknown"))
+    end
+    if #ctx.images > 5 then
+        table.insert(parts, string.format("  ... and %d more", #ctx.images - 5))
+    end
+    return table.concat(parts, "\n")
+end
 return M

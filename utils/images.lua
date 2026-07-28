@@ -5,16 +5,25 @@ local strings = require("utils.strings")
 local M = {}
 -- Compression statistics tracking
 M._compress_stats = { total = 0, compressed = 0, skipped = 0, failed = 0 }
--- Simple hash function for image deduplication
+-- Simple hash function for image deduplication (O(1) constant sampling)
+-- Samples: first 256 bytes, last 128 bytes, and stride-256 positions
 local function _compute_image_hash(data)
     if not data or #data == 0 then return "" end
     local sum = 0
     local len = #data
-    local step = 64
-    for i = 1, len do
-        if i <= 256 or i % step == 0 then
-            sum = (sum + string.byte(data, i)) % 4294967295
-        end
+    -- Sample first 256 bytes
+    local end_first = math.min(256, len)
+    for i = 1, end_first do
+        sum = (sum + string.byte(data, i)) % 4294967295
+    end
+    -- Sample last 128 bytes (avoid overlap with first 256)
+    local start_last = math.max(257, len - 127)
+    for i = start_last, len do
+        sum = (sum + string.byte(data, i)) % 4294967295
+    end
+    -- Stride-256 sampling across the middle region
+    for i = 257, len - 128, 256 do
+        sum = (sum + string.byte(data, i)) % 4294967295
     end
     return string.format("%08x_%d", sum, len)
 end
@@ -60,6 +69,9 @@ function M.compress_image(path, max_dim, quality)
     end
     local safe_path = strings.shell_quote(path)
     local tmp_path = path .. ".compress_tmp"
+    local bak_path = path .. ".compress_bak"
+    -- Backup original before compression
+    os.execute(string.format("cp %s %s", safe_path, strings.shell_quote(bak_path)))
     local function detect_mime_from_magic(fpath)
         local f = io.open(fpath, "rb")
         if not f then return nil end
@@ -83,31 +95,55 @@ function M.compress_image(path, max_dim, quality)
         end
         return true, string.format("Compressed via %s", method_name)
     end
+    -- Helper: run command and get reliable exit code via io.popen
+    local function run_cmd_with_exit_code(cmd_str)
+        local full_cmd = string.format("(%s); echo EXITCODE:$?", cmd_str)
+        local p = io.popen(full_cmd .. " 2>/dev/null")
+        if not p then return 99 end
+        local output = p:read("*a")
+        local rc = 99
+        if output then
+            local ec = output:match("EXITCODE:(%d+)")
+            if ec then rc = tonumber(ec) end
+        end
+        p:close()
+        return rc
+    end
     local cmd = string.format(
-        "timeout 10s ffmpeg -i %s -vf \"scale=%d:%d:force_original_aspect_ratio=downscale\" -q:v %d -y %s 2>/dev/null",
+        "timeout 10s ffmpeg -i %s -vf \"scale=%d:%d:force_original_aspect_ratio=downscale\" -q:v %d -y %s",
         safe_path, max_dim, max_dim, math.ceil(31 * (100 - quality) / 100), tmp_path
     )
-    local ok = os.execute(cmd)
-    if ok == 0 then
-        return finalize_compression("ffmpeg")
-    elseif ok == 124 then
+    local rc = run_cmd_with_exit_code(cmd)
+    if rc == 0 then
+        local ok, msg = finalize_compression("ffmpeg")
+        os.execute(string.format("rm -f %s", strings.shell_quote(bak_path)))
+        return ok, msg
+    elseif rc == 124 then
         os.execute(string.format("rm -f %s", strings.shell_quote(tmp_path)))
+        -- Restore backup on timeout
+        os.execute(string.format("mv %s %s", strings.shell_quote(bak_path), safe_path))
         M._compress_stats.failed = M._compress_stats.failed + 1
         return false, "Compression timed out (ffmpeg)"
     end
     cmd = string.format(
-        "timeout 10s convert %s -resize %dx%d -quality %d %s 2>/dev/null",
+        "timeout 10s convert %s -resize %dx%d -quality %d %s",
         safe_path, max_dim, max_dim, quality, tmp_path
     )
-    ok = os.execute(cmd)
-    if ok == 0 then
-        return finalize_compression("ImageMagick")
-    elseif ok == 124 then
+    rc = run_cmd_with_exit_code(cmd)
+    if rc == 0 then
+        local ok, msg = finalize_compression("ImageMagick")
+        os.execute(string.format("rm -f %s", strings.shell_quote(bak_path)))
+        return ok, msg
+    elseif rc == 124 then
         os.execute(string.format("rm -f %s", strings.shell_quote(tmp_path)))
+        -- Restore backup on timeout
+        os.execute(string.format("mv %s %s", strings.shell_quote(bak_path), safe_path))
         M._compress_stats.failed = M._compress_stats.failed + 1
         return false, "Compression timed out (ImageMagick)"
     end
+    -- Both failed: restore backup
     os.execute(string.format("rm -f %s", strings.shell_quote(tmp_path)))
+    os.execute(string.format("mv %s %s", strings.shell_quote(bak_path), safe_path))
     M._compress_stats.failed = M._compress_stats.failed + 1
     return false, "Both ffmpeg and ImageMagick failed"
 end
@@ -129,6 +165,17 @@ function M.load_images_from_dir(dir_path)
         ["png"] = "image/png", ["jpg"] = "image/jpeg", ["jpeg"] = "image/jpeg",
         ["gif"] = "image/gif", ["webp"] = "image/webp", ["bmp"] = "image/bmp"
     }
+    -- Detect MIME from magic bytes (used after compression to get correct type)
+    local function detect_mime_from_header(header)
+        if not header or #header < 4 then return nil end
+        local b1, b2, b3, b4 = string.byte(header, 1), string.byte(header, 2), string.byte(header, 3), string.byte(header, 4)
+        if b1 == 0xFF and b2 == 0xD8 and b3 == 0xFF then return "image/jpeg" end
+        if b1 == 0x89 and b2 == 0x50 and b3 == 0x4E and b4 == 0x47 then return "image/png" end
+        if b1 == 0x47 and b2 == 0x49 and b3 == 0x46 then return "image/gif" end
+        if b1 == 0x52 and b2 == 0x49 and b3 == 0x46 and b4 == 0x46 then return "image/webp" end
+        if b1 == 0x42 and b2 == 0x4D then return "image/bmp" end
+        return nil
+    end
     local images = {}
     for line in output:gmatch("[^\r\n]+") do
         if line == "" then break end
@@ -139,21 +186,23 @@ function M.load_images_from_dir(dir_path)
             M.compress_image(line, 512, 60)
             local f = io.open(line, "rb")
             if f then
-                local header = f:read(3)
+                local header = f:read(4)
                 local data = header and (header .. f:read("*a")) or nil
                 f:close()
-                if header and #header >= 3 then
-                    local b1, b2, b3 = string.byte(header, 1), string.byte(header, 2), string.byte(header, 3)
-                    if b1 == 0xFF and b2 == 0xD8 and b3 == 0xFF then
-                        mime = "image/jpeg"
+                -- Re-detect MIME from magic bytes after compression (compression may change format)
+                if header and #header >= 4 then
+                    local detected = detect_mime_from_header(header)
+                    if detected then
+                        mime = detected
                     end
                 end
                 if data and #data > 0 then
-                    local hash = _compute_image_hash(data)
+                    local b64 = encoding.base64_encode(data)
+                    local hash = _compute_image_hash(b64)
                     table.insert(images, {
                         path = line,
                         mime_type = mime,
-                        base64_data = encoding.base64_encode(data),
+                        base64_data = b64,
                         hash = hash
                     })
                 end
