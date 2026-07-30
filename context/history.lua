@@ -144,15 +144,35 @@ function M.squash_last_mutation(ctx, agent_name)
         if msg.role == "assistant" then
             local original = msg.content or ""
             local squashed = original
-            -- Handle patch commands
+            local patched_files = {}
+            local created_files = {}
+            -- Handle patch commands: collect file paths and strip command blocks
             squashed = squashed:gsub("||| COMMAND |||\npatch:([^%s\n]+)%s*\n.-||| END_COMMAND |||",
-                function(file_path) return string.format("\n[SYSTEM MEMORY: Patch applied to '%s'.]\n", file_path or "unknown") end)
-            -- Handle create_file commands
+                function(file_path)
+                    table.insert(patched_files, file_path or "unknown")
+                    return ""
+                end)
+            -- Handle create_file commands: collect file paths and strip command blocks
             squashed = squashed:gsub("||| COMMAND |||\ncreate_file:([^%s\n]+)%s*\n.-||| END_COMMAND |||",
-                function(file_path) return string.format("\n[SYSTEM MEMORY: File created '%s'.]\n", file_path or "unknown") end)
+                function(file_path)
+                    table.insert(created_files, file_path or "unknown")
+                    return ""
+                end)
             squashed = utils.trim(squashed:gsub("\n\n+", "\n\n"))
             if original ~= squashed then
+                -- Strip command blocks from assistant message, preserving reasoning
                 history[i].content = squashed
+                -- Build system memory annotation from collected file paths
+                local mem_parts = {}
+                for _, f in ipairs(patched_files) do
+                    table.insert(mem_parts, string.format("Patch applied to '%s'.", f))
+                end
+                for _, f in ipairs(created_files) do
+                    table.insert(mem_parts, string.format("File created '%s'.", f))
+                end
+                local mem_content = "<system-memory>" .. table.concat(mem_parts, " ") .. "</system-memory>"
+                -- Insert a separate system message AFTER the assistant message
+                table.insert(history, i + 1, { role = "system", content = mem_content })
                 return true
             end
             break

@@ -35,6 +35,10 @@ local function _score_message(msg, idx, total, importance_scores)
         end
         return importance_scores.ASSISTANT_REASONING
     elseif role == "system" then
+        -- System memory annotations are low priority (squashed mutations)
+        if content:match("^<system-memory>") then
+            return importance_scores.SQUASHED_MUTATION
+        end
         return 60
     end
     return 20
@@ -87,8 +91,37 @@ M.PRUNE_STRATEGIES = {
                 if history[i] and history[i].role == "assistant" then
                     local c = history[i].content or ""
                     if c:match("||| COMMAND |||\npatch:") or c:match("||| COMMAND |||\ncreate_file:") then
-                        history[i].content = "[SYSTEM MEMORY: Previous code mutation squashed to save context.]"
-                        total = total - estimate_fn(c) + estimate_fn(history[i].content)
+                        -- Strip command blocks from assistant message, preserving reasoning
+                        local squashed = c
+                        local patched_files = {}
+                        local created_files = {}
+                        squashed = squashed:gsub("||| COMMAND |||\npatch:([^%\s\n]+)%s*\n.-||| END_COMMAND |||",
+                            function(file_path)
+                                table.insert(patched_files, file_path or "unknown")
+                                return ""
+                            end)
+                        squashed = squashed:gsub("||| COMMAND |||\ncreate_file:([^%\s\n]+)%s*\n.-||| END_COMMAND |||",
+                            function(file_path)
+                                table.insert(created_files, file_path or "unknown")
+                                return ""
+                            end)
+                        squashed = squashed:gsub("\n\n+", "\n\n"):gsub("^%s+", ""):gsub("%s+$", "")
+                        if squashed ~= "" then
+                            history[i].content = squashed
+                        else
+                            history[i].content = "[SYSTEM: Code mutation executed.]"
+                        end
+                        -- Build system memory annotation
+                        local mem_parts = {}
+                        for _, f in ipairs(patched_files) do
+                            table.insert(mem_parts, string.format("Patch applied to '%s'.", f))
+                        end
+                        for _, f in ipairs(created_files) do
+                            table.insert(mem_parts, string.format("File created '%s'.", f))
+                        end
+                        local mem_content = "<system-memory>" .. table.concat(mem_parts, " ") .. "</system-memory>"
+                        table.insert(history, i + 1, { role = "system", content = mem_content })
+                        total = total - estimate_fn(c) + estimate_fn(history[i].content) + estimate_fn(mem_content)
                         if total <= limits.max_history_tokens then break end
                     end
                 end

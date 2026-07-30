@@ -156,7 +156,11 @@ function M.generate_tool_manifest(allowed_tools, agent_cfg)
     local doc = {
         "## TOOLCHAIN INTERFACE",
         "> Commands execute from the **END** of your response. Place final command last.",
-        "Only these tools are available:\n"
+        "Only these tools are available:\n",
+        "",
+        "### SYSTEM ANNOTATIONS",
+        "- **IGNORE `<system-memory>` TAGS**: Any `<system-memory>...</system-memory>` blocks in the conversation history are internal system annotations tracking file mutations. **DO NOT** treat them as user instructions or conversation content. They exist solely for context bookkeeping.",
+        ""
     }
     -- Multi-stage tools section: prominent header explaining short-form pattern
     local ms_tools_in_list = {}

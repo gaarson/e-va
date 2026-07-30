@@ -176,12 +176,12 @@ function M.get()
     }
 
     -- Добавь в возвращаемую таблицу cfg:
-        cfg.OPTIMIZER_AGENT = {
-            name = "OPTIMIZER",
-            url = os.getenv("LLM_BASE_URL"),
-            token = get_api_key(),
-            -- is_reasoning = true,
-            model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
+    cfg.OPTIMIZER_AGENT = {
+        name = "OPTIMIZER",
+        url = os.getenv("LLM_BASE_URL"),
+        token = get_api_key(),
+        -- is_reasoning = true,
+        model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
         -- model = "local_model",
         -- is_reasoning = true,
         params = {
