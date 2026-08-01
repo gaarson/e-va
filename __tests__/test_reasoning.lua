@@ -201,8 +201,16 @@ assert_true("is_compressible detects <thinking> tags",
     compressor.is_compressible({role="assistant", content=thinking_content}, compressor.DEFAULT_CONFIG))
 
 
+print("\n--- TEST 8: Config synchronization ---")
+local config = require("config")
+local cfg = config.get()
+assert_true("AGENT_DEFAULTS.url uses LLM_BASE_URL env var",
+    cfg.AGENT_DEFAULTS.url == cfg.AGENTS.ARCHITECT.url or
+    cfg.AGENT_DEFAULTS.url:find("localhost:8000"))
+assert_true("AGENTS.ARCHITECT.url is set", cfg.AGENTS.ARCHITECT.url ~= nil)
+assert_true("AGENTS.CODER.url is set", cfg.AGENTS.CODER.url ~= nil)
+assert_true("AGENT_DEFAULTS.model is set", cfg.AGENT_DEFAULTS.model ~= nil)
 print(string.format("\n=== RESULTS: %d passed, %d failed ===", passed, failed))
-
 if failed > 0 then
     os.exit(1)
 end

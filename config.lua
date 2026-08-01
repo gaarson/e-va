@@ -4,6 +4,9 @@ local utils = require("utils")
 local function get_api_key()
     local key = os.getenv("LLM_API_KEY")
     if not key or key == "" then
+        key = os.getenv("OPENAI_API_KEY")
+    end
+    if not key or key == "" then
         return "UNSET_LLM_API_KEY"
     end
     return key
@@ -134,10 +137,7 @@ function M.get()
 
     local BASE_PARAMS = {
         stream = true,
-        -- peculative_ngram = true,
-        -- stream_options = { include_usage = true }
     }
-
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 16384,
@@ -163,7 +163,7 @@ function M.get()
     }
 
     cfg.AGENT_DEFAULTS = {
-        url = os.getenv("LLM_URL") or "http://localhost:8000/v1/chat/completions",
+        url = os.getenv("LLM_BASE_URL") or "http://localhost:8000/v1/chat/completions",
         model = os.getenv("LLM_MODEL") or "default-model",
         is_reasoning = false,
         min_max_tokens = 1024,
@@ -181,7 +181,7 @@ function M.get()
         url = os.getenv("LLM_BASE_URL"),
         token = get_api_key(),
         -- is_reasoning = true,
-        model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
+        model = os.getenv("LLM_MODEL") or "local_model",
         -- model = "local_model",
         -- is_reasoning = true,
         params = {
@@ -198,7 +198,7 @@ function M.get()
             url = os.getenv("LLM_BASE_URL"),
             token = get_api_key(),
             -- is_reasoning = true,
-            model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
+            model = os.getenv("LLM_MODEL") or "local_model",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             -- use_selective_multi_stage = true,
@@ -224,7 +224,7 @@ function M.get()
             url = os.getenv("LLM_BASE_URL"),
             token = get_api_key(),
             -- is_reasoning = true,
-            model = os.getenv("LLM_MODEL") or "Qwen3.5-27B-AWQ",
+            model = os.getenv("LLM_MODEL") or "local_model",
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             -- use_selective_multi_stage = true,
             -- multi_stage_tools = { "create_file", "patch" },
