@@ -82,7 +82,6 @@ ENV PROJECT_ROOT=/workspace
 ENV CHROME_PATH=/usr/bin/google-chrome-stable
 ENV EVA_STATUS_PORT=8080
 EXPOSE 8080
-VOLUME ["/workspace/.e-va-conf"]
 # SECURITY: Restrict sudo to only Chrome-related commands
 # chromeuser needs sudo only for Chrome sandbox bypass scenarios
 # Resource limits: consider using --memory and --cpus flags at runtime

@@ -18,6 +18,7 @@ STATUS_PORT="${STATUS_PORT:-8081}"
 LIVE_MODE=false
 CLEAN_MODE=false
 SNAPSHOT_NAME=""
+AGENT_MODE=""
 # --- BUILD IMAGE IF MISSING ---
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     echo "[BUILD] Image '$IMAGE_NAME' not found. Building..."
@@ -41,6 +42,10 @@ while [ $# -gt 0 ]; do
             ;;
         --snapshot)
             SNAPSHOT_NAME="$2"
+            shift 2
+            ;;
+        --agent)
+            AGENT_MODE="$2"
             shift 2
             ;;
         *)
@@ -80,6 +85,7 @@ if [ -t 0 ]; then
         echo "Flags:"
         echo "  --live          Stream logs live and expose status API"
         echo "  --status-port N Configure status port (default 8081)"
+        echo "  --agent NAME    Use specific agent (e.g., EXECUTOR)"
         exit 1
     fi
 else
@@ -147,6 +153,74 @@ DOCKER_ARGS=(
     -e "LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:8000/v1/chat/completions}"
     -e "LLM_MODEL=${LLM_MODEL:-default-model}"
 )
+# Auto-generate local config override if --agent EXECUTOR is used
+if [ "$AGENT_MODE" = "EXECUTOR" ]; then
+    echo "[AGENT] Using EXECUTOR agent mode. Generating local config override..."
+    mkdir -p "$WORKSPACE_DIR/.e-va-conf"
+    cat > "$WORKSPACE_DIR/.e-va-conf/config.lua" << 'LUAEOF'
+local M = {}
+function M.get()
+    return {
+        AGENTS = {
+            EXECUTOR = {
+                name = "EXECUTOR",
+                prompt_file = "prompts/executor.md",
+                allowed_tools = {
+                    "shell", "read_file", "read_chunk", "create_file", "patch",
+                    "search", "explore_tree", "task_complete", "outline",
+                    "pin", "unpin", "optimize_context",
+                },
+                params = {
+                    stream = true,
+                    temperature = 0.1,
+                    top_p = 0.95,
+                    max_tokens = 16384,
+                    repetition_penalty = 1.05,
+                },
+                model = "local_model",
+            }
+        },
+        PIPELINE = {
+            { stage = "EXECUTE", agents = { "EXECUTOR" }, mode = "sequential" }
+        },
+        PIPELINE_SETTINGS = {
+            MAX_TURNS = 50,
+            ABORT_ON_FATAL = true,
+        }
+    }
+end
+return M
+LUAEOF
+    # Also create the executor prompt
+    mkdir -p "$WORKSPACE_DIR/prompts"
+    cat > "$WORKSPACE_DIR/prompts/executor.md" << 'PROMPTEOF'
+# SYSTEM DIRECTIVE: EXECUTOR
+You are a direct-action Executor. Your sole purpose is to execute tasks immediately using available tools.
+## RULES
+1. **NO PLANNING**: Do not analyze, plan, or delegate. Execute immediately.
+2. **BE CONCISE**: Keep responses brief. Show tool outputs, not commentary.
+3. **USE TOOLS**: Use `shell` for system ops, `read_file`/`read_chunk` for reading, `create_file`/`patch` for writing.
+4. **REPORT RESULTS**: At the end, summarize what was accomplished.
+5. **CALL task_complete**: When the task is done, call `task_complete` to finish.
+6. **RETRY LIMIT**: If a command fails 3 times, try a different approach or report the error.
+7. **ONE COMMAND PER TURN**: Only one command block per response.
+## AVAILABLE TOOLS
+- `shell`: Execute shell commands
+- `read_file`/`read_chunk`: Read file contents
+- `create_file`/`patch`: Create or modify files
+- `search`: Search codebase
+- `explore_tree`: List directory structure
+- `task_complete`: Signal task completion
+- `outline`: Generate file outline
+- `pin`/`unpin`/`optimize_context`: Manage context
+==================================================
+ENGINE DIRECTIVES:
+1. PIPELINE: Use `task_complete` to finish.
+2. ONE COMMAND PER TURN. Use batch tools if needed.
+==================================================
+PROMPTEOF
+    echo "[AGENT] Local config and prompt generated for EXECUTOR mode."
+fi
 # Ensure agent-logs directory exists on host
 mkdir -p "$WORKSPACE_DIR/.e-va-conf/agent-logs"
 # Write task to a temp file for reliable stdin delivery
@@ -155,12 +229,18 @@ echo "$TASK" > "$TASK_FILE"
 # Mount task file into container
 DOCKER_ARGS+=(-v "$TASK_FILE:/tmp/eva_task_input:ro")
 # Note: --network host gives container direct access to host network stack
+# Build container command arguments
+CONTAINER_CMD=()
+if [ -n "$AGENT_MODE" ]; then
+    CONTAINER_CMD=("--agent" "$AGENT_MODE" "--pipe" ".")
+    echo "[AGENT] Passing --agent $AGENT_MODE --pipe . to container"
+fi
 # Run container, passing task via stdin
 if [ "$LIVE_MODE" = true ]; then
     # Live mode: run container in background, stream logs
     CONTAINER_ID=$(echo "$TASK" | docker run -d \
         "${DOCKER_ARGS[@]}" \
-        "$IMAGE_NAME" --pipe .) || true
+        "$IMAGE_NAME" "${CONTAINER_CMD[@]}" --pipe .) || true
     # Trap to clean up on exit
     cleanup() {
         echo "[CLEANUP] Stopping live log stream..."
@@ -194,7 +274,7 @@ else
     TIMEOUT_SECONDS=3600
     OUTPUT=$(timeout "$TIMEOUT_SECONDS" docker run \
         "${DOCKER_ARGS[@]}" \
-        "$IMAGE_NAME" < "$TASK_FILE" 2>&1) || true
+        "$IMAGE_NAME" "${CONTAINER_CMD[@]}" < "$TASK_FILE" 2>&1) || true
     DOCKER_EXIT=$?
     # Clean up temp task file AFTER docker completes
     rm -f "$TASK_FILE"

@@ -14,7 +14,10 @@ local M = {}
 -- @param state_file: Path to state file for saving
 function M.setup_and_run_task(task_file, task_instruction, max_turns, ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
     ctx:reset()
-
+    -- Handle nil task_instruction gracefully
+    if not task_instruction or task_instruction == "" then
+        task_instruction = "No task instruction provided. Please provide a task."
+    end
     local initial_msg = "TASK: " .. task_instruction
     local docs_loaded = {}
 
