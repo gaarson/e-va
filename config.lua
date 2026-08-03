@@ -272,8 +272,8 @@ function M.get()
             -- is_reasoning = true,
             model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
-            -- use_selective_multi_stage = true,
-            -- multi_stage_tools = { "create_file", "patch" },
+            use_selective_multi_stage = true,
+            multi_stage_tools = { "create_file", "patch" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
               "patch",
