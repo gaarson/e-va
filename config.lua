@@ -1,6 +1,50 @@
 local M = {}
 local os = require("os")
 local utils = require("utils")
+-- Cache for .env file values (fallback when os.getenv is empty)
+local _env_cache = {}
+--- Resolve an environment variable, falling back to .env file parsing.
+-- Tries os.getenv first, then parses .env files from known paths.
+local function resolve_env(key, default)
+    local val = os.getenv(key)
+    if val and val ~= "" then
+        return val
+    end
+    -- Check cache first
+    if _env_cache[key] then
+        return _env_cache[key]
+    end
+    -- Parse .env files from known paths
+    local env_paths = {
+        os.getenv("ENV_PATH"),
+        os.getenv("AGENT_HOME") and os.getenv("AGENT_HOME") .. "/.env",
+        os.getenv("PROJECT_ROOT") and os.getenv("PROJECT_ROOT") .. "/.env",
+        "./.env",
+    }
+    for _, path in ipairs(env_paths) do
+        if path then
+            local f = io.open(path, "r")
+            if f then
+                for line in f:lines() do
+                    line = line:gsub("^%s+", ""):gsub("%s+$", "")
+                    if line ~= "" and not line:match("^#") then
+                        local k, v = line:match("^([A-Za-z_][A-Za-z0-9_]*)=(.*)")
+                        if k and v then
+                            v = v:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'", "$")
+                            _env_cache[k] = v
+                        end
+                    end
+                end
+                f:close()
+            end
+        end
+    end
+    val = _env_cache[key]
+    if val and val ~= "" then
+        return val
+    end
+    return default
+end
 local function get_api_key()
     local key = os.getenv("LLM_API_KEY")
     if not key or key == "" then
@@ -53,7 +97,7 @@ function M.get()
             -- "shell*" exempts all shell:* commands (shell:ls, shell:npm run build, etc.)
             -- "task_complete*" exempts task_complete and task_complete:... variants
             -- "delegate_plan*" exempts delegate_plan and delegate_plan:... variants
-            dedup_exceptions = { "task_complete*", "delegate_plan*", "shell*", "mcp_browser_*", "search*", "read_chunk*" },
+            dedup_exceptions = { "task_complete*", "delegate_plan*", "shell*", "mcp_browser_*", "search*", "read_file*", "read_chunk*" },
         },
         token_estimation = {
             chars_per_token = 3.5,
@@ -90,7 +134,7 @@ function M.get()
     }
 
     cfg.PIPELINE_SETTINGS = {
-        MAX_TURNS = 150,
+        MAX_TURNS = 420,
         ABORT_ON_FATAL = true,
         CONTEXT_INJECTION_MODE = "separate_message" -- "separate_message" or "append_to_last_user"
     }
@@ -135,6 +179,8 @@ function M.get()
         max_image_age_hours = 168  -- Skip images older than 24 hours
     }
 
+    -- Source .env file early to populate cache for AGENT_DEFAULTS
+    resolve_env("LLM_BASE_URL", "")
     local BASE_PARAMS = {
         stream = true,
     }
@@ -163,8 +209,8 @@ function M.get()
     }
 
     cfg.AGENT_DEFAULTS = {
-        url = os.getenv("LLM_BASE_URL") or "http://localhost:8000/v1/chat/completions",
-        model = os.getenv("LLM_MODEL") or "default-model",
+        url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
+        model = resolve_env("LLM_MODEL", "default-model"),
         is_reasoning = false,
         min_max_tokens = 1024,
         params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
@@ -178,10 +224,10 @@ function M.get()
     -- Добавь в возвращаемую таблицу cfg:
     cfg.OPTIMIZER_AGENT = {
         name = "OPTIMIZER",
-        url = os.getenv("LLM_BASE_URL"),
+        url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
         token = get_api_key(),
         -- is_reasoning = true,
-        model = os.getenv("LLM_MODEL") or "local_model",
+        model = resolve_env("LLM_MODEL", "local_model"),
         -- model = "local_model",
         -- is_reasoning = true,
         params = {
@@ -195,10 +241,10 @@ function M.get()
     cfg.AGENTS = {
         ARCHITECT = {
             name = "ARCHITECT",
-            url = os.getenv("LLM_BASE_URL"),
+            url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
             token = get_api_key(),
             -- is_reasoning = true,
-            model = os.getenv("LLM_MODEL") or "local_model",
+            model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             -- use_selective_multi_stage = true,
@@ -221,10 +267,10 @@ function M.get()
         },
         CODER = {
             name = "CODER",
-            url = os.getenv("LLM_BASE_URL"),
+            url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
             token = get_api_key(),
             -- is_reasoning = true,
-            model = os.getenv("LLM_MODEL") or "local_model",
+            model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             -- use_selective_multi_stage = true,
             -- multi_stage_tools = { "create_file", "patch" },

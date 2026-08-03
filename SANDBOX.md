@@ -42,9 +42,40 @@ docker run -it --rm \
     -v "$(pwd)/sandbox-workspace:/workspace" \
     -v "$(pwd)/.env:/opt/e-va/.env:ro" \
     --memory=4g --cpus=2 \
+    -p 8080:8080 \
     e-va-agent --pipe .
 ```
-Type your task and press Enter. Type `quit` or `exit` to terminate.
+### Mode 4: Clean Workspace Run
+Wipe the workspace before running a task to ensure a fresh state:
+```bash
+./sandbox_run.sh --clean "Implement a new feature from scratch"
+```
+### Mode 5: Snapshot Before Run
+Create a snapshot of the current workspace state before running a task:
+```bash
+./sandbox_run.sh --snapshot pre-refactor "Refactor the utils module"
+```
+Snapshots are stored in `sandbox-workspace/.snapshots/` as `.tar.gz` files. You can restore a snapshot by extracting it:
+```bash
+tar -xzf sandbox-workspace/.snapshots/pre-refactor.tar.gz -C sandbox-workspace/
+```
+## Workspace Snapshots
+The `--snapshot NAME` flag creates a compressed archive of the entire workspace before the agent runs. This is useful for:
+- **Reproducible runs**: Capture the exact state before a transformation
+- **Rollback**: Restore a previous workspace state if needed
+- **Comparison**: Diff snapshots to see what the agent changed
+Snapshots are stored in `sandbox-workspace/.snapshots/<NAME>.tar.gz`.
+## Result Extraction
+The sandbox runner extracts results using a tiered fallback strategy:
+1. **Primary**: Content between `=== RESPONSE START ===` and `=== RESPONSE END ===` markers
+2. **Fallback 1**: Last JSON object from the output (if markers are missing)
+3. **Fallback 2**: Last 50 lines of the log (if no JSON found)
+Full raw output is always saved to `sandbox-workspace/.e-va-conf/result.log`.
+## Port Mapping
+The sandbox uses explicit port mapping (`-p ${STATUS_PORT}:${STATUS_PORT}`) instead of `--network host`. This ensures:
+- **Portability**: Works correctly on both Linux and macOS/Windows Docker setups
+- **Security**: Only the status port is exposed, not the entire host network
+- **Predictability**: The status server is always accessible at `http://localhost:${STATUS_PORT}`
 ## Volume Mount Structure
 | Host Path | Container Path | Purpose |
 |-----------|----------------|---------|
@@ -107,7 +138,11 @@ docker build -t e-va-agent .
 ```
 ### Stale Workspace State
 **Symptom**: Unexpected files or state from previous runs.
-**Fix**: Clear the workspace:
+**Fix**: Use the `--clean` flag to wipe the workspace before running:
+```bash
+./sandbox_run.sh --clean "Your task instruction"
+```
+Or manually clear the workspace:
 ```bash
 rm -rf sandbox-workspace
 mkdir -p sandbox-workspace/.e-va-conf

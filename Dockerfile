@@ -8,6 +8,7 @@ SHELL ["/bin/bash", "-c"]
 # System dependencies + Chrome dependencies
 # Added `tini` for process management
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    dnsutils \
     tini \
     lua5.1 \
     liblua5.1-0-dev \
@@ -79,6 +80,8 @@ WORKDIR /workspace
 ENV AGENT_HOME=/opt/e-va
 ENV PROJECT_ROOT=/workspace
 ENV CHROME_PATH=/usr/bin/google-chrome-stable
+ENV EVA_STATUS_PORT=8080
+EXPOSE 8080
 VOLUME ["/workspace/.e-va-conf"]
 # SECURITY: Restrict sudo to only Chrome-related commands
 # chromeuser needs sudo only for Chrome sandbox bypass scenarios
@@ -89,12 +92,15 @@ RUN echo "chromeuser ALL=(ALL) NOPASSWD: /usr/bin/google-chrome-stable, /usr/bin
 # Create workspace directory with correct ownership BEFORE switching user
 RUN mkdir -p /workspace && chown chromeuser:chromeuser /workspace
 RUN mkdir -p /opt/e-va/logs && chown chromeuser:chromeuser /opt/e-va/logs
-USER chromeuser
+# Copy init script and make it executable
+COPY init.sh /opt/e-va/init.sh
+RUN chmod +x /opt/e-va/init.sh
 # Healthcheck: Verify core binaries exist (does NOT require agent to be running)
 # This allows the container to report healthy even during idle periods
 # For runtime agent verification, use: pgrep -f 'lua.*agent\.lua'
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD ["bash", "-c", "test -x /opt/e-va/e-va && test -f /opt/e-va/agent.lua && test -x /usr/bin/google-chrome-stable && test -x /usr/bin/tini || exit 1"]
 # Оборачиваем вызов в tini для корректного завершения зомби-процессов Chrome
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/e-va/e-va"]
+# init.sh runs as root, fixes workspace ownership, then drops to chromeuser
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/e-va/init.sh"]
 CMD ["--pipe", "."]

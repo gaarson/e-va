@@ -1,5 +1,5 @@
+local status_server = require("status_server")
 local M = {}
-
 --- Executes the pipeline: iterates through stages, handles interactive/parallel/sequential modes,
 --- handoff logic, and loop-back mechanism.
 -- @param ctx: ContextFlow instance
@@ -40,6 +40,14 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
     while current_stage_idx <= #config.PIPELINE and turn < MAX_TURNS do
         local stage = config.PIPELINE[current_stage_idx]
         logger.info(string.format("\n=== PIPELINE STAGE [%d/%d]: %s ===", current_stage_idx, #config.PIPELINE, tostring(stage.stage)))
+        status_server.update_status({
+            agent_name = last_active_agent or "unknown",
+            current_turn = turn,
+            current_stage = tostring(stage.stage),
+            stage_index = current_stage_idx,
+            total_stages = #config.PIPELINE,
+            state = "running"
+        })
         print(string.format("\n\27[96m\27[1m=======================================================================\27[0m\n\27[93m [STAGE %d/%d] %s \27[0m\n\27[96m\27[1m=======================================================================\27[0m\n", current_stage_idx, #config.PIPELINE, tostring(stage.stage)))
 
         local stage_complete = false
@@ -178,6 +186,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
             end
         end
         if turn >= MAX_TURNS then
+            status_server.update_status({state = "aborted"})
             print("\n\27[31m[SYSTEM FATAL] Max turns reached. Aborting.\27[0m")
             os.exit(1)
         end
@@ -227,6 +236,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
             end
         end
     end
+    status_server.update_status({state = "finished"})
     print("\n\27[32m[SYSTEM] Pipeline execution finished entirely.\27[0m")
     os.remove(state_file)
 end

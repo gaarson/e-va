@@ -3,6 +3,7 @@ local socket = require("socket")
 local json = require("JSON")
 local llm = require("llm_handler")
 local logger = require("logger")
+local status_server = require("status_server")
 local context_optimizer = require("context_optimizer")
 local optimizer = require("optimizer")
 local multi_stage_executor = require("multi_stage_executor")
@@ -65,6 +66,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", tostring(agent_name)))
     local printer = utils.stream_token_printer(agent_cfg)
     local response_data, err
+    status_server.add_log(string.format("Turn %d started for agent %s", turn, agent_name))
     local max_retries, retry_delay = 5, 5
     local interruption_retries, MAX_INTERRUPTION_RETRIES = 0, 3
     while true do
@@ -104,8 +106,33 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
 
     utils.flush_stream_buffer(printer)
     if not response_data then
-        logger.error("FATAL: Network unreachable after " .. max_retries .. " attempts.", err)
+        -- FAILSAFE LOGGING: Enhanced diagnostics for network failures
+        local diag_msg = string.format("FATAL: Network unreachable after %d attempts. Err=%s, URL=%s, Model=%s",
+            max_retries, tostring(err or "nil"), agent_cfg.url or "UNSET", agent_cfg.model or "UNSET")
+        logger.error(diag_msg)
+        json_logger.error(diag_msg)
+        status_server.add_log(string.format("Turn %d ERROR: Network unreachable for agent %s (URL=%s, Model=%s)",
+            turn, agent_name, agent_cfg.url or "UNSET", agent_cfg.model or "UNSET"))
+        -- Print colored [FATAL FAILURE] block
+        io.stderr:write("\n\27[31m========================================\27[0m\n")
+        io.stderr:write("\27[31m     [FATAL FAILURE]\27[0m\n")
+        io.stderr:write("\27[31m========================================\27[0m\n")
+        io.stderr:write(string.format("\27[31m  Agent: %s\27[0m\n", agent_name))
+        io.stderr:write(string.format("\27[31m  Turn: %d\27[0m\n", turn))
+        io.stderr:write(string.format("\27[31m  URL: %s\27[0m\n", agent_cfg.url or "UNSET"))
+        io.stderr:write(string.format("\27[31m  Model: %s\27[0m\n", agent_cfg.model or "UNSET"))
+        io.stderr:write(string.format("\27[31m  Error: %s\27[0m\n", tostring(err or "nil")))
+        io.stderr:write("\27[31m  Troubleshooting:\27[0m\n")
+        io.stderr:write("\27[31m    1. Check if LLM server is running: curl <URL>\27[0m\n")
+        io.stderr:write("\27[31m    2. Verify API key in .env file\27[0m\n")
+        io.stderr:write("\27[31m    3. Check network connectivity from container\27[0m\n")
+        io.stderr:write("\27[31m    4. Review agent logs: sandbox-workspace/.e-va-conf/agent-logs/\27[0m\n")
+        io.stderr:write("\27[31m========================================\27[0m\n")
         return "ERROR"
+    end
+    -- Token usage tracking
+    if response_data.usage and response_data.usage.total_tokens then
+        status_server.update_status({tokens_used = response_data.usage.total_tokens})
     end
 
     -- 1. Extract response content FIRST
@@ -285,6 +312,12 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
 
     -- 2. Process turn response
     local result = ctx:process_turn_response(agent_name, content, executor)
+    -- Log key events
+    if result.type == "EXECUTED" then
+        status_server.add_log(string.format("Turn %d: Tool executed (%s)", turn, result.tool_name or "unknown"))
+    elseif result.type == "ERROR" then
+        status_server.add_log(string.format("Turn %d: Tool error - %s", turn, result.message or "unknown"))
+    end
 
     -- PROACTIVE CONTEXT OPTIMIZATION
     if ctx:should_squash(agent_name) then

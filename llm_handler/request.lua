@@ -71,14 +71,62 @@ function M.send_request(profile, messages, options)
     req:set_body(body)
     req.headers:delete("expect")
     local conn_timeout = (profile.params and profile.params.connection_timeout) or 30
+    logger.info(string.format("[LLM CONNECTION DIAG] URL=%s, Model=%s, Timeout=%ds, BodySize=%d bytes",
+        profile.url, profile.model or "unknown", conn_timeout, #body))
+    logger.info(string.format("[LLM CONNECTION DIAG] Headers: Authorization=Bearer ***%s, Accept=text/event-stream",
+        string.sub(profile.token or "", -4)))
     logger.info("[SEND DIAG] Calling req:go with timeout=" .. conn_timeout)
     local t_send = socket.gettime()
-    local headers, stream_obj = req:go(conn_timeout)
+    local ok, headers_or_err, stream_obj_or_err = pcall(function() return req:go(conn_timeout) end)
     local send_elapsed = socket.gettime() - t_send
-    logger.info(string.format("[SEND DIAG] req:go completed: %.3fs", send_elapsed))
-    if not headers then
+    if ok then
+        headers, stream_obj = headers_or_err, stream_obj_or_err
+        logger.info(string.format("[SEND DIAG] req:go completed: %.3fs", send_elapsed))
+    else
+        -- Classify the error
+        local err_msg = tostring(headers_or_err)
+        local err_class = "UNKNOWN"
+        if err_msg:match("refused") or err_msg:match("Connection refused") then
+            err_class = "CONNECTION_REFUSED"
+        elseif err_msg:match("timeout") or err_msg:match("timed out") or err_msg:match("TIMEOUT") then
+            err_class = "TIMEOUT"
+        elseif err_msg:match("name") or err_msg:match("resolve") or err_msg:match("DNS") or err_msg:match("getaddrinfo") then
+            err_class = "DNS_FAILURE"
+        elseif err_msg:match("ssl") or err_msg:match("SSL") or err_msg:match("certificate") or err_msg:match("TLS") then
+            err_class = "SSL_ERROR"
+        elseif err_msg:match("reset") or err_msg:match("RESET") then
+            err_class = "CONNECTION_RESET"
+        elseif err_msg:match("network") or err_msg:match("Network") then
+            err_class = "NETWORK_UNREACHABLE"
+        end
+        logger.error(string.format("[LLM CONNECTION DIAG] FAILED: class=%s, elapsed=%.3fs, err=%s",
+            err_class, send_elapsed, err_msg))
+        json_logger.error(string.format("[LLM_CONN_FAIL] class=%s, url=%s, elapsed=%.3fs, err=%s",
+            err_class, profile.url, send_elapsed, err_msg))
         dedup._in_flight_requests[req_hash] = nil
-        return nil, "Connection failed during body transmission"
+        return nil, string.format("CONNECTION_FAILED [%s]: %s", err_class, err_msg)
+    end
+    if not headers then
+        local diag_detail = string.format("headers=nil, stream_obj=%s, url=%s, model=%s, elapsed=%.3fs, body_size=%d",
+            tostring(stream_obj), profile.url, profile.model or "unknown", send_elapsed, #body)
+        logger.error(string.format("[LLM NIL HEADERS] %s", diag_detail))
+        json_logger.error(string.format("[LLM_NIL_HEADERS] url=%s, model=%s, elapsed=%.3fs, stream_obj=%s, body_size=%d",
+            profile.url, profile.model or "unknown", send_elapsed, tostring(stream_obj), #body))
+        io.stderr:write("\n\27[31m========================================\27[0m\n")
+        io.stderr:write("\27[31m     [NIL HEADERS RESPONSE]\27[0m\n")
+        io.stderr:write("\27[31m========================================\27[0m\n")
+        io.stderr:write(string.format("\27[31m  URL: %s\27[0m\n", profile.url))
+        io.stderr:write(string.format("\27[31m  Model: %s\27[0m\n", profile.model or "unknown"))
+        io.stderr:write(string.format("\27[31m  Elapsed: %.3fs\27[0m\n", send_elapsed))
+        io.stderr:write(string.format("\27[31m  stream_obj: %s\27[0m\n", tostring(stream_obj)))
+        io.stderr:write("\27[31m  Diagnosis: req:go() succeeded but returned nil headers.\27[0m\n")
+        io.stderr:write("\27[31m  Possible causes:\27[0m\n")
+        io.stderr:write("\27[31m    1. Server closed connection before sending headers\27[0m\n")
+        io.stderr:write("\27[31m    2. HTTP/1.1 vs HTTP/2 protocol mismatch\27[0m\n")
+        io.stderr:write("\27[31m    3. Proxy or firewall intercepting response\27[0m\n")
+        io.stderr:write("\27[31m========================================\27[0m\n")
+        dedup._in_flight_requests[req_hash] = nil
+        return nil, string.format("NIL_HEADERS [%s]: %s", profile.url, diag_detail)
     end
     local status = headers:get(":status")
     local content_type = headers:get("content-type") or ""
@@ -89,7 +137,21 @@ function M.send_request(profile, messages, options)
         if stream_obj then
             pcall(function() err_body = stream_obj:get_body_as_string() end)
         end
-        logger.error("API Error: " .. status, err_body)
+        -- Structured logging via json_logger
+        json_logger.error(string.format("[HTTP_ERROR] status=%s, url=%s, body_len=%d, body_preview=%s",
+            status, profile.url, #err_body, err_body:sub(1, 200)))
+        -- Full error body in info log for debugging
+        logger.info(string.format("[HTTP ERROR BODY] status=%s, body=%s", status, err_body))
+        -- Colored stderr block
+        local preview = err_body:sub(1, 200)
+        io.stderr:write("\n\27[31m========================================\27[0m\n")
+        io.stderr:write("\27[31m     [HTTP ERROR]\27[0m\n")
+        io.stderr:write("\27[31m========================================\27[0m\n")
+        io.stderr:write(string.format("\27[31m  Status: %s\27[0m\n", status))
+        io.stderr:write(string.format("\27[31m  URL: %s\27[0m\n", profile.url))
+        io.stderr:write(string.format("\27[31m  Model: %s\27[0m\n", profile.model or "unknown"))
+        io.stderr:write(string.format("\27[31m  Body (%d bytes): %s\27[0m\n", #err_body, preview))
+        io.stderr:write("\27[31m========================================\27[0m\n")
         if status == "400" and context_optimizer.is_context_exceeded(err_body) then
             return nil, { type = 'CONTEXT_EXCEEDED', raw = 'HTTP 400', body = err_body }
         end
