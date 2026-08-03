@@ -1,0 +1,12 @@
+# Runtime artifacts
+.e-va-conf/agent-logs/
+.e-va-conf/structured.log
+.e-va-conf/result.log
+.e-va-conf/state.json
+.e-va-conf/startup_debug.log
+.e-va-conf/task.txt
+.e-va-conf/pictures/
+# Snapshots
+.snapshots/
+# Test outputs
+test_output.txt
