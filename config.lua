@@ -61,6 +61,11 @@ function M.get()
 
     cfg.MCP_SERVERS = {}
 
+    -- FOR DOCKER
+    -- MCP_SERVERS = {
+    --     browser = "npx -y chrome-devtools-mcp@latest --headless=new --isolated --screenshot-format=jpeg --screenshot-quality=70 --screenshot-max-width=1024 --screenshot-max-height=768 --no-usage-statistics --no-performance-crux"
+    -- }
+
     cfg.LIMITS = {
         MAX_CONTEXT = 200000,
         RESERVED_OUTPUT = 5000,
@@ -211,6 +216,7 @@ function M.get()
     cfg.AGENT_DEFAULTS = {
         url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
         model = resolve_env("LLM_MODEL", "default-model"),
+        token = get_api_key(),
         is_reasoning = false,
         min_max_tokens = 1024,
         params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),

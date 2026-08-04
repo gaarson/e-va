@@ -101,7 +101,7 @@ function M.send_request(profile, messages, options)
         end
         logger.error(string.format("[LLM CONNECTION DIAG] FAILED: class=%s, elapsed=%.3fs, err=%s",
             err_class, send_elapsed, err_msg))
-        json_logger.error(string.format("[LLM_CONN_FAIL] class=%s, url=%s, elapsed=%.3fs, err=%s",
+        logger.error(string.format("[LLM_CONN_FAIL] class=%s, url=%s, elapsed=%.3fs, err=%s",
             err_class, profile.url, send_elapsed, err_msg))
         dedup._in_flight_requests[req_hash] = nil
         return nil, string.format("CONNECTION_FAILED [%s]: %s", err_class, err_msg)
@@ -110,7 +110,7 @@ function M.send_request(profile, messages, options)
         local diag_detail = string.format("headers=nil, stream_obj=%s, url=%s, model=%s, elapsed=%.3fs, body_size=%d",
             tostring(stream_obj), profile.url, profile.model or "unknown", send_elapsed, #body)
         logger.error(string.format("[LLM NIL HEADERS] %s", diag_detail))
-        json_logger.error(string.format("[LLM_NIL_HEADERS] url=%s, model=%s, elapsed=%.3fs, stream_obj=%s, body_size=%d",
+        logger.error(string.format("[LLM_NIL_HEADERS] url=%s, model=%s, elapsed=%.3fs, stream_obj=%s, body_size=%d",
             profile.url, profile.model or "unknown", send_elapsed, tostring(stream_obj), #body))
         io.stderr:write("\n\27[31m========================================\27[0m\n")
         io.stderr:write("\27[31m     [NIL HEADERS RESPONSE]\27[0m\n")
@@ -138,7 +138,7 @@ function M.send_request(profile, messages, options)
             pcall(function() err_body = stream_obj:get_body_as_string() end)
         end
         -- Structured logging via json_logger
-        json_logger.error(string.format("[HTTP_ERROR] status=%s, url=%s, body_len=%d, body_preview=%s",
+        logger.error(string.format("[HTTP_ERROR] status=%s, url=%s, body_len=%d, body_preview=%s",
             status, profile.url, #err_body, err_body:sub(1, 200)))
         -- Full error body in info log for debugging
         logger.info(string.format("[HTTP ERROR BODY] status=%s, body=%s", status, err_body))
