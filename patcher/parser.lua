@@ -59,7 +59,11 @@ function M.apply_patch(original_content, llm_response)
             if s_str == r_str then
                 table.insert(errors, "FAILED BLOCK: SEARCH and REPLACE blocks are EXACTLY identical. No changes needed.")
             else
-                local s_line, e_line, err_msg = patcher_core.find_unique_fuzzy_block(file_lines, s_lines)
+                -- Try C extension first, fall back to pure Lua
+                local s_line, e_line, err_msg
+                if type(patcher_core.find_unique_fuzzy_block) == "function" then
+                    s_line, e_line, err_msg = patcher_core.find_unique_fuzzy_block(file_lines, s_lines)
+                end
                 if s_line and e_line then
                     local new_file_lines = {}
                     for k = 1, s_line - 1 do
@@ -79,7 +83,11 @@ function M.apply_patch(original_content, llm_response)
                     table.insert(errors, string.format("FAILED BLOCK: '%s' -> AMBIGUOUS MATCH: Found multiple occurrences. Add more context lines to make the match unique.", snippet))
                 else
                     local matches = matcher.find_all_matches_skip_empty(file_lines, s_lines)
-                    if #matches > 0 then
+                    if #matches > 1 then
+                        local snippet = s_str:sub(1, 100):gsub("\n", " ")
+                        if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
+                        table.insert(errors, string.format("FAILED BLOCK: '%s' -> AMBIGUOUS MATCH: Found multiple occurrences. Add more context lines to make the match unique.", snippet))
+                    elseif #matches == 1 then
                         for m = #matches, 1, -1 do
                             local mi = matches[m]
                             local fidx = mi
@@ -112,7 +120,11 @@ function M.apply_patch(original_content, llm_response)
                             end
                         end
                         local norm_matches = matcher.find_all_matches_skip_empty(file_lines, norm_s_lines)
-                        if #norm_matches > 0 then
+                        if #norm_matches > 1 then
+                            local snippet = s_str:sub(1, 100):gsub("\n", " ")
+                            if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
+                            table.insert(errors, string.format("FAILED BLOCK: '%s' -> AMBIGUOUS MATCH: Found multiple occurrences. Add more context lines to make the match unique.", snippet))
+                        elseif #norm_matches == 1 then
                             for m = #norm_matches, 1, -1 do
                                 local mi = norm_matches[m]
                                 local fidx = mi
@@ -141,7 +153,7 @@ function M.apply_patch(original_content, llm_response)
                         else
                             local snippet = s_str:sub(1, 100):gsub("\n", " ")
                             if #snippet > 50 then snippet = snippet:sub(1, 50) .. "..." end
-                            local reason = err_msg or "Fuzzy failed in C module, Lua fallback, and whitespace normalization"
+            local reason = err_msg or "Block not found in file"
                             table.insert(errors, string.format("FAILED BLOCK: '%s' -> %s", snippet, reason))
                         end
                     end

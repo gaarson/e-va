@@ -85,7 +85,7 @@ local function register(registry)
             if #output == 0 then
                 output = "(Command executed silently. Status: " .. tostring(exit_code) .. ")"
             end
-            local MAX_LOG_SIZE = 10000
+            local MAX_LOG_SIZE = 1000000
             if #output > MAX_LOG_SIZE then
                 output = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. output:sub(-MAX_LOG_SIZE)
             end
@@ -141,7 +141,7 @@ local function register(registry)
         if #res == 0 then
             res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")"
         end
-        local MAX_LOG_SIZE = 10000
+        local MAX_LOG_SIZE = 10000000
         if #res > MAX_LOG_SIZE then
             res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE)
         end
