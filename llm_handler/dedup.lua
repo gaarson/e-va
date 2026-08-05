@@ -36,8 +36,8 @@ function M._request_hash(profile, messages, options)
     return string.format("%08x", hash)
 end
 function M._cleanup_in_flight()
-    local socket = require("socket")
-    local now = socket.gettime()
+    local cqueues = require("cqueues")
+    local now = cqueues.monotime()
     for hash, entry in pairs(M._in_flight_requests) do
         if now - entry.timestamp > M._DEDUP_CLEANUP_INTERVAL then
             M._in_flight_requests[hash] = nil

@@ -2,7 +2,7 @@ local logger = require("logger")
 local M = {}
 function M.process_stream(stream, profile, provider, on_token_cb)
     local patcher_core = require("patcher_core")
-    local socket = require("socket")
+    local cqueues = require("cqueues")
     local json = require("JSON")
     local content_parts = {}
     local text_parts = {}
@@ -14,9 +14,9 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     local first_token_received = false
     local STREAM_TIMEOUT = (profile.params and profile.params.stream_timeout) or 600
     local is_timeout = false
-    local last_activity_time = socket.gettime()
+    local last_activity_time = cqueues.monotime()
     local BUFFER_LIMIT = 65536 -- 64KB
-    local last_parse_time = socket.gettime()
+    local last_parse_time = cqueues.monotime()
     if patcher_core.setup_esc_monitor then
         patcher_core.setup_esc_monitor()
     end
@@ -29,7 +29,7 @@ function M.process_stream(stream, profile, provider, on_token_cb)
             end
             break
         end
-        local now = socket.gettime()
+        local now = cqueues.monotime()
         last_activity_time = now
         -- Debug logging for chunks
         if logger.debug then
@@ -100,9 +100,9 @@ function M.process_stream(stream, profile, provider, on_token_cb)
             line = line:gsub("\r", ""):gsub("^%s+", "")
             -- Handle SSE event: lines (optional metadata)
             if line:sub(1, 6) == "event:" then
-                last_parse_time = socket.gettime()
+                last_parse_time = cqueues.monotime()
             elseif line ~= "" and line:sub(1, 5) == "data:" then
-                last_parse_time = socket.gettime()
+                last_parse_time = cqueues.monotime()
                 local json_str = line:sub(6):gsub("^%s+", ""):gsub("%s+$", "")
                 if not json_str:match("%[DONE%]") then
                     local ok, part = pcall(json.decode, json, json_str)
@@ -144,7 +144,7 @@ function M.process_stream(stream, profile, provider, on_token_cb)
         end
         -- Warn if buffer is growing without producing lines
         if #buffer > 4096 then
-            local elapsed = socket.gettime() - last_parse_time
+            local elapsed = cqueues.monotime() - last_parse_time
             if elapsed > 5 then
                 logger.warn(string.format("[STREAM] Buffer stagnation: %d bytes buffered, %.1fs since last parse", #buffer, elapsed))
             end

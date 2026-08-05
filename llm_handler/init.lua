@@ -16,4 +16,8 @@ dedup._in_flight_requests = M._in_flight_requests
 dedup._DEDUP_WINDOW = M._DEDUP_WINDOW
 dedup._DEDUP_CLEANUP_INTERVAL = M._DEDUP_CLEANUP_INTERVAL
 request._last_cleanup = M._last_cleanup
+-- Expose cqueues dispatcher
+M.cqueues = require("llm_handler.cqueues")
+-- Convenience re-export for async LLM calls
+M.async_ll_call = function(...) return require("llm_handler.cqueues").async_ll_call(...) end
 return M

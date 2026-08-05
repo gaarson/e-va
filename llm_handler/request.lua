@@ -10,15 +10,14 @@ local M = {}
 function M.send_request(profile, messages, options)
     options = options or {}
     local on_token_cb = options.on_token
-    if not profile or not profile.url then
+    if not profile or not profile.url or #profile.url == 0 then
         return nil, "Invalid Profile"
     end
     logger.info(string.format("[LLM REQ] send_request called, model=%s, messages=%d", profile.model, messages and #messages or 0))
-    
-    local socket = require("socket")
-    local t_hash = socket.gettime()
+    local cqueues = require("cqueues")
+    local t_hash = cqueues.monotime()
     local req_hash = dedup._request_hash(profile, messages, options)
-    local hash_elapsed = socket.gettime() - t_hash
+    local hash_elapsed = cqueues.monotime() - t_hash
     
     local total_msg_size = 0
     local img_msg_count = 0
@@ -41,7 +40,7 @@ function M.send_request(profile, messages, options)
     end
     logger.info(string.format("[HASH DIAG] _request_hash: time=%.4fs, msgs=%d, img_msgs=%d, total_size=%d bytes (%.1f KB)",
         hash_elapsed, messages and #messages or 0, img_msg_count, total_msg_size, total_msg_size / 1024))
-    local now = socket.gettime()
+    local now = cqueues.monotime()
     if not _last_cleanup or now - _last_cleanup > dedup._DEDUP_CLEANUP_INTERVAL then
         dedup._cleanup_in_flight()
         _last_cleanup = now
@@ -64,9 +63,9 @@ function M.send_request(profile, messages, options)
     req.headers:upsert("cache-control", "no-cache")
     req.headers:upsert("connection", "keep-alive")
     local payload = provider.build_payload(profile, messages, options)
-    local t_encode = socket.gettime()
+    local t_encode = cqueues.monotime()
     local body = json:encode(payload)
-    local encode_elapsed = socket.gettime() - t_encode
+    local encode_elapsed = cqueues.monotime() - t_encode
     logger.info(string.format("[SEND DIAG] json.encode: %.3fs, body_size=%d bytes (%.1f KB)", encode_elapsed, #body, #body/1024))
     req:set_body(body)
     req.headers:delete("expect")
@@ -76,9 +75,9 @@ function M.send_request(profile, messages, options)
     logger.info(string.format("[LLM CONNECTION DIAG] Headers: Authorization=Bearer ***%s, Accept=text/event-stream",
         string.sub(profile.token or "", -4)))
     logger.info("[SEND DIAG] Calling req:go with timeout=" .. conn_timeout)
-    local t_send = socket.gettime()
+    local t_send = cqueues.monotime()
     local ok, headers_or_err, stream_obj_or_err = pcall(function() return req:go(conn_timeout) end)
-    local send_elapsed = socket.gettime() - t_send
+    local send_elapsed = cqueues.monotime() - t_send
     if ok then
         headers, stream_obj = headers_or_err, stream_obj_or_err
         logger.info(string.format("[SEND DIAG] req:go completed: %.3fs", send_elapsed))
