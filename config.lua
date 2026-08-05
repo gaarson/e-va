@@ -112,15 +112,15 @@ function M.get()
         -- Compression configuration
         compression = {
             enabled = true,
-            zone1_size = 10,        -- Recent messages: verbatim
-            zone2_size = 20,        -- Middle messages: light compression
-            max_tool_output_bytes = 2048,
+            zone1_size = 5,        -- Recent messages: verbatim
+            zone2_size = 10,        -- Middle messages: light compression
+            max_tool_output_bytes = 8192,
             compress_thinking_blocks = true,
             preserve_errors = true,
             llm_summarization = {
                 enabled = true,
-                min_message_length = 5000,  -- Only summarize very long messages with LLM
-                rate_limit_seconds = 300,
+                min_message_length = 3000,  -- Only summarize very long messages with LLM
+                rate_limit_seconds = 600,
                 max_summaries_per_turn = 3,
             },
         },
