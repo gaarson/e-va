@@ -1,5 +1,23 @@
 local utils = require("utils")
 local os = require("os")
+
+local SHELL_MANIFEST = {
+    is_mutation = false,
+    validate_payload = function(payload)
+        if not payload or utils.trim(payload) == "" then
+            return false, "shell payload is empty."
+        end
+        return true, nil
+    end,
+    estimate_complexity = function()
+        return "complex"
+    end,
+    enrich_result = function(output_str)
+        return output_str
+    end,
+    intent_guideline = "shell: Executes POSIX shell commands. Use for running tests, builds, file operations, and system commands.",
+}
+
 local function register(registry)
     registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts. (1) Safe whitelist bypasses human approval: ls, cat, grep, rg, echo, pwd, ps, find, head, tail, whoami, make, test, npm, cargo. All other commands require human-in-the-loop confirmation. (2) 10-minute timeout (60s) enforced via timeout wrapper — long-running commands are killed. (3) Output truncation: logs exceeding 1,000,000 bytes are truncated to the last 1MB; early output may be lost for very verbose commands. (4) Circuit breaker: if test/build/check commands fail 3 consecutive times, a warning is injected telling the agent to stop blind patching and read the source code first. (5) Exit codes are captured and reported for silent commands. (6) Output is streamed in real-time to the terminal but returned as a single concatenated string to the agent. (7) Interactive mode: use interactive=true to enable interactive CLI sessions (password entry, etc.). Returns WAITING_USER_INPUT signal when interactive input is needed.", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
         -- Parse arguments: support key=value style for interactive mode
@@ -159,6 +177,8 @@ local function register(registry)
             end
         end
         return { output = output }
-    end)
+    end,
+    SHELL_MANIFEST)
 end
+
 return { register = register }

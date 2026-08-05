@@ -752,7 +752,7 @@ describe("GROUP 14: Review prompt tool-specific checks", function()
         local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
         exec.intent = { TOOL = "create_file", raw = "test" }
         local prompt = exec:build_review_prompt()
-        assert.truthy(prompt:find("file created"), "create_file review prompt mentions file creation")
+        assert.truthy(prompt:find("file_content_after_create"), "create_file review prompt mentions file_content_after_create")
     end)
 
     it("delegate_plan review prompt mentions JSON and memo", function()
@@ -762,88 +762,5 @@ describe("GROUP 14: Review prompt tool-specific checks", function()
         local prompt = exec:build_review_prompt()
         assert.truthy(prompt:find("JSON"), "delegate_plan review prompt mentions JSON")
         assert.truthy(prompt:find("memo"), "delegate_plan review prompt mentions memo")
-    end)
-end)
-
--- ============================================================================
--- TEST GROUP 15: TOOL_MULTI_STAGE_DOCS centralization & empty-command detection
--- ============================================================================
-describe("GROUP 15: TOOL_MULTI_STAGE_DOCS centralization & empty-command detection", function()
-    local states = require("multi_stage_executor.states")
-
-    it("TOOL_MULTI_STAGE_DOCS table exists and has patch entry", function()
-        assert.truthy(states.TOOL_MULTI_STAGE_DOCS, "TOOL_MULTI_STAGE_DOCS table exists")
-        assert.truthy(states.TOOL_MULTI_STAGE_DOCS.patch, "TOOL_MULTI_STAGE_DOCS has 'patch' entry")
-        assert.truthy(states.TOOL_MULTI_STAGE_DOCS.patch:find("SEARCH/REPLACE"), "patch doc mentions SEARCH/REPLACE")
-    end)
-
-    it("TOOL_MULTI_STAGE_DOCS has create_file entry", function()
-        assert.truthy(states.TOOL_MULTI_STAGE_DOCS.create_file, "TOOL_MULTI_STAGE_DOCS has 'create_file' entry")
-        assert.truthy(states.TOOL_MULTI_STAGE_DOCS.create_file:find("file content"), "create_file doc mentions file content")
-    end)
-
-    it("TOOL_MULTI_STAGE_DOCS has delegate_plan entry", function()
-        assert.truthy(states.TOOL_MULTI_STAGE_DOCS.delegate_plan, "TOOL_MULTI_STAGE_DOCS has 'delegate_plan' entry")
-        assert.truthy(states.TOOL_MULTI_STAGE_DOCS.delegate_plan:find("JSON"), "delegate_plan doc mentions JSON")
-    end)
-
-    it("patch:path with no SEARCH block => has_payload=false", function()
-        local function detect_patch_payload(cmd)
-            local args_part = cmd:match("^patch:%s*(.*)")
-            if not args_part then return nil, nil end
-            local first_line = args_part:match("^[^\r\n]+")
-            local file_path = first_line and first_line:gsub("^%s*(.-)%s*$", "%1") or nil
-            local has_payload = args_part:find("<<<<<<< SEARCH") and true or false
-            return file_path, has_payload
-        end
-        local fp, hp = detect_patch_payload("patch:src/main.c")
-        assert.equals(fp, "src/main.c", "Extracts file path from patch command")
-        assert.equals(hp, false, "patch:path with no SEARCH block => has_payload=false")
-        fp, hp = detect_patch_payload("patch:src/main.c\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE")
-        assert.equals(fp, "src/main.c", "Extracts file path from patch with payload")
-        assert.equals(hp, true, "patch:path with SEARCH block => has_payload=true")
-    end)
-
-    it("create_file:path with no content => has_payload=false", function()
-        local function detect_create_file_payload(cmd)
-            local args_part = cmd:match("^create_file:%s*(.*)")
-            if not args_part or args_part:gsub("^%s*(.-)%s*$", "%1") == "" then return nil, false end
-            local first_line = args_part:match("^[^\r\n]+")
-            local file_path = first_line and first_line:gsub("^%s*(.-)%s*$", "%1") or nil
-            local rest = args_part:match("^[^\r\n]+\r?\n(.*)")
-            local has_payload = (rest and rest:gsub("^%s*(.-)%s*$", "%1") ~= "") and true or false
-            return file_path, has_payload
-        end
-        local fp2, hp2 = detect_create_file_payload("create_file:src/new.lua")
-        assert.equals(fp2, "src/new.lua", "Extracts file path from create_file command")
-        assert.equals(hp2, false, "create_file:path with no content => has_payload=false")
-        fp2, hp2 = detect_create_file_payload("create_file:src/new.lua\nlocal x = 1")
-        assert.equals(fp2, "src/new.lua", "Extracts file path from create_file with content")
-        assert.equals(hp2, true, "create_file:path with content => has_payload=true")
-    end)
-
-    it("multi_stage_executor prepends file_path to payload during execution", function()
-        local ctx = mock_ctx()
-        local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
-        exec.intent = { TOOL = "patch", raw = "test" }
-        exec.state = multi_stage.STATES.INTENT_READY
-        exec.file_path = "src/test.lua"
-        local step = exec:feed_response("<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE")
-        assert.equals(step.stage, "execute", "Moves to execute after valid payload")
-        assert.truthy(step.payload:find("^src/test.lua"), "file_path is prepended to effective_payload")
-        assert.truthy(step.payload:find("<<<<<<< SEARCH"), "SEARCH block is preserved in effective_payload")
-    end)
-
-    it("create_file with file_path prepending", function()
-        local ctx = mock_ctx()
-        local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
-        exec:reset()
-        exec.intent = { TOOL = "create_file", raw = "test" }
-        exec.state = multi_stage.STATES.INTENT_READY
-        exec.file_path = "src/new.lua"
-        local step = exec:feed_response("local x = 1")
-        assert.equals(step.stage, "execute", "Moves to execute after valid create_file payload")
-        assert.truthy(step.payload:find("^src/new.lua"), "file_path is prepended to create_file effective_payload")
-        assert.truthy(step.payload:find("local x = 1"), "Content is preserved in effective_payload")
     end)
 end)

@@ -1,4 +1,27 @@
 local utils = require("utils")
+local READ_FILE_MANIFEST = {
+    is_mutation = false,
+    validate_payload = function(payload)
+        return true, nil
+    end,
+    enrich_result = function(output_str, ctx, payload, intent, file_path)
+        local extra = ""
+        if file_path and file_path ~= "" then
+            local normalized = file_path
+            if not file_path:match("^/") then
+                normalized = utils.normalize_path(ctx.config.PROJECT_ROOT, file_path)
+            end
+            local content = ctx.knowledge_base[normalized]
+            if content then
+                extra = string.format("\n\n<file_content_after_read path=\"%s\">\n%s\n</file_content_after_read>", normalized, content)
+            end
+        end
+        return output_str .. extra
+    end,
+    generate_hint = "",
+    review_checks = "",
+    intent_guideline = "read_file: Loads full file content into context for analysis.",
+}
 local function register(registry)
     registry.register("read_file", "Loads full file into memory", "||| COMMAND |||\nread_file:src/main.c\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
@@ -30,6 +53,8 @@ local function register(registry)
                 return { output = "\n[ERROR]: " .. tostring(err) }
             end
         end
-    end)
+    end,
+    nil,
+    READ_FILE_MANIFEST)
 end
 return { register = register }

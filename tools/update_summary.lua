@@ -1,5 +1,16 @@
--- tools/update_summary.lua
 local utils = require("utils")
+local UPDATE_SUMMARY_MANIFEST = {
+    is_mutation = false,
+    validate_payload = function(payload)
+        return true, nil
+    end,
+    enrich_result = function(output)
+        return output
+    end,
+    generate_hint = "",
+    review_checks = "",
+    intent_guideline = "update_summary: Updates the task summary.",
+}
 local function register(registry)
     registry.register("update_summary", "Updates the high-level summary of the current task and its status. Use this to keep the context fresh for future turns.", "||| COMMAND |||\nupdate_summary:We have fixed the login bug. Now working on the dashboard.\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local summary = utils.trim(args)
@@ -8,7 +19,8 @@ local function register(registry)
         end
         ctx:update_summary(summary)
         return { output = "\n[SYSTEM]: Task summary updated successfully." }
-    end)
+    end,
+    nil,
+    UPDATE_SUMMARY_MANIFEST)
 end
 return { register = register }
-

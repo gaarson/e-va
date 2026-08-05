@@ -1,5 +1,18 @@
 local utils = require("utils")
 
+local OUTLINE_MANIFEST = {
+    is_mutation = false,
+    validate_payload = function(payload)
+        return true, nil
+    end,
+    enrich_result = function(output)
+        return output
+    end,
+    generate_hint = "",
+    review_checks = "",
+    intent_guideline = "outline: Generates an AST-like outline of a file (functions, classes, structs).",
+}
+
 local function register(registry)
     registry.register("outline", "Generates an AST-like outline of a file (functions, classes, structs)", "||| COMMAND |||\noutline:src/main.c\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
@@ -22,7 +35,9 @@ local function register(registry)
         end
 
         return { output = string.format("\n[SYSTEM OUTLINE FOR %s]:\n```\n%s\n```", rel_path, utils.trim(res)) }
-    end)
+    end,
+    nil,
+    OUTLINE_MANIFEST)
 end
 
 return { register = register }

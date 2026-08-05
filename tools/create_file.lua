@@ -1,40 +1,110 @@
 local utils = require("utils")
-local os = require("os")
-local states = require("multi_stage_executor.states")
-
-local function register(registry)
-    registry.register("create_file", "Creates or overwrites a file with new content", "||| COMMAND |||\ncreate_file:src/new.c\n#include <stdio.h>\nint main() { return 0; }\n||| END_COMMAND |||", function(args, ctx, agent_name)
-        local path, new_code = args:match("^([^%s]+)%s*\n(.*)")
-        if not path then
-            return { output = "\n[ERROR]: Invalid create_file syntax. Use ||| COMMAND |||\ncreate_file:path/to/file\n[code]\n||| END_COMMAND |||" }
+local CREATE_FILE_MANIFEST = {
+    is_mutation = true,
+    validate_payload = function(payload)
+        if not payload or utils.trim(payload) == "" then
+            return false, "create_file payload is empty."
         end
-
-        local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, path)
-        local full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
-
-        if utils.read_file_range(full_path) then
-            if ctx.config.CREATE_BACKUPS ~= false then
-                utils.copy_file(full_path, full_path .. ".bak")
+        return true, nil
+    end,
+    enrich_result = function(output_str, ctx, payload, intent, file_path)
+        local fp = file_path or ""
+        if fp == "" and payload then
+            local first_line = payload:match("^[^\r\n]+")
+            if first_line and utils.trim(first_line) ~= "" then
+                fp = utils.trim(first_line)
             end
         end
-
-        local dir_path = full_path:match("^(.*)/[^/]+$")
-        if dir_path and dir_path ~= "" then
-            os.execute("mkdir -p '" .. dir_path .. "' 2>/dev/null")
+        if fp == "" then return output_str end
+        local normalized = fp
+        if not fp:match("^/") then
+            normalized = utils.normalize_path(ctx.config.PROJECT_ROOT, fp)
         end
-
-        local ok, err = utils.write_file(full_path, new_code or "")
-        if ok then
-            ctx:add_file(rel_path, new_code or "")
+        local content = ctx.knowledge_base[normalized]
+        if content then
+            return output_str .. string.format("\n\n<file_content_after_create path=\"%s\">\n%s\n</file_content_after_create>", normalized, content)
+        end
+        return output_str .. string.format("\n\n[file_content_after_create path=\"%s\"] File not found in knowledge_base.", normalized)
+    end,
+    generate_hint = [[
+PAYLOAD FORMAT FOR `create_file`:
+Output ONLY the full file content. DO NOT include the file path.
+The file path is handled automatically by the system.
+RULES:
+- Output the complete file content from line 1 to the end.
+- Do NOT wrap in code fences. Do NOT add explanations.
+- Do NOT include the file path in your output.
+- Ensure proper syntax for the target language.
+]],
+    review_checks = [[
+TOOL-SPECIFIC REVIEW CHECKS FOR `create_file`:
+- [ ] Is the file content syntactically valid for the target language?
+- [ ] Does the file content match the stated intent/goal?
+- [ ] Are there any obvious bugs or issues in the generated code?
+- [ ] If the file is a module, does it have a proper return statement?
+- [ ] Does the <file_content_after_create> block reflect the intended content?
+- [ ] IF USING PARTIAL VERDICT: List which sections passed and which failed. Only revise the failed sections.
+]],
+    intent_guideline = "- `create_file`: Use when creating a NEW file. Specify the full file path.",
+    multi_stage_docs = [[
+This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FORM command: output ONLY `create_file:file/path` WITHOUT any file content. The system will automatically guide you through Intent → Generate → Review to produce the correct file content. DO NOT include file content in your initial command — the multi-stage pipeline will generate it for you after you specify the goal and file path.
+]],
+}
+local function register(registry)
+    registry.register("create_file", "Creates a new file with the given content.", "||| COMMAND |||\ncreate_file:src/new_module.lua\n\nlocal M = {}\nreturn M\n||| END_COMMAND |||", function(args, ctx, agent_name)
+        local lines = {}
+        for line in args:gmatch("([^\n]*)\n?") do
+            table.insert(lines, line)
+        end
+        local path_line = nil
+        local path_idx = nil
+        for i, l in ipairs(lines) do
+            if l:match("%S") then
+                path_line = l
+                path_idx = i
+                break
+            end
+        end
+        if not path_line then
+            return { output = "\n[ERROR]: Invalid create_file syntax. No file path provided." }
+        end
+        local file_content_lines = {}
+        for i = path_idx + 1, #lines do
+            table.insert(file_content_lines, lines[i])
+        end
+        local file_content = table.concat(file_content_lines, "\n")
+        if utils.trim(file_content) == "" then
+            return { output = "\n[ERROR]: Invalid create_file syntax. File content is empty." }
+        end
+        local path = utils.trim(path_line)
+        local rel_path
+        local full_path
+        if path:match("^/") then
+            full_path = path
+            rel_path = path
+        else
+            rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, path)
+            full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
+        end
+        -- Create parent directories if needed
+        local dir = full_path:match("(.+)/[^/]+$")
+        if dir then
+            os.execute(string.format("mkdir -p '%s'", dir))
+        end
+        if ctx.config.CREATE_BACKUPS ~= false and utils.file_exists(full_path) then
+            utils.copy_file(full_path, full_path .. ".bak")
+        end
+        local w_ok, w_err = utils.write_file(full_path, file_content)
+        if w_ok then
+            ctx:add_file(rel_path, file_content)
             ctx.file_states[rel_path] = "RECENTLY_MODIFIED"
             ctx:squash_last_mutation(agent_name)
-            return { output = string.format("\n[SUCCESS]: Created/Overwritten file %s.", rel_path), signal = "MUTATION_SUCCESS" }
+            return { output = string.format("\n[SUCCESS]: Created file %s (%d bytes).", rel_path, #file_content), signal = "MUTATION_SUCCESS" }
         else
-            return { output = "\n[ERROR]: " .. tostring(err) }
+            return { output = "\n[DISK ERROR]: " .. tostring(w_err) }
         end
     end,
-    [[When using multi-stage mode: output ONLY create_file:file/path in your COMMAND block WITHOUT any file content. The executor will generate the file content automatically through Intent -> Generate -> Review cycle. Only include file content if you want to skip multi-stage and execute directly.]],
-    states.TOOL_MULTI_STAGE_DOCS.create_file)
+    CREATE_FILE_MANIFEST.multi_stage_docs,
+    CREATE_FILE_MANIFEST)
 end
-
 return { register = register }

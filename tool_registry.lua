@@ -38,12 +38,18 @@ function M.split_tool_and_args(action_string)
     return tool_name, args
 end
 
-function M.register(name, description, usage, handler, multi_stage_doc)
+function M.register(name, description, usage, handler, multi_stage_doc, manifest)
     if type(handler) ~= "function" then
         logger.error("Failed to register tool: " .. name .. " (handler must be a function)")
         return
     end
-    M.tools[name] = { desc = description, usage = usage, exec = handler, multi_stage_doc = multi_stage_doc }
+    M.tools[name] = { desc = description, usage = usage, exec = handler, multi_stage_doc = multi_stage_doc, manifest = manifest }
+end
+--- Get the manifest table for a registered tool.
+function M.get_manifest(tool_name)
+    local tool = M.tools[tool_name]
+    if not tool then return nil end
+    return tool.manifest
 end
 
 local function is_tool_allowed(agent_cfg, tool_name)

@@ -104,27 +104,41 @@ end
 
 function M:build_intent_prompt(task, project_context)
     local tools_list = {}
-
+    local guidelines = {}
     for name, tool in pairs(registry.tools) do
         if registry.is_tool_allowed(self.ctx.config.AGENTS[self.agent_name], name) then
             tools_list[#tools_list + 1] = string.format("- %s: %s", name, tool.desc or "(no description)")
+            -- Collect intent guidelines from manifests
+            if tool.manifest and tool.manifest.intent_guideline then
+                guidelines[#guidelines + 1] = tool.manifest.intent_guideline
+            end
         end
     end
-
     table.sort(tools_list)
-
+    local guidelines_str = ""
+    if #guidelines > 0 then
+        guidelines_str = "\n\nTOOL SELECTION GUIDELINES:\n" .. table.concat(guidelines, "\n")
+    end
     return parsers.render(self.prompts.intent, {
         task_description     = task or "",
         project_context      = project_context or "",
         available_tools_list = table.concat(tools_list, "\n"),
+        tool_selection_guidelines = guidelines_str,
     })
-
 end
 
 
 function M:build_generate_prompt()
     local tool_name = self.intent and self.intent.TOOL or ""
-    local tool_hint = states.TOOL_GENERATE_HINTS[tool_name] or ""
+    local tool = registry.tools[tool_name]
+    local tool_hint = ""
+    if tool and tool.manifest then
+        if type(tool.manifest.generate_hint) == "function" then
+            tool_hint = tool.manifest.generate_hint()
+        elseif tool.manifest.generate_hint then
+            tool_hint = tool.manifest.generate_hint
+        end
+    end
     local hint_block = ""
     if tool_hint ~= "" then
         hint_block = "\n\n" .. tool_hint
@@ -144,9 +158,16 @@ end
 
 function M:build_review_prompt()
     local tool_name = self.intent and self.intent.TOOL or ""
-    local tool_checks = states.TOOL_REVIEW_CHECKS[tool_name] or ""
+    local tool = registry.tools[tool_name]
+    local tool_checks = ""
+    if tool and tool.manifest then
+        if type(tool.manifest.review_checks) == "function" then
+            tool_checks = tool.manifest.review_checks()
+        elseif tool.manifest.review_checks then
+            tool_checks = tool.manifest.review_checks
+        end
+    end
     local checks_block = ""
-
     if tool_checks ~= "" then
         checks_block = "\n\n" .. tool_checks
     end
@@ -465,72 +486,9 @@ function M:feed_execution_result(output)
     end
 
     local tool_name = self.intent and self.intent.TOOL or ""
-    if tool_name == "patch" then
-        local file_paths_list = {}
-        if self.file_path and self.file_path ~= "" then
-            file_paths_list[#file_paths_list + 1] = self.file_path
-        elseif self.payload then
-            local first_line = self.payload:match("^[^\r\n]+")
-            if first_line and utils.trim(first_line) ~= "" then
-                file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
-            end
-        end
-        for _, fp in ipairs(file_paths_list) do
-            local normalized = fp
-            if not fp:match("^/") then
-                normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
-            end
-            local content = self.ctx.knowledge_base[normalized]
-            if content then
-                enriched_result = enriched_result .. string.format("\n\n<file_content_after_patch path=\"%s\">\n%s\n</file_content_after_patch>", normalized, content)
-            else
-                enriched_result = enriched_result .. string.format("\n\n[file_content_after_patch path=\"%s\"] File not found in knowledge_base.", normalized)
-            end
-        end
-    elseif tool_name == "create_file" then
-        -- (c) create_file: verify file exists in knowledge_base and include its content
-        local fp = self.file_path
-        if not fp or fp == "" then
-            local first_line = self.payload:match("^[^\r\n]+")
-            if first_line then fp = utils.trim(first_line) end
-        end
-        if fp then
-            local normalized = fp
-            if not fp:match("^/") then
-                normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
-            end
-            local content = self.ctx.knowledge_base[normalized]
-            if content then
-                enriched_result = enriched_result .. string.format("\n\n<file_content_after_create path=\"%s\">\n%s\n</file_content_after_create>", normalized, content)
-            else
-                enriched_result = enriched_result .. string.format("\n\n[file_content_after_create path=\"%s\"] File not found in knowledge_base after creation.", normalized)
-            end
-        end
-    elseif tool_name == "read_file" then
-        -- (a) read_file: include the file content from knowledge_base
-        local fp = self.file_path
-        if not fp or fp == "" then
-            local first_line = self.payload:match("^[^\r\n]+")
-            if first_line then fp = utils.trim(first_line) end
-        end
-        if fp then
-            local normalized = fp
-            if not fp:match("^/") then
-                normalized = utils.normalize_path(self.ctx.config.PROJECT_ROOT, fp)
-            end
-            local content = self.ctx.knowledge_base[normalized]
-            if content then
-                enriched_result = enriched_result .. string.format("\n\n<file_content_after_read path=\"%s\">\n%s\n</file_content_after_read>", normalized, content)
-            else
-                enriched_result = enriched_result .. string.format("\n\n[file_content_after_read path=\"%s\"] File not found in knowledge_base.", normalized)
-            end
-        end
-    elseif tool_name == "search" then
-        -- (d) search: matched results are already in output, just ensure they're included
-        -- No additional enrichment needed; output already contains results
-    elseif tool_name == "shell" then
-        -- (b) shell: output is already included in enriched_result
-        -- No additional enrichment needed
+    local tool = registry.tools[tool_name]
+    if tool and tool.manifest and tool.manifest.enrich_result then
+        enriched_result = tool.manifest.enrich_result(enriched_result, self.ctx, self.payload, self.intent, self.file_path)
     end
 
     self.last_result = enriched_result

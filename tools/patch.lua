@@ -1,8 +1,92 @@
-
 local utils = require("utils")
 local patcher = require("patcher")
-local states = require("multi_stage_executor.states")
 
+local PATCH_MANIFEST = {
+    is_mutation = true,
+    validate_payload = function(payload)
+        if not payload or utils.trim(payload) == "" then
+            return false, "patch payload is empty."
+        end
+        if not payload:find("<<<<<<< SEARCH") then
+            return false, "patch payload must contain at least one SEARCH/REPLACE block."
+        end
+        if not payload:find(">>>>>>> REPLACE") then
+            return false, "patch payload has SEARCH block but no closing REPLACE marker."
+        end
+        return true, nil
+    end,
+    enrich_result = function(output_str, ctx, payload, intent, file_path)
+        local file_paths_list = {}
+        if file_path and file_path ~= "" then
+            file_paths_list[#file_paths_list + 1] = file_path
+        elseif payload then
+            local first_line = payload:match("^[^\r\n]+")
+            if first_line and utils.trim(first_line) ~= "" then
+                file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
+            end
+        end
+        local extra = ""
+        for _, fp in ipairs(file_paths_list) do
+            local normalized = fp
+            if not fp:match("^/") then
+                normalized = utils.normalize_path(ctx.config.PROJECT_ROOT, fp)
+            end
+            local content = ctx.knowledge_base[normalized]
+            if content then
+                extra = extra .. string.format("\n\n<file_content_after_patch path=\"%s\">\n%s\n</file_content_after_patch>", normalized, content)
+            else
+                extra = extra .. string.format("\n\n[file_content_after_patch path=\"%s\"] File not found in knowledge_base.", normalized)
+            end
+        end
+        return output_str .. extra
+    end,
+    generate_hint = [[
+PAYLOAD FORMAT FOR `patch`:
+Output ONLY SEARCH/REPLACE diff blocks. DO NOT include the file path.
+The file path is handled automatically by the system.
+
+<<<<<<< SEARCH
+<exact lines from the file, 2-4 lines of UNCHANGED context>
+<lines to replace>
+<more unchanged context>
+=======
+<exact same unchanged context lines>
+<new replacement lines>
+<same unchanged context lines>
+>>>>>>> REPLACE
+
+RULES:
+- SEARCH block MUST match the actual file content EXACTLY (character-for-character).
+- Include 2-4 lines of unchanged context around the change to make the match unique.
+- The unchanged context lines must appear IDENTICALLY in both SEARCH and REPLACE blocks.
+- Do NOT wrap in code fences. Do NOT add explanations.
+- Do NOT include the file path in your output.
+- If multiple changes in the same file, output multiple SEARCH/REPLACE blocks sequentially.
+]],
+    review_checks = [[
+TOOL-SPECIFIC REVIEW CHECKS FOR `patch`:
+- [ ] Does every SEARCH block contain 2-4 lines of unchanged context?
+- [ ] Would the SEARCH blocks match the actual file content exactly?
+- [ ] Are there zero-op patches (SEARCH == REPLACE)?
+- [ ] If multiple patches, is the application order correct?
+- [ ] Did the execution result confirm successful patching (no [PATCH FAILED])?
+- [ ] Are the changed lines syntactically valid for the target language?
+- [ ] If revision was requested, were the reviewer's corrections applied correctly?
+- [ ] Does the <file_content_after_patch> block reflect the intended changes?
+- [ ] IF <file_content_after_patch> IS PRESENT IN THE EXECUTION RESULT:
+     Compare the file content AFTER patching against the intended changes.
+     Verify that the REPLACE blocks were actually applied correctly in the resulting file.
+     Check that no unintended side effects occurred (e.g., broken indentation, missing lines).
+- [ ] IF --- UNIFIED DIFF --- IS PRESENT IN THE EXECUTION RESULT:
+     Verify the diff accurately represents the changes made.
+     Confirm that removed lines (-) and added lines (+) match the intended modification.
+- [ ] IF USING PARTIAL VERDICT: List which specific SEARCH/REPLACE blocks passed and which failed. Only revise the failed blocks.
+]],
+    intent_guideline = "- `patch`: Use when modifying an existing file. You MUST know the exact file content. Include sufficient SEARCH context.",
+    multi_stage_docs = [[
+This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FORM command: output ONLY `patch:file/path` WITHOUT any SEARCH/REPLACE blocks. The system will automatically guide you through Intent → Generate → Review to produce the correct payload. DO NOT include SEARCH/REPLACE blocks in your initial command — the multi-stage pipeline will generate them for you after you specify the goal and file path.
+]],
+}
 
 local function register(registry)
     registry.register("patch", "Applies diffs to code. REQUIRES 1-2 lines of unchanged surrounding code (MUC) in the SEARCH block to make the match unique. Do not emit zero-op patches.", "||| COMMAND |||\npatch:src/main.c\n<<<<<<< SEARCH\n unchanged context\n code to remove\n unchanged context\n=======\n unchanged context\n code to add\n unchanged context\n>>>>>>> REPLACE\n||| END_COMMAND |||", function(args, ctx, agent_name)
@@ -13,7 +97,6 @@ local function register(registry)
         for line in args:gmatch("([^\n]*)\n?") do
             table.insert(lines, line)
         end
-
 
         -- Find first non-empty line as path
         local path_line = nil
@@ -26,11 +109,9 @@ local function register(registry)
             end
         end
 
-
         if not path_line then
             return { output = "\n[ERROR]: Invalid patch syntax. No file path provided. Use ||| COMMAND |||\npatch:file\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n\n||| END_COMMAND |||" }
         end
-
 
         -- Everything after the path line is the patch body
 
@@ -46,9 +127,7 @@ local function register(registry)
             return { output = "\n[ERROR]: Invalid patch syntax. Patch body is empty. Use ||| COMMAND |||\npatch:file\n<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n\n||| END_COMMAND |||" }
         end
 
-
         local path = utils.trim(path_line)
-
 
         -- Handle absolute vs relative paths
         local rel_path
@@ -64,13 +143,11 @@ local function register(registry)
             full_path = ctx.config.PROJECT_ROOT .. "/" .. rel_path
         end
 
-
         if not ctx.knowledge_base[rel_path] then
             local content = utils.read_file_range(full_path)
             if content then ctx:add_file(rel_path, content)
             else return { output = "\n[ERROR] File not found on disk: " .. rel_path } end
         end
-
 
         local ok, new_content, changes_or_err, diff_str = patcher.apply_patch(ctx.knowledge_base[rel_path], patch_body)
         if ok then
@@ -135,8 +212,8 @@ local function register(registry)
         end
 
     end,
-    [[When using multi-stage mode: output ONLY patch:file/path in your COMMAND block WITHOUT any SEARCH/REPLACE blocks. The executor will generate the payload automatically through Intent -> Generate -> Review cycle. Only include SEARCH/REPLACE blocks if you want to skip multi-stage and execute directly.]],
-    states.TOOL_MULTI_STAGE_DOCS.patch)
+    PATCH_MANIFEST.multi_stage_docs,
+    PATCH_MANIFEST)
 end
 
 return { register = register }

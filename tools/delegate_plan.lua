@@ -1,14 +1,66 @@
 local utils = require("utils")
 local json = require("JSON")
 local logger = require("logger")
-
+local DELEGATE_PLAN_MANIFEST = {
+    is_mutation = false,
+    validate_payload = function(payload)
+        if not payload or utils.trim(payload) == "" then
+            return false, "delegate_plan payload is empty."
+        end
+        local ok, parsed = pcall(function() return json:decode(payload) end)
+        if not ok or type(parsed) ~= "table" then
+            return false, "delegate_plan payload must be valid JSON."
+        end
+        if not parsed.plan or type(parsed.plan) ~= "table" or #parsed.plan == 0 then
+            return false, "delegate_plan payload must contain a non-empty 'plan' array."
+        end
+        if not parsed.memo or utils.trim(parsed.memo) == "" then
+            return false, "delegate_plan payload must contain a non-empty 'memo' field."
+        end
+        return true, nil
+    end,
+    estimate_complexity = function()
+        return "complex"
+    end,
+    enrich_result = function(output)
+        return output
+    end,
+    generate_hint = [[
+PAYLOAD FORMAT FOR `delegate_plan`:
+Output ONLY valid JSON with "plan" (array of {file, instruction}) and "memo" (rich context).
+Do NOT wrap in code fences. Do NOT add explanations.
+{
+  "plan": [
+    {"file": "src/main.c", "instruction": "Fix bounds checking"},
+    {"file": "src/utils.c", "instruction": "Add helper function"}
+  ],
+  "memo": "Detailed context for the receiving agent about what needs to be done and why."
+}
+RULES:
+- Each instruction must be atomic and verifiable.
+- The memo is the MOST IMPORTANT field - it carries all context to the receiving agent.
+- Make the memo rich enough for a blind agent to understand the context.
+]],
+    review_checks = [[
+TOOL-SPECIFIC REVIEW CHECKS FOR `delegate_plan`:
+- [ ] Is the payload valid JSON?
+- [ ] Does the 'plan' array contain at least one step?
+- [ ] Does each step have a 'file' and 'instruction' field?
+- [ ] Is the 'memo' field rich and descriptive enough for the receiving agent?
+- [ ] Are the instructions atomic and verifiable?
+- [ ] If revision was requested, were the reviewer's corrections applied correctly?
+]],
+    intent_guideline = "- `delegate_plan`: Use when delegating work to another agent. Describe what the receiving agent needs to accomplish and what context they need.",
+    multi_stage_docs = [[
+This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FORM command: output ONLY `delegate_plan:` WITHOUT any JSON payload. The system will automatically guide you through Intent → Generate → Review to produce the correct payload. DO NOT include JSON in your initial command — the multi-stage pipeline will generate it for you after you specify the goal and delegation scope.
+]],
+}
 local function register(registry)
     registry.register("delegate_plan", "Pass execution plan to next stage (JSON Object)", "||| COMMAND |||\ndelegate_plan:\n{\n  \"plan\": [{\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking\"}],\n  \"memo\": \"Context for coder\"\n}\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local json_match = utils.trim(args:gsub("`+", ""))
         local status, payload = pcall(function() return json:decode(json_match) end)
         local plan = nil
         local memo_text = ""
-        
         if status and type(payload) == "table" then
             if type(payload.plan) == "table" then
                 plan = payload.plan
@@ -17,15 +69,12 @@ local function register(registry)
                 plan = payload
             end
         end
-        
         if type(plan) == "table" and #plan > 0 then
             ctx.execution_plan = plan
             ctx.current_task_index = 1
-            
             if type(memo_text) == "string" and memo_text ~= "" then
                 ctx.handoff_memo = utils.trim(memo_text)
             end
-            
             -- НОВЫЙ: Автоматически подгружаем файлы из плана
             local loaded_files = {}
             local pinned_files_list = {}
@@ -64,24 +113,12 @@ local function register(registry)
                     auto_msg = auto_msg .. "  - " .. pf .. "\n"
                 end
             end
-            
             return { output = "\n[SYSTEM]: Plan delegated successfully." .. auto_msg, signal = "PIPELINE_NEXT_STAGE" }
         end
-        
         local debug_snip = json_match:sub(1, 100) .. "..."
         return { output = "\n[ERROR]: Invalid JSON plan format. Engine saw: " .. debug_snip, signal = nil }
     end,
-    [[
-    MULTI-STAGE GUIDE FOR `delegate_plan`:
-    1. INTENT PHASE: In PAYLOAD_HINT, describe delegation scope - target agent, files, and overall goal.
-       Example: "Delegate to CODER: implement 3 functions in src/parser.lua. Memo includes grammar rules."
-    2. GENERATE PHASE: Output ONLY valid JSON with "plan" (array of {file, instruction}) and "memo" (rich context).
-       If revising, fix JSON syntax, add missing files, or enrich the memo.
-    3. CRITICAL: The memo is the MOST IMPORTANT field - it carries all context to the receiving agent.
-       Each instruction must be atomic and verifiable.
-    
-    ]]
-)
+    DELEGATE_PLAN_MANIFEST.multi_stage_docs,
+    DELEGATE_PLAN_MANIFEST)
 end
-
 return { register = register }

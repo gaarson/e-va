@@ -36,11 +36,7 @@ SUCCESS_CRITERIA: <concrete, verifiable success criteria>
 </INTENT>
 
 
-TOOL SELECTION GUIDELINES:
-- `patch`: Use when modifying an existing file. You MUST know the exact file content. Include sufficient SEARCH context.
-- `create_file`: Use when creating a brand-new file. Provide complete, valid file content.
-- `delegate_plan`: Use to delegate work to another agent (CODER). Provide a structured plan with memo context.
-
+{tool_selection_guidelines}
 Rules:
 
 1. GOAL — one specific goal, concrete.

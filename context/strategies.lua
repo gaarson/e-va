@@ -3,6 +3,7 @@
 local M = {}
 local utils = require("utils")
 local config = require("context.config")
+local registry = require("tool_registry")
 -- Re-export IMPORTANCE_SCORES from config for backward compatibility
 M.IMPORTANCE_SCORES = config.IMPORTANCE_SCORES
 -- ============================================================================
@@ -90,20 +91,28 @@ M.PRUNE_STRATEGIES = {
             for i = 1, #history - 5 do
                 if history[i] and history[i].role == "assistant" then
                     local c = history[i].content or ""
-                    if c:match("||| COMMAND |||\npatch:") or c:match("||| COMMAND |||\ncreate_file:") then
+                    -- Dynamic detection: check if any mutation tool commands exist
+                    local has_mutation = false
+                    for tool_name in c:gmatch("||| COMMAND |||\n([%w_]+):") do
+                        local tool = registry.tools[tool_name]
+                        if tool and tool.manifest and tool.manifest.is_mutation then
+                            has_mutation = true
+                            break
+                        end
+                    end
+                    if has_mutation then
                         -- Strip command blocks from assistant message, preserving reasoning
                         local squashed = c
-                        local patched_files = {}
-                        local created_files = {}
-                        squashed = squashed:gsub("||| COMMAND |||\npatch:([^%\s\n]+)%s*\n.-||| END_COMMAND |||",
-                            function(file_path)
-                                table.insert(patched_files, file_path or "unknown")
-                                return ""
-                            end)
-                        squashed = squashed:gsub("||| COMMAND |||\ncreate_file:([^%\s\n]+)%s*\n.-||| END_COMMAND |||",
-                            function(file_path)
-                                table.insert(created_files, file_path or "unknown")
-                                return ""
+                        local mutation_files = {}  -- { tool = "patch", file = "src/main.c" }
+                        squashed = squashed:gsub("||| COMMAND |||\n([%w_]+):([^%s\n\r]*)\n([^\n]*(\n[^\n]*)*)\n?||| END_COMMAND |||",
+                            function(tool_name, file_path, body)
+                                local tool = registry.tools[tool_name]
+                                if tool and tool.manifest and tool.manifest.is_mutation then
+                                    table.insert(mutation_files, { tool = tool_name, file = utils.trim(file_path) or "unknown" })
+                                    return ""
+                                end
+                                -- Not a mutation tool, keep the command block
+                                return "||| COMMAND |||\n" .. tool_name .. ":" .. file_path .. "\n" .. body .. "||| END_COMMAND |||"
                             end)
                         squashed = squashed:gsub("\n\n+", "\n\n"):gsub("^%s+", ""):gsub("%s+$", "")
                         if squashed ~= "" then
@@ -113,11 +122,9 @@ M.PRUNE_STRATEGIES = {
                         end
                         -- Build system memory annotation
                         local mem_parts = {}
-                        for _, f in ipairs(patched_files) do
-                            table.insert(mem_parts, string.format("Patch applied to '%s'.", f))
-                        end
-                        for _, f in ipairs(created_files) do
-                            table.insert(mem_parts, string.format("File created '%s'.", f))
+                        for _, mf in ipairs(mutation_files) do
+                            local action = mf.tool == "patch" and "Patch applied to" or "Mutation applied to"
+                            table.insert(mem_parts, string.format("%s '%s' (via %s).", action, mf.file, mf.tool))
                         end
                         local mem_content = "<system-memory>" .. table.concat(mem_parts, " ") .. "</system-memory>"
                         table.insert(history, i + 1, { role = "system", content = mem_content })

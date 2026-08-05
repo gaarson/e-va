@@ -1,3 +1,15 @@
+local TASK_COMPLETE_MANIFEST = {
+    is_mutation = false,
+    validate_payload = function(payload)
+        return true, nil
+    end,
+    enrich_result = function(output_str)
+        return output_str
+    end,
+    generate_hint = "",
+    review_checks = "",
+    intent_guideline = "task_complete: Signals that the current task is finished.",
+}
 local function register(registry)
     registry.register("task_complete", "Signal completion of the current task step", "||| COMMAND |||\ntask_complete\n||| END_COMMAND |||", function(args, ctx, agent_name)
         if ctx.execution_plan and #ctx.execution_plan > 0 then
@@ -5,7 +17,6 @@ local function register(registry)
                 local old_idx = ctx.current_task_index
                 ctx.current_task_index = ctx.current_task_index + 1
                 local next_task = ctx.execution_plan[ctx.current_task_index]
-
                 return {
                     output = string.format("\n[SYSTEM]: Step %d/%d complete. Moving to step %d. New target loaded: %s",
                                            old_idx, #ctx.execution_plan, ctx.current_task_index, tostring(next_task.file)),
@@ -20,7 +31,8 @@ local function register(registry)
         else
             return { output = "\n[SYSTEM]: Task marked as complete.", signal = "PIPELINE_NEXT_STAGE" }
         end
-    end)
+    end,
+    nil,
+    TASK_COMPLETE_MANIFEST)
 end
-
 return { register = register }

@@ -8,6 +8,7 @@ local compressor = require("context_compressor")
 local logger = require("logger")
 local config_mod = require("context.config")
 local strategies_mod = require("context.strategies")
+local registry = require("tool_registry")
 -- ============================================================================
 -- MESSAGE HISTORY
 -- ============================================================================
@@ -144,19 +145,17 @@ function M.squash_last_mutation(ctx, agent_name)
         if msg.role == "assistant" then
             local original = msg.content or ""
             local squashed = original
-            local patched_files = {}
-            local created_files = {}
-            -- Handle patch commands: collect file paths and strip command blocks
-            squashed = squashed:gsub("||| COMMAND |||\npatch:([^%s\n]+)%s*\n.-||| END_COMMAND |||",
-                function(file_path)
-                    table.insert(patched_files, file_path or "unknown")
-                    return ""
-                end)
-            -- Handle create_file commands: collect file paths and strip command blocks
-            squashed = squashed:gsub("||| COMMAND |||\ncreate_file:([^%s\n]+)%s*\n.-||| END_COMMAND |||",
-                function(file_path)
-                    table.insert(created_files, file_path or "unknown")
-                    return ""
+            local mutation_files = {}  -- { tool = "patch", file = "src/main.c" }
+            -- Dynamic tool detection: parse tool name from command blocks and check manifest.is_mutation
+            squashed = squashed:gsub("||| COMMAND |||\n([%w_]+):([^%s\n\r]*)\n([^\n]*(\n[^\n]*)*)\n?||| END_COMMAND |||",
+                function(tool_name, file_path, body)
+                    local tool = registry.tools[tool_name]
+                    if tool and tool.manifest and tool.manifest.is_mutation then
+                        table.insert(mutation_files, { tool = tool_name, file = utils.trim(file_path) or "unknown" })
+                        return ""
+                    end
+                    -- Not a mutation tool, keep the command block
+                    return "||| COMMAND |||\n" .. tool_name .. ":" .. file_path .. "\n" .. body .. "||| END_COMMAND |||"
                 end)
             squashed = utils.trim(squashed:gsub("\n\n+", "\n\n"))
             if original ~= squashed then
@@ -164,11 +163,9 @@ function M.squash_last_mutation(ctx, agent_name)
                 history[i].content = squashed
                 -- Build system memory annotation from collected file paths
                 local mem_parts = {}
-                for _, f in ipairs(patched_files) do
-                    table.insert(mem_parts, string.format("Patch applied to '%s'.", f))
-                end
-                for _, f in ipairs(created_files) do
-                    table.insert(mem_parts, string.format("File created '%s'.", f))
+                for _, mf in ipairs(mutation_files) do
+                    local action = mf.tool == "patch" and "Patch applied to" or "Mutation applied to"
+                    table.insert(mem_parts, string.format("%s '%s' (via %s).", action, mf.file, mf.tool))
                 end
                 local mem_content = "<system-memory>" .. table.concat(mem_parts, " ") .. "</system-memory>"
                 -- Insert a separate system message AFTER the assistant message

@@ -1,5 +1,18 @@
 local utils = require("utils")
 
+local READ_CHUNK_MANIFEST = {
+    is_mutation = false,
+    validate_payload = function(payload)
+        return true, nil
+    end,
+    enrich_result = function(output_str)
+        return output_str
+    end,
+    generate_hint = "",
+    review_checks = "",
+    intent_guideline = "read_chunk: Reads specific line ranges from a file. Use when you only need a portion of a large file.",
+}
+
 local function register(registry)
     registry.register("read_chunk", "Reads specific lines from a file", "||| COMMAND |||\nread_chunk:src/main.c:10-25\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local path, start_l, end_l = args:match("^(.-):(%d+)%-(%d+)$")
@@ -46,7 +59,7 @@ local function register(registry)
         else
             return { output = "[ERROR] Usage: read_chunk:filename:start-end" }
         end
-    end)
+    end, nil, READ_CHUNK_MANIFEST)
 end
 
 return { register = register }

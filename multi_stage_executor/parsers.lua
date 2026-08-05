@@ -66,29 +66,12 @@ local function validate_payload(tool_name, payload)
     if not payload or utils.trim(payload) == "" then
         return false, "Payload is empty."
     end
-    if tool_name == "delegate_plan" then
-        local json = require("JSON")
-        local ok, data = pcall(json.decode, payload)
+    -- Try manifest-based validation first
+    local tool = registry.tools[tool_name]
+    if tool and tool.manifest and tool.manifest.validate_payload then
+        local ok, err = tool.manifest.validate_payload(payload)
         if not ok then
-            return false, "delegate_plan payload is not valid JSON: " .. tostring(data)
-        end
-        if not data.plan or type(data.plan) ~= "table" then
-            return false, "delegate_plan payload missing 'plan' array."
-        end
-        if not data.memo or utils.trim(data.memo) == "" then
-            return false, "delegate_plan payload missing or empty 'memo' field."
-        end
-    elseif tool_name == "patch" then
-        if not payload:find("<<<<<<< SEARCH") then
-            return false, tool_name .. " payload must contain at least one SEARCH/REPLACE block."
-        end
-        if not payload:find(">>>>>>> REPLACE") then
-            return false, tool_name .. " payload has SEARCH block but no closing REPLACE marker."
-        end
-    elseif tool_name == "create_file" then
-        local first_line = payload:match("^[^\r\n]+")
-        if not first_line or utils.trim(first_line) == "" then
-            return false, "create_file payload must start with a file path."
+            return false, err or ("Validation failed for tool '" .. tool_name .. "'.")
         end
     end
     return true, nil
@@ -142,6 +125,12 @@ end
 
 --- Estimate task complexity
 local function estimate_complexity(tool_name, payload_hint, file_path)
+    -- Try manifest-based complexity estimation first
+    local tool = registry.tools[tool_name]
+    if tool and tool.manifest and tool.manifest.estimate_complexity then
+        return tool.manifest.estimate_complexity(tool_name, payload_hint, file_path)
+    end
+    -- Fallback heuristic logic
     -- (b) delegate_plan and shell are always complex
     if tool_name == "delegate_plan" or tool_name == "shell" then
         return "complex"
