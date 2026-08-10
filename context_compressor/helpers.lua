@@ -69,7 +69,7 @@ function M._extract_critical_entities(content)
     entities.files = unique_files
     -- Cap files to 10 maximum
     if #entities.files > 10 then
-        entities.files = { unpack(entities.files, 1, 10) }
+        entities.files = { table.unpack(entities.files, 1, 10) }
     end
     -- Extract error messages (lines with ERROR, FAILED, FAILURE, error:, failed:)
     for line in clean_content:gmatch("[^\r\n]+") do
@@ -93,7 +93,7 @@ function M._extract_critical_entities(content)
     end
     -- Cap errors to 5 maximum
     if #entities.errors > 5 then
-        entities.errors = { unpack(entities.errors, 1, 5) }
+        entities.errors = { table.unpack(entities.errors, 1, 5) }
     end
     -- Deduplicate errors
     local seen_errors = {}
