@@ -1,5 +1,5 @@
+local ui = require("ui")
 local M = {}
-
 --- Gets the state file path based on config
 -- @param config: The configuration table
 -- @return string: Path to the state file
@@ -37,23 +37,20 @@ function M.restore_session(state_file, ctx, utils)
         return false
     end
 
-    io.write("\n\27[33m[SYSTEM] Previous session found. Continue (y) or start new (n)?\27[0m ")
-    io.flush()
-    local user_choice = io.read("*l")
-
-    if user_choice and (user_choice:lower() == "y" or user_choice:lower() == "yes") then
+    local should_restore = ui.security_prompt.confirm_session_restore()
+    if should_restore then
         local content = utils.read_file_range(state_file)
         if content and ctx:load_from_snapshot(content) then
-            print("\n\27[32m[SYSTEM] Restored previous session.\27[0m")
+            ui.print_success("[SYSTEM] Restored previous session.")
             return true
         else
-            print("\n\27[31m[SYSTEM] Failed to restore session. Starting fresh.\27[0m")
+            ui.print_error("[SYSTEM] Failed to restore session. Starting fresh.")
             return false
         end
     else
         -- User chose not to continue: delete state file and start fresh
         os.remove(state_file)
-        print("\n\27[36m[SYSTEM] Discarded previous session. Starting fresh.\27[0m")
+        ui.printer.line("\n[SYSTEM] Discarded previous session. Starting fresh.")
         return false
     end
 end

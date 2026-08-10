@@ -1,6 +1,7 @@
 local utils = require("utils")
 local socket = require("socket")
 local json = require("JSON")
+local ui = require("ui")
 local llm = require("llm_handler")
 local logger = require("logger")
 local status_server = require("status_server")
@@ -55,15 +56,14 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     local messages = context_data.messages
     local total_ctx_tokens = context_data.total_tokens
     logger.info(string.format("[TURN DIAG] build_context: %.3fs elapsed, tokens=%d", build_elapsed, total_ctx_tokens))
-
-    logger.log_context(turn, agent_name .. "_PROMPT", json:encode({
-        turn = turn, agent = agent_name, tokens = total_ctx_tokens, payload = messages
-    }))
+  
+    --- LLOOGG TO FILE
+    -- logger.log_context(turn, agent_name .. "_PROMPT", json:encode({
+    --     turn = turn, agent = agent_name, tokens = total_ctx_tokens, payload = messages
+    -- }))
     logger.info(string.format("[TURN %d] Agent: %s | Active Context Tokens: ~%d / %d", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
-
-    print(string.format("\n\27[90m[Turn %d | Agent: %s | Tokens: ~%d/%d]\27[0m", turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT))
-
-    io.write(string.format("\n\27[35m>>> AI (%s):\27[0m ", tostring(agent_name)))
+    ui.print_turn_header(turn, tostring(agent_name), total_ctx_tokens, limits.MAX_CONTEXT)
+    ui.print_ai_prompt(tostring(agent_name))
     local printer = utils.stream_token_printer(agent_cfg)
     local response_data, err
     status_server.add_log(string.format("Turn %d started for agent %s", turn, agent_name))
@@ -85,7 +85,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                 logger.warn(string.format("\n[NETWORK INCIDENT] LLM API Error (Attempt %d/%d): %s", attempt, max_retries, tostring(err)))
             end
             if attempt < max_retries then
-                print(string.format("\n\27[33m[NETWORK RETRY %d/%d] Retrying in %d seconds...\27[0m", attempt, max_retries, retry_delay))
+                ui.printer.retry_message(attempt, max_retries, retry_delay)
                 socket.sleep(retry_delay)
                 retry_delay = retry_delay * 3
             end
@@ -95,11 +95,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
             logger.log_messages_pretty(messages, turn, agent_name, ctx)
             interruption_retries = interruption_retries + 1
             if interruption_retries > MAX_INTERRUPTION_RETRIES then break end
-            print("\n\27[33m[SYSTEM] Generation interrupted. Provide additional context or corrections (or press Enter to continue):\27[0m")
-            local user_input = io.read("*l")
-            if user_input and user_input ~= "" then
-                table.insert(messages, { role = "user", content = user_input })
-            end
+            ui.interrupt.handle_interruption(messages, agent_name)
             response_data = nil
         else break end
     end
@@ -114,20 +110,14 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         status_server.add_log(string.format("Turn %d ERROR: Network unreachable for agent %s (URL=%s, Model=%s)",
             turn, agent_name, agent_cfg.url or "UNSET", agent_cfg.model or "UNSET"))
         -- Print colored [FATAL FAILURE] block
-        io.stderr:write("\n\27[31m========================================\27[0m\n")
-        io.stderr:write("\27[31m     [FATAL FAILURE]\27[0m\n")
-        io.stderr:write("\27[31m========================================\27[0m\n")
-        io.stderr:write(string.format("\27[31m  Agent: %s\27[0m\n", agent_name))
-        io.stderr:write(string.format("\27[31m  Turn: %d\27[0m\n", turn))
-        io.stderr:write(string.format("\27[31m  URL: %s\27[0m\n", agent_cfg.url or "UNSET"))
-        io.stderr:write(string.format("\27[31m  Model: %s\27[0m\n", agent_cfg.model or "UNSET"))
-        io.stderr:write(string.format("\27[31m  Error: %s\27[0m\n", tostring(err or "nil")))
-        io.stderr:write("\27[31m  Troubleshooting:\27[0m\n")
-        io.stderr:write("\27[31m    1. Check if LLM server is running: curl <URL>\27[0m\n")
-        io.stderr:write("\27[31m    2. Verify API key in .env file\27[0m\n")
-        io.stderr:write("\27[31m    3. Check network connectivity from container\27[0m\n")
-        io.stderr:write("\27[31m    4. Review agent logs: sandbox-workspace/.e-va-conf/agent-logs/\27[0m\n")
-        io.stderr:write("\27[31m========================================\27[0m\n")
+        ui.print_fatal_block({
+            Agent = agent_name,
+            Turn = tostring(turn),
+            URL = agent_cfg.url or "UNSET",
+            Model = agent_cfg.model or "UNSET",
+            Error = tostring(err or "nil"),
+            Troubleshooting = "1. Check LLM server, 2. Verify API key, 3. Check network, 4. Review logs"
+        })
         return "ERROR"
     end
     -- Token usage tracking
@@ -144,7 +134,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     -- HANDLE TIMED-OUT RESPONSES
     if response_data.timed_out then
         logger.warn(string.format("[STREAM TIMEOUT] Partial response received (%d chars). Stream timed out but content is usable.", #(content or 0)))
-        print(string.format("\n\27[33m[WARNING] Stream timed out after %d chars of content. Response may be incomplete.\27[0m", #(content or 0)))
+        ui.print_warning(string.format("Stream timed out after %d chars of content. Response may be incomplete.", #(content or 0)))
     end
 
     -- SELECTIVE MULTI-STAGE ROUTING (Two-phase tool invocation)
@@ -301,7 +291,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
 
         if not recovered_content or utils.trim(recovered_content) == "" then
             logger.error(string.format("[EMPTY RESPONSE] Failed after recovery attempts (reason: %s). Giving up.", failure_reason))
-            print(string.format("\27[31m[SYSTEM] LLM consistently returning empty responses (classified: %s). Please check your LLM server.\27[0m", failure_reason))
+            ui.print_error(string.format("LLM consistently returning empty responses (classified: %s). Please check your LLM server.", failure_reason))
             return "ERROR"
         end
 

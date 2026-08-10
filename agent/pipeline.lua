@@ -1,4 +1,6 @@
 local status_server = require("status_server")
+local ui = require("ui")
+local strings = require("utils.strings")
 local M = {}
 --- Executes the pipeline: iterates through stages, handles interactive/parallel/sequential modes,
 --- handoff logic, and loop-back mechanism.
@@ -48,7 +50,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
             total_stages = #config.PIPELINE,
             state = "running"
         })
-        print(string.format("\n\27[96m\27[1m=======================================================================\27[0m\n\27[93m [STAGE %d/%d] %s \27[0m\n\27[96m\27[1m=======================================================================\27[0m\n", current_stage_idx, #config.PIPELINE, tostring(stage.stage)))
+        ui.print_stage_header(current_stage_idx, #config.PIPELINE, tostring(stage.stage))
 
         local stage_complete = false
 
@@ -70,50 +72,50 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
                 elseif type(stage.agents) == "string" then target_agent = stage.agents end
 
                 logger.info(string.format("[INTERACTIVE MODE] Hooked to agent: %s", target_agent))
-                io.write("\n\27[36m=== HUMAN-IN-THE-LOOP (HITL) SESSION ===\27[0m\n")
-                io.write("Type your message. Commands: '/go' (next), '/back' (prev), '/mode <stage_name>', '/exit' (abort).\n")
-
+                ui.pipeline_ui.start_hitl_session(target_agent)
                 while true do
-                    io.write(string.format("\n\27[36m>>> USER -> %s:\27[0m ", target_agent))
-                    local user_input = io.read("*l")
-
-                    if not user_input or user_input == "/exit" then
-                        print("\n\27[31m[SYSTEM] User aborted the execution.\27[0m")
+                    local user_input = ui.pipeline_ui.get_user_input(target_agent)
+                    if not user_input or strings.trim(user_input) == "" or strings.trim(user_input) == "/exit" then
+                        ui.print_error("User aborted the execution.")
                         os.exit(0)
                     end
-
-                    -- Handle control commands
-                    if user_input == "/go" then
-                        print("\n\27[32m[SYSTEM] Moving to the next pipeline stage...\27[0m")
+                    -- Handle control commands via centralized parser
+                    local cmd = ui.pipeline_ui.parse_command(user_input, config)
+                    if cmd.action == "NEXT_STAGE" then
+                        ui.print_success(cmd.message)
                         stage_complete = true
                         break
-                    elseif user_input == "/back" then
+                    elseif cmd.action == "PREV_STAGE" then
                         if current_stage_idx > 1 then
-                            print("\n\27[32m[SYSTEM] Moving back to previous stage...\27[0m")
+                            ui.print_success(cmd.message)
                             current_stage_idx = current_stage_idx - 1
                             stage_complete = true
                             break
                         else
-                            print("\n\27[33m[SYSTEM] Cannot go back further.\27[0m")
+                            ui.print_warning("Cannot go back further.")
                         end
-                    elseif user_input:match("^/mode%s*(%S+)") then
-                        local mode_name = user_input:match("^/mode%s*(%S+)")
-                        local found_idx = nil
-                        for i, s in ipairs(config.PIPELINE) do
-                            if s.stage == mode_name then
-                                found_idx = i
-                                break
-                            end
-                        end
-                        if found_idx then
-                            print(string.format("\n\27[32m[SYSTEM] Switching to stage: %s\27[0m", mode_name))
-                            current_stage_idx = found_idx
-                            stage_complete = true
-                            break
-                        else
-                            print(string.format("\n\27[31m[SYSTEM] Stage '%s' not found in pipeline.\27[0m", mode_name))
-                        end
-                    elseif user_input ~= "" and user_input:gsub("^%s*(.-)%s*$", "%1") ~= "" then
+                    elseif cmd.action == "SWITCH_STAGE" then
+                        ui.print_success(cmd.message)
+                        current_stage_idx = cmd.target_idx
+                        stage_complete = true
+                        break
+                    elseif cmd.action == "STATUS" then
+                        local status_info = string.format("Turn: %d | Stage: %d/%d (%s) | Agent: %s",
+                            turn, current_stage_idx, #config.PIPELINE,
+                            tostring(stage.stage), last_active_agent or "none")
+                        ui.printer.banner("[STATUS]", ui.colors.blue)
+                        ui.printer.line("  " .. status_info)
+                        ui.printer.line("")
+                    elseif cmd.action == "HELP" then
+                        ui.pipeline_ui.print_help()
+                    elseif cmd.action == "ABORT" then
+                        ui.print_error(cmd.message or "User aborted the execution.")
+                        os.exit(0)
+                    elseif cmd.action == "SKIP" then
+                        -- Empty input, just continue the loop
+                    elseif cmd.action == "ERROR" then
+                        ui.print_error(cmd.message)
+                    elseif cmd.action == "MESSAGE" and strings.trim(user_input) ~= "" then
                         ctx:add_message(target_agent, "user", user_input)
                         local sig = run_agent_turn_fn(target_agent, config.AGENTS[target_agent], turn, ctx, config, save_state)
                         local auto_loop_count = 0
@@ -124,22 +126,21 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
                             turn = turn + 1
                             logger.info(string.format("[AUTO-LOOP %d/%d] Agent continuing execution...", auto_loop_count, MAX_AUTO_LOOP))
                             if auto_loop_count % 10 == 0 then
-                                print(string.format("\n\27[90m[Auto-loop: %d iterations, Agent: %s]\27[0m", auto_loop_count, target_agent))
+                                ui.printer.auto_loop_message(auto_loop_count, target_agent)
                             end
                             sig = run_agent_turn_fn(target_agent, config.AGENTS[target_agent], turn, ctx, config, save_state)
                         end
 
                         if auto_loop_count >= MAX_AUTO_LOOP then
-                            print("\n\27[33m[SYSTEM] Auto-loop limit (" .. MAX_AUTO_LOOP .. ") reached. Resuming user input.\27[0m")
+                            ui.print_warning("Auto-loop limit (" .. MAX_AUTO_LOOP .. ") reached. Resuming user input.")
                         end
-
                         if sig == "PIPELINE_NEXT_STAGE" then
-                            print("\n\27[33m[SYSTEM] Agent requested next stage. Type '/go' to proceed.\27[0m")
+                            ui.print_warning("Agent requested next stage. Type '/go' to proceed.")
                         elseif sig == "ERROR" then
                             -- ERROR: LLM failed (including empty response exhaustion).
                             -- Remove the user message we just added so it doesn't get lost, and prompt again.
                             ctx:drop_last_message(target_agent)
-                            print("\n\27[31m[SYSTEM] Received empty/error response from LLM. Your message was not consumed. Please try again.\27[0m")
+                            ui.print_error("Received empty/error response from LLM. Your message was not consumed. Please try again.")
                             -- Do NOT increment turn, loop back to io.read()
                         elseif sig == nil then
                             -- CONVERSATION (nil): normal chat response, no command executed
@@ -147,6 +148,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
                         end
                         -- AUTO_LOOP already handled above
                     end
+                    io.write("\n")
                 end
             elseif stage.mode == "parallel" then
                 local threads = {}
@@ -187,7 +189,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
         end
         if turn >= MAX_TURNS then
             status_server.update_status({state = "aborted"})
-            print("\n\27[31m[SYSTEM FATAL] Max turns reached. Aborting.\27[0m")
+            ui.print_fatal_block({ Error = "Max turns reached", Turns = tostring(MAX_TURNS) })
             os.exit(1)
         end
         if stage_complete then
@@ -197,7 +199,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
                 local memo = ctx:generate_handoff_memo(last_active_agent, agent_cfg)
                 ctx:set_handoff_memo(memo)
                 ctx:clear_history_for_stage(config.HANDOFF.clear_history)
-                print(string.format("\n\27[36m[HANDOFF] Generated memo for agent '%s'. Strategy: %s\27[0m", last_active_agent, config.HANDOFF.clear_history))
+                ui.printer.highlight(string.format("[HANDOFF] Generated memo for agent '%s'. Strategy: %s", last_active_agent, config.HANDOFF.clear_history), ui.colors.cyan)
 
                 -- Load files from plan
                 if config.HANDOFF.auto_load_plan_files then
@@ -237,7 +239,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
         end
     end
     status_server.update_status({state = "finished"})
-    print("\n\27[32m[SYSTEM] Pipeline execution finished entirely.\27[0m")
+    ui.print_success("Pipeline execution finished entirely.")
     os.remove(state_file)
 end
 

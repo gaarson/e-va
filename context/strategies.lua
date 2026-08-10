@@ -195,9 +195,9 @@ M.INJECTION_STRATEGIES = {
                     messages[i].content = content
                 else
                     -- Remove previous raw dynamic blocks to avoid accumulation, then wrap in anchor
-                    content = content:gsub("<execution_plan>([%s\S]*)</execution_plan>", "")
-                    content = content:gsub("<last_actions>([%s\S]*)</last_actions>", "")
-                    content = content:gsub("<file_context[^>]->([%s\S]*)</file_context>", "")
+                    content = content:gsub("<execution_plan>([%.]*)</execution_plan>", "")
+                    content = content:gsub("<last_actions>([%.]*)</last_actions>", "")
+                    content = content:gsub("<file_context[^>]->([%.]*)</file_context>", "")
                     content = content:gsub("\n\n+", "\n\n")
                     content = utils.trim(content)
                     messages[i].content = (content ~= "" and content .. "\n\n" or "") ..

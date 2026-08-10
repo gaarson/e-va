@@ -3,7 +3,6 @@ local M = {
 }
 local logger = require("logger")
 local utils = require("utils")
-local inspect = require('inspect')
 
 --- Robust tool_name:args splitter.
 --- Finds the FIRST ':' separator. tool_name must be alphanumeric+underscore+dot only.

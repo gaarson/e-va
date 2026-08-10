@@ -64,7 +64,8 @@ if [ $# -eq 0 ]; then
     echo ">>> Running busted-style tests:"
     echo "$BUSTED_FILES"
     echo ""
-    ./lua_modules/bin/busted --coverage $BUSTED_FILES
+    LUA_INIT="dofile('$PROJECT_ROOT/test_shim.lua')" \
+      ./lua_modules/bin/busted --coverage $BUSTED_FILES
     BUSTED_STATUS=$?
     if [ $BUSTED_STATUS -ne 0 ]; then
       OVERALL_STATUS=$BUSTED_STATUS
@@ -94,7 +95,8 @@ else
       type=$(classify_test "$arg")
       if [ "$type" = "busted" ]; then
         echo ">>> Running busted-style test: $arg"
-        ./lua_modules/bin/busted --coverage "$arg"
+        LUA_INIT="dofile('$PROJECT_ROOT/test_shim.lua')" \
+          ./lua_modules/bin/busted --coverage "$arg"
         STATUS=$?
       else
         echo ">>> Running standalone test: $arg"
@@ -104,12 +106,12 @@ else
       if [ $STATUS -ne 0 ]; then
         OVERALL_STATUS=$STATUS
       fi
-    else
-      # Assume it's a busted pattern/dir
-      echo ">>> Running busted with arg: $arg"
-      ./lua_modules/bin/busted --pattern='test_.*' --coverage "$arg"
-      STATUS=$?
-      if [ $STATUS -ne 0 ]; then
+      else
+        echo ">>> Running busted with arg: $arg"
+        LUA_INIT="dofile('$PROJECT_ROOT/test_shim.lua')" \
+          ./lua_modules/bin/busted --pattern='test_.*' --coverage "$arg"
+        STATUS=$?
+        if [ $STATUS -ne 0 ]; then
         OVERALL_STATUS=$STATUS
       fi
     fi

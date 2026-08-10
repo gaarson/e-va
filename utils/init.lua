@@ -1,6 +1,6 @@
 local M = {}
 -- Load all sub-modules
-local stream = require("utils.stream")
+local ui = require("ui")
 local strings = require("utils.strings")
 local config = require("utils.config")
 local file_io = require("utils.file_io")
@@ -8,9 +8,9 @@ local directory = require("utils.directory")
 local encoding = require("utils.encoding")
 local images = require("utils.images")
 local diff = require("utils.diff")
--- Re-export stream functions
-M.stream_token_printer = stream.stream_token_printer
-M.flush_stream_buffer = stream.flush_stream_buffer
+-- Re-export stream functions (delegated to ui/stream.lua)
+M.stream_token_printer = ui.stream.stream_token_printer
+M.flush_stream_buffer = ui.stream.flush_stream_buffer
 -- Re-export string functions
 M.trim = strings.trim
 M.normalize_path = strings.normalize_path

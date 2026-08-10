@@ -1,5 +1,6 @@
 local utils = require("utils")
 local os = require("os")
+local ui = require("ui")
 
 local SHELL_MANIFEST = {
     is_mutation = false,
@@ -37,21 +38,19 @@ local function register(registry)
             if cmd:match("^" .. prefix .. "%s") or cmd == prefix then is_safe = true; break end
         end
         if not is_safe then
-            io.write(string.format("\n\27[31m[SECURITY WARNING]\27[0m Agent '%s' wants to execute: \27[33m%s\27[0m\n", agent_name, cmd))
-            io.write("Allow execution? (y = yes, n = no, or type a reason to deny): ")
-            local raw_ans = io.read("*l")
-            local ans = utils.trim(raw_ans or "n")
-            if ans:lower() == "y" or ans:lower() == "yes" then
-            elseif ans == "" or ans:lower() == "n" or ans:lower() == "no" then
+            local allowed, reason = ui.security_prompt.confirm_execution(agent_name, cmd)
+            if allowed then
+                -- User approved, continue execution
+            elseif reason == "denied" then
                 return { output = "\n[SYSTEM]: Command execution DENIED by user. Do not try this command again." }
             else
-                return { output = string.format("\n[SYSTEM]: Command execution DENIED by user. Reason: %s", ans) }
+                return { output = string.format("\n[SYSTEM]: Command execution DENIED by user. Reason: %s", reason) }
             end
         end
         -- INTERACTIVE MODE: Use a PTY-based approach
         if interactive then
-            print(string.format("\n\27[34m[SYSTEM: Interactive Shell '%s']\27[0m", cmd))
-            io.write("[INTERACTIVE MODE] Type your input below. Send empty line to finish.\n")
+            ui.printer.line(string.format("\n[SYSTEM: Interactive Shell '%s']", cmd))
+            ui.printer.line("[INTERACTIVE MODE] Type your input below. Send empty line to finish.")
             local tmp_in = os.tmpname()
             local tmp_out = os.tmpname()
             local exit_file = tmp_out .. ".exit_code"
@@ -69,8 +68,7 @@ local function register(registry)
             -- For interactive mode, we collect user inputs first, then run
             local user_inputs = {}
             while true do
-                io.write("[INPUT> ] ")
-                local line = io.read("*l")
+                local line = ui.input.read_line("[INPUT> ]")
                 if line == "" then break end
                 table.insert(user_inputs, line)
             end
@@ -107,11 +105,11 @@ local function register(registry)
             if #output > MAX_LOG_SIZE then
                 output = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. output:sub(-MAX_LOG_SIZE)
             end
-            print("\n[SYSTEM: Interactive execution finished]")
+            ui.printer.line("\n[SYSTEM: Interactive execution finished]")
             return { output = "\n[SHELL STDOUT/STDERR]:\n" .. output, signal = "WAITING_USER_INPUT" }
         end
         -- NON-INTERACTIVE MODE (original behavior)
-        print(string.format("\n\27[34m[SYSTEM: Executing '%s']\27[0m", cmd))
+        ui.printer.line(string.format("\n[SYSTEM: Executing '%s']", cmd))
         local tmp_file = os.tmpname()
         local exit_file = tmp_file .. ".exit_code"
         -- Write command to a temp script file to avoid quoting issues
@@ -132,8 +130,7 @@ local function register(registry)
                 f:seek("set", last_pos)
                 local chunk = f:read("*a")
                 if chunk and #chunk > 0 then
-                    io.write("\27[90m" .. chunk .. "\27[0m")
-                    io.flush()
+                    ui.printer.raw(chunk)
                     table.insert(output_chunks, chunk)
                     last_pos = f:seek()
                 end
@@ -151,7 +148,7 @@ local function register(registry)
             end
             os.execute("sleep 0.1")
         end
-        print("\n[SYSTEM: Execution finished]")
+        ui.printer.line("\n[SYSTEM: Execution finished]")
         os.remove(tmp_file)
         os.remove(exit_file)
         os.remove(tmp_script)

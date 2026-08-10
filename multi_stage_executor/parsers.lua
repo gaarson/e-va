@@ -1,66 +1,45 @@
 local utils = require("utils")
 local registry = require("tool_registry")
 local logger = require("logger")
-
 local M = {}
-
 --- Sanitize LLM-generated payload
 local function sanitize_payload(raw)
     if not raw then return "" end
     local s = utils.trim(raw)
     local original_len = #s
-    local removed_chars = 0
+    -- Strip markdown fences
     s = s:gsub("^%s*```[%w%-]*\n?", "")
     s = s:gsub("\n?```%s*$", "")
-    local function strip_balanced_tags(text, open_tag, close_tag)
-        local result = text
-        local found = true
-        while found do
-            local start_pos = result:find(open_tag, 1, true)
-            if start_pos then
-                local end_pos = result:find(close_tag, start_pos + #open_tag, true)
-                if end_pos then
-                    local removed = result:sub(start_pos, end_pos + #close_tag - 1)
-                    removed_chars = removed_chars + #removed
-                    result = result:sub(1, start_pos - 1) .. result:sub(end_pos + #close_tag)
-                else
-                    found = false
-                end
-            else
-                found = false
-            end
-        end
-        return result
-    end
-    s = strip_balanced_tags(s, "<thinking>", "</thinking>")
-    s = strip_balanced_tags(s, "<think>", "<//think>")
-    s = strip_balanced_tags(s, "<!--", "-->")
-    local preambles = {
-        "^here is the payload%s*:?", "^here is the command%s*:?", "^here is the content%s*:?",
-        "^command%s*:?", "^payload%s*:?", "^content%s*:?", "^the payload is%s*:?", "^the command is%s*:?",
-    }
-    for _, pat in ipairs(preambles) do
-        s = s:gsub(pat, "", 1)
-    end
+    -- Strip known preamble patterns (case-insensitive via character classes)
+    -- NOTE: Lua patterns do NOT support | alternation, so we use separate gsub calls
+    s = s:gsub("^%s*[Hh][Ee][Rr][Ee]%s+[Ii][Ss]%s+[Tt][Hh][Ee]%s+payload%s*:%s*", "", 1)
+    s = s:gsub("^%s*[Hh][Ee][Rr][Ee]%s+[Ii][Ss]%s+[Tt][Hh][Ee]%s+command%s*:%s*", "", 1)
+    s = s:gsub("^%s*[Hh][Ee][Rr][Ee]%s+[Ii][Ss]%s+[Tt][Hh][Ee]%s+content%s*:%s*", "", 1)
+    s = s:gsub("^%s*[Cc][Oo][Mm][Mm][Aa][Nn][Dd]%s*:%s*", "", 1)
+    s = s:gsub("^%s*[Pp][Aa][Yy][Ll][Oo][Aa][Dd]%s*:%s*", "", 1)
+    s = s:gsub("^%s*[Cc][Oo][Nn][Tt][Ee][Nn][Tt]%s*:%s*", "", 1)
+    s = s:gsub("^%s*[Tt][Hh][Ee]%s+[Pp][Aa][Yy][Ll][Oo][Aa][Dd]%s+[Ii][Ss]%s*:%s*", "", 1)
+    s = s:gsub("^%s*[Tt][Hh][Ee]%s+[Cc][Oo][Mm][Mm][Aa][Nn][Dd]%s+[Ii][Ss]%s*:%s*", "", 1)
+    -- Strip command markers
     s = s:gsub("^%s*|||%s*COMMAND%s*|||%s*\n?", "")
     s = s:gsub("\n?|||%s*END_COMMAND%s*|||%s*$", "")
     local final_s = utils.trim(s)
+    local removed_chars = original_len - #final_s
     if removed_chars > 100 then
         logger.info(string.format("[SANITIZE] Removed %d chars of thinking/tags from payload (%.1f%% of original)",
             removed_chars, (removed_chars / original_len) * 100))
     end
     return final_s
 end
-
 --- Safe template renderer
 local function render(template, vars)
+    vars = vars or {}
     return (template:gsub("{([%w_]+)}", function(key)
         local v = vars[key]
         if v == nil then return "{" .. key .. "}" end
         return tostring(v)
     end))
 end
-
 --- Validate payload content based on tool type
 local function validate_payload(tool_name, payload)
     if not payload or utils.trim(payload) == "" then
@@ -76,7 +55,6 @@ local function validate_payload(tool_name, payload)
     end
     return true, nil
 end
-
 --- Extract field from block
 local function extract_field(block, name)
     if not block or not name then return "" end
@@ -116,13 +94,22 @@ local function summarize_correction(correction)
     -- Fix #4: Increased truncation limit from 200 to 500 chars
     if #trimmed <= 500 then return trimmed end
     local sub = trimmed:sub(1, 500)
-    local last_period = sub:find("%. ", 480) or sub:find("%.$", 480)
+    -- Find last period followed by space, or period near end
+    local last_period = sub:find("%. ", 480)
+    if not last_period then
+        -- Try to find any period in the last 20 chars
+        for i = 480, #sub do
+            if sub:sub(i, i) == "." then
+                last_period = i
+                break
+            end
+        end
+    end
     if last_period then
         return sub:sub(1, last_period) .. "..."
     end
     return sub:sub(1, 497) .. "..."
 end
-
 --- Estimate task complexity
 local function estimate_complexity(tool_name, payload_hint, file_path)
     -- Try manifest-based complexity estimation first
@@ -139,7 +126,7 @@ local function estimate_complexity(tool_name, payload_hint, file_path)
     -- (c) payload_hint contains complexity keywords
     local complex_keywords = { "multiple", "refactor", "rewrite", "large", "comprehensive", "extensive", "all", "entire" }
     for _, kw in ipairs(complex_keywords) do
-        if hint_lower:match(kw) then
+        if hint_lower:find("%f[%a]" .. kw .. "%f[^%a]") then
             return "complex"
         end
     end
@@ -153,8 +140,9 @@ local function estimate_complexity(tool_name, payload_hint, file_path)
             end
         end
     end
-    local is_small_payload = hint_lower:match("small") or hint_lower:match("simple") or hint_lower:match("single") or
-        hint_lower:match("short") or hint_lower:match("<500") or hint_lower:match("<1000")
+    -- Use string.find instead of pattern.match for literal substring search
+    local is_small_payload = hint_lower:find("small") or hint_lower:find("simple") or hint_lower:find("single") or
+        hint_lower:find("short") or hint_lower:find("<500") or hint_lower:find("<1000")
     if is_simple_ext and is_small_payload then
         return "simple"
     end
@@ -163,7 +151,6 @@ local function estimate_complexity(tool_name, payload_hint, file_path)
     end
     return "complex"
 end
-
 -- Export functions
 M.sanitize_payload = sanitize_payload
 M.render = render

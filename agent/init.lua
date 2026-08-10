@@ -5,6 +5,7 @@ local tools = require("tools")
 local os = require("os")
 local status_server = require("status_server")
 local json_logger = require("json_logger")
+local ui = require("ui")
 
 
 -- Submodules
@@ -26,44 +27,11 @@ local project_root = os.getenv("PROJECT_ROOT") or "."
 -- 1. Load Config
 local config = assert(config_loader.load_config(agent_home, project_root, utils), "CRITICAL: Could not load config")
 -- 1.2 Startup Diagnostics
-print("\27[34m[STARTUP DIAGNOSTICS]\27[0m")
-print(string.format("\27[34m  AGENT_HOME=%s\27[0m", os.getenv("AGENT_HOME") or "UNSET"))
-print(string.format("\27[34m  PROJECT_ROOT=%s\27[0m", os.getenv("PROJECT_ROOT") or "UNSET"))
-print(string.format("\27[34m  EVA_STATUS_PORT=%s\27[0m", os.getenv("EVA_STATUS_PORT") or "UNSET"))
-print(string.format("\27[34m  LLM_BASE_URL=%s\27[0m", os.getenv("LLM_BASE_URL") or "UNSET"))
-print(string.format("\27[34m  LLM_MODEL=%s\27[0m", os.getenv("LLM_MODEL") or "UNSET"))
-local api_key_display = "UNSET"
-local raw_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-if raw_key and #raw_key > 4 then
-    api_key_display = string.sub(raw_key, 1, 4) .. "***"
-end
-print(string.format("\27[34m  LLM_API_KEY=%s\27[0m", api_key_display))
--- Pipeline summary
-if config.PIPELINE and #config.PIPELINE > 0 then
-    local stages = {}
-    for _, s in ipairs(config.PIPELINE) do
-        table.insert(stages, s.stage)
-    end
-    print(string.format("\27[34m  PIPELINE_STAGES=%s\27[0m", table.concat(stages, ", ")))
-end
--- Agents summary
-if config.AGENTS then
-    local agent_names = {}
-    for k in pairs(config.AGENTS) do
-        table.insert(agent_names, k)
-    end
-    print(string.format("\27[34m  AGENTS=%s\27[0m", table.concat(agent_names, ", ")))
-end
--- Pipeline settings
-if config.PIPELINE_SETTINGS then
-    print(string.format("\27[34m  MAX_TURNS=%s\27[0m", tostring(config.PIPELINE_SETTINGS.MAX_TURNS or "UNSET")))
-    print(string.format("\27[34m  ABORT_ON_FATAL=%s\27[0m", tostring(config.PIPELINE_SETTINGS.ABORT_ON_FATAL or "UNSET")))
-end
-print("\27[34m[END DIAGNOSTICS]\27[0m")
+ui.diagnostics.print_startup_diagnostics(config)
 -- 1.5 Start Observability (Status Server + JSON Logger)
 local status_port = tonumber(os.getenv("EVA_STATUS_PORT")) or 8080
 status_server.start(status_port)
-print(string.format("\27[34m[OBSERVABILITY] Status server started on http://localhost:%d/status\27[0m", status_port))
+ui.printer.line(string.format("[OBSERVABILITY] Status server started on http://localhost:%d/status", status_port))
 json_logger.init("INIT", 0, "startup")
 -- Shutdown hook: clean up on exit + crash reporting
 local orig_exit = os.exit
@@ -71,21 +39,8 @@ local _crash_report_printed = false
 local function print_crash_report(code)
     if _crash_report_printed then return end
     _crash_report_printed = true
-    io.stderr:write("\n\27[31m========================================\27[0m\n")
-    io.stderr:write("\27[31m     [CRASH REPORT]\27[0m\n")
-    io.stderr:write("\27[31m========================================\27[0m\n")
-    io.stderr:write(string.format("\27[31m  Exit Code: %s\27[0m\n", tostring(code or "nil")))
-    io.stderr:write(string.format("\27[31m  AGENT_HOME: %s\27[0m\n", os.getenv("AGENT_HOME") or "UNSET"))
-    io.stderr:write(string.format("\27[31m  PROJECT_ROOT: %s\27[0m\n", os.getenv("PROJECT_ROOT") or "UNSET"))
-    io.stderr:write(string.format("\27[31m  LLM_BASE_URL: %s\27[0m\n", os.getenv("LLM_BASE_URL") or "UNSET"))
-    io.stderr:write(string.format("\27[31m  LLM_MODEL: %s\27[0m\n", os.getenv("LLM_MODEL") or "UNSET"))
-    -- Try to get status from status_server
     local st = status_server._status or {}
-    io.stderr:write(string.format("\27[31m  Last Agent: %s\27[0m\n", tostring(st.agent_name or "unknown")))
-    io.stderr:write(string.format("\27[31m  Last Turn: %s\27[0m\n", tostring(st.current_turn or 0)))
-    io.stderr:write(string.format("\27[31m  Last Stage: %s\27[0m\n", tostring(st.current_stage or "unknown")))
-    io.stderr:write(string.format("\27[31m  Last State: %s\27[0m\n", tostring(st.state or "unknown")))
-    io.stderr:write("\27[31m========================================\27[0m\n")
+    ui.crash_report.print_crash_report(code, st)
 end
 os.exit = function(code)
     print_crash_report(code)
@@ -95,7 +50,7 @@ os.exit = function(code)
 end
 -- SIGTERM/SIGINT handler: flush logs and print final status
 local function _signal_handler(sig_name)
-    io.stderr:write(string.format("\n\27[33m[SIGNAL] Received %s. Shutting down gracefully...\27[0m\n", sig_name))
+    ui.crash_report.print_signal_received(sig_name)
     json_logger.flush()
     status_server.stop()
     os.exit(128 + (#sig_name == 6 and 2 or 13)) -- SIGTERM=143, SIGINT=144
@@ -204,21 +159,21 @@ if not restored then
                 logger.error(err)
                 instr = "FATAL_MISSING_FILE"
             end
-            print(string.format("\n\27[35m=== STARTING TASK [%d/%d]: %s ===\27[0m", i, #ctx.config.TASKS, task.file or "Global Context"))
+            ui.progress.batch_task_header(i, #ctx.config.TASKS, task.file or "Global Context")
             local status, e = pcall(function()
                 task_module.setup_and_run_task(task.file, instr, task.max_turns, ctx, config, utils, logger, pipeline_module.execute_pipeline, turn_module.run_agent_turn, STATE_FILE)
             end)
             if not status then
                 logger.error("Task failed fatally: " .. tostring(e))
                 if config.PIPELINE_SETTINGS and config.PIPELINE_SETTINGS.ABORT_ON_FATAL then
-                    print("\n\27[31m[SYSTEM] Aborting batch execution due to fatal error in task " .. i .. "\27[0m")
+                    ui.printer.line("\n[SYSTEM] Aborting batch execution due to fatal error in task " .. i)
                     os.exit(1)
                 end
             end
-            print(string.format("\n\27[32m=== FINISHED TASK [%d/%d] ===\27[0m", i, #ctx.config.TASKS))
+            ui.printer.line(string.format("\n=== FINISHED TASK [%d/%d] ===", i, #ctx.config.TASKS))
         end
     else
-        print("Usage: eva [file] \"<instruction>\" OR define TASKS in .e-va-conf/config.lua")
+        ui.printer.line("Usage: eva [file] \"<instruction>\" OR define TASKS in .e-va-conf/config.lua")
         os.exit(1)
     end
 else

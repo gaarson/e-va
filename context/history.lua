@@ -3,7 +3,6 @@
 -- All functions take ctx (the context_flow instance) as the first argument.
 local M = {}
 local utils = require("utils")
-local inspect = require("inspect")
 local compressor = require("context_compressor")
 local logger = require("logger")
 local config_mod = require("context.config")
@@ -64,7 +63,7 @@ function M.deduplicate_file_contexts(ctx, agent_name)
             for path, latest_idx in pairs(latest_occurrence) do
                 if latest_idx > i then
                     -- This is an older occurrence; remove the file_context block
-                    new_content = new_content:gsub('<file_context%s+path="' .. path .. '"[^>]->[^<]-</file_context>', '')
+                    new_content = new_content:gsub('<file_context%s+path="' .. path .. '"[^>]-[^<]-</file_context>', '')
                 end
             end
             -- Clean up extra whitespace

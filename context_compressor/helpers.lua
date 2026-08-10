@@ -50,7 +50,7 @@ function M._extract_critical_entities(content)
     if M._is_already_compressed(content) then return entities end
     -- Strip existing [PRESERVED_ENTITIES] blocks before extraction
     -- Use [^]* to match ANY character including newlines (multi-line blocks)
-    local clean_content = content:gsub("%[PRESERVED_ENTITIES%].-%[/PRESERVED_ENTITIES%]", "")
+    local clean_content = content:gsub("%[PRESERVED_ENTITIES%][%s%S]-%[/PRESERVED_ENTITIES%]", "")
     -- Extract file paths with stricter regex - only known source/config/doc extensions
     for fp in clean_content:gmatch("([^%s,;:\"`>%)]+%.(lua|c|h|cpp|hpp|ts|tsx|js|jsx|py|sh|yml|yaml|json|toml|md|txt|css|scss|html|xml|sql|go|rs|rb|java))") do
         if not fp:match("^http") and not fp:match("^https") then
@@ -165,7 +165,7 @@ function M._compress_stale_file_contexts(content)
     if not content or #content < 100 then return content end
     local result = content
     -- Match <file_context path="..." ...>...</file_context> blocks
-    result = result:gsub('<file_context%s+path="([^"]+)"[^>]->([%s\S]*)</file_context>',
+    result = result:gsub('<file_context%s+path="([^"]+)"[^>]->([%s%S]-)',
         function(path, inner)
             if #inner > 3000 then
                 return string.format('[FILE CONTEXT: %s - see latest version in conversation]', path)
@@ -202,7 +202,7 @@ function M._summarize_message(msg, config)
     if preserve_entities then
         -- Strip existing [PRESERVED_ENTITIES] blocks to avoid re-extracting already-preserved data
         -- Use [^]* to match ANY character including newlines (multi-line blocks)
-        local clean_content = content:gsub("%[PRESERVED_ENTITIES%].-%[/PRESERVED_ENTITIES%]", "")
+        local clean_content = content:gsub("%[PRESERVED_ENTITIES%][%s%S]-%[/PRESERVED_ENTITIES%]", "")
         local entities = M._extract_critical_entities(clean_content)
         -- Append files (limit to 5)
         if #entities.files > 0 then

@@ -1,5 +1,5 @@
+local ui = require('ui')
 local M = {}
-
 --- Sets up and runs a task: builds initial context (file tree, README, docs, task file),
 --- adds first message, and calls execute_pipeline.
 -- @param task_file: Optional file path to target
@@ -93,22 +93,20 @@ end
 -- @param run_agent_turn_fn: Function reference to run_agent_turn (from turn module)
 -- @param state_file: Path to state file for saving
 function M.run_pipe_mode(ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
-    print("=== PIPE MODE START ===")
+    ui.printer.pipe_marker("=== PIPE MODE START ===")
     io.flush()
     while true do
-        io.stderr:write("> ")
-        io.stderr:flush()
-        local line = io.read("*l")
+        local line = ui.input.read_line("> ")
         if not line then break end
         local trimmed = line:gsub("^%s*(.-)%s*$", "%1")
         if trimmed == "quit" or trimmed == "exit" then
-            print("=== PIPE MODE EXIT ===")
+            ui.printer.pipe_marker("=== PIPE MODE EXIT ===")
             break
         end
         if trimmed ~= "" then
-            print("=== RESPONSE START ===")
+            ui.printer.pipe_marker("=== RESPONSE START ===")
             M.setup_and_run_task(nil, trimmed, nil, ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
-            print("=== RESPONSE END ===")
+            ui.printer.pipe_marker("=== RESPONSE END ===")
             io.flush()
         end
     end

@@ -67,7 +67,7 @@ function M.get()
     -- }
 
     cfg.LIMITS = {
-        MAX_CONTEXT = 200000,
+        MAX_CONTEXT = 160000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
@@ -80,7 +80,7 @@ function M.get()
             max_history_messages = 100,
             max_history_tokens = 50000,
             squash_threshold_messages = 80,
-            squash_threshold_tokens = 120000,
+            squash_threshold_tokens = 100000,
             dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },
@@ -131,7 +131,7 @@ function M.get()
                 storage = { squash_threshold_tokens = 90000 }
             },
             coding = {
-                context_injection = { mode = "append_to_last_user", max_recency_tokens = 20000 },
+                context_injection = { mode = "append_to_last_user", max_recency_tokens = 50000 },
                 command_flow = { auto_squash_on_mutation = true, reinforcement_interval = 3 },
                 storage = { max_history_tokens = 40000 }
             }
@@ -153,7 +153,7 @@ function M.get()
         pass_knowledge_base = true,        -- Передавать все файлы из базы знаний
         pass_pinned_files = true,          -- Передавать зафиксированные файлы
         pass_requested_files = true,       -- Передавать файлы, запрошенные на предыдущем этапе
-        pass_recent_tool_outputs = true,   -- Передавать результаты последних инструментов
+        pass_recent_tool_outputs = false,   -- Передавать результаты последних инструментов
         auto_load_plan_files = true,       -- Автоматически подгружать файлы из плана
         max_knowledge_base_files = 100,    -- Increased from 50 to 100
         pin_plan_targets = true,           -- NEW: Automatically pin all execution plan target files
@@ -161,7 +161,7 @@ function M.get()
         -- NEW: Enable CODER to send error summaries back to ARCHITECT for plan adjustment
         feedback_to_architect = true,
         feedback_sections = { "tasks_completed", "tasks_failed", "errors_encountered", "plan_deviations", "recommendations" },
-        max_feedback_tokens = 3000,
+        max_feedback_tokens = 8192,
     }
     -- Circuit breaker configuration for tool failures
     cfg.CIRCUIT_BREAKER = {
@@ -196,7 +196,7 @@ function M.get()
             top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = false},
+            chat_template_kwargs = {enable_thinking = true},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
             repetition_penalty = 1.05
@@ -249,7 +249,7 @@ function M.get()
             name = "ARCHITECT",
             url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
             token = get_api_key(),
-            -- is_reasoning = true,
+            is_reasoning = true,
             model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",

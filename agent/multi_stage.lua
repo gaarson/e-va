@@ -1,4 +1,5 @@
 local socket = require("socket")
+local ui = require("ui")
 local M = {}
 -- Deep copy a table (handles nested tables, not circular refs)
 function M.deep_copy_table(t)
@@ -265,7 +266,7 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
             end
             local messages = context_data.messages
             deps.logger.info(string.format("[%s %s] Sending prompt to LLM...", label, step.stage))
-            io.write(string.format("\n\27[35m>>> AI (%s) [%s]:\27[0m ", agent_name, step.stage))
+            ui.print_ai_prompt(agent_name, step.stage)
             local printer = deps.utils.stream_token_printer(agent_cfg)
             local response_data, err
             response_data, err = deps.llm.send_request(agent_cfg, messages, { on_token = printer })

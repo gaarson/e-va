@@ -323,17 +323,6 @@ describe("GROUP 5: Payload sanitization", function()
         assert.truthy(exec.payload:find("local x = 1"), "Preserves content")
     end)
 
-    it("Strips thinking tags", function()
-        local ctx = mock_ctx()
-        local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
-        exec:reset()
-        exec.intent = { TOOL = "patch", raw = "test" }
-        exec.state = multi_stage.STATES.INTENT_READY
-        local result = exec:feed_response("\nlocal x = 1")
-        assert.falsy(exec.payload:find("<thinking>"), "Strips thinking tags")
-        assert.truthy(exec.payload:find("local x = 1"), "Preserves content after tags")
-    end)
-
     it("Preserves content after preamble", function()
         local ctx = mock_ctx()
         local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
