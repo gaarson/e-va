@@ -173,15 +173,56 @@ function M.get()
     cfg.TASKS = {}
 
     cfg.CREATE_BACKUPS = false
+    -- ========================================================================
+    -- PICTURES_DIR: Directory for screenshots and images.
+    --
+    -- Pipeline architecture (entry point → processing → injection):
+    --   1. agent/turn.lua: Calls ctx:load_images() every turn.
+    --   2. context/images.lua: Orchestrates loading, filtering, trimming, injection,
+    --      and token estimation. Calls utils.load_images_from_dir() for I/O.
+    --   3. utils/images.lua: Low-level I/O, compression (ffmpeg/ImageMagick),
+    --      base64 encoding, hashing, dimension detection.
+    --
+    -- Full pipeline per turn:
+    --   scan → compress → base64 encode → age-filter → budget-filter → dedup →
+    --   inject into last user message as multipart content.
+    -- ========================================================================
     cfg.PICTURES_DIR = ".e-va-conf/pictures"
-
+    -- ========================================================================
+    -- IMAGE_CONFIG: Configuration for image processing pipeline.
+    -- ========================================================================
     cfg.IMAGE_CONFIG = {
+        -- max_images_per_turn: Hard cap on images sent per turn.
+        -- Used by trim_images() Phase 2 (count budget) and add_image() as rejection threshold.
+        -- When exceeded, oldest images (head of array) are removed first.
         max_images_per_turn = 10,
-        max_images_base64_bytes = 4 * 1024 * 1024,  -- Reduced to 4MB since compressed images are much smaller
-        auto_purge_after_turn = false,  -- Images persist across turns; use M:purge_images() manually if needed
-        tokens_per_base64_byte = 0.004,  -- For OpenAI vision: low res (<50KB) = 85 tokens, high res = variable (~0.004/byte)
-        max_image_dimension = 512,  -- Max pixels on longest side for compression (Option A: aggressive token economy)
-        max_image_age_hours = 168  -- Skip images older than 24 hours
+        -- max_images_base64_bytes: Total base64 size budget for all images (default 4MB).
+        -- Used by load_images() budget filter AND trim_images() Phase 3 (byte budget).
+        -- Images are sorted newest-first; oldest are dropped when budget is exceeded.
+        -- Reduced to 4MB since compressed images are significantly smaller than originals.
+        max_images_base64_bytes = 4 * 1024 * 1024,
+        -- auto_purge_after_turn: When true, M.purge_images() is called after each turn,
+        -- clearing ctx.images, ctx.images_loaded, and ctx.last_sent_image_hashes.
+        -- Default false preserves visual context across turns for continuity.
+        -- For manual purge, call M.purge_images().
+        auto_purge_after_turn = false,
+        -- max_image_age_hours: Images older than this (checked via stat mtime in load_images())
+        -- are silently skipped during directory scan. Default 168 hours (7 days).
+        -- Prevents loading stale screenshots no longer relevant to the current task.
+        max_image_age_hours = 168,
+        -- tokens_per_base64_byte: NOTE — this coefficient is currently UNUSED for actual
+        -- token estimation. Actual estimation in inject_images_into_messages() uses the
+        -- OpenAI tile-based model:
+        --   low-res (short side < 768px, both sides <= 2048px) = 85 tokens flat
+        --   high-res = 85 + 170 * num_512x512_tiles (capped at 4x4 = 16 tiles)
+        -- This field exists as a fallback/reserved parameter for future use.
+        tokens_per_base64_byte = 0.004,
+        -- max_image_dimension: Maximum pixel dimension for the longest side during compression.
+        -- Passed to compress_image() as max_dim. Images exceeding this on any axis are
+        -- resized via ffmpeg (primary) or ImageMagick (fallback). Quality is hardcoded at 60.
+        -- Files < 200KB or already within bounds are skipped. Value 512px chosen for
+        -- aggressive token economy (Option A).
+        max_image_dimension = 512,
     }
 
     -- Source .env file early to populate cache for AGENT_DEFAULTS

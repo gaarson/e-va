@@ -2,6 +2,7 @@ local io = require("io")
 local encoding = require("utils.encoding")
 local directory = require("utils.directory")
 local strings = require("utils.strings")
+local logger = require("logger")
 local M = {}
 -- Compression statistics tracking
 M._compress_stats = { total = 0, compressed = 0, skipped = 0, failed = 0 }
@@ -63,10 +64,22 @@ function M.compress_image(path, max_dim, quality)
     M._compress_stats.total = M._compress_stats.total + 1
     local w, h = M.get_image_dimensions(path)
     if not w or not h then return false, "Could not determine dimensions" end
+    logger.info(string.format("[IMAGE COMPRESS] path=%s, dims=%dx%d, max_dim=%d", path, w, h, max_dim))
+    -- Fast-path: skip compression for small files (< 200KB)
+    local f_stat = io.open(path, "rb")
+    if f_stat then
+        local fsize = f_stat:seek("end")
+        f_stat:close()
+        if fsize < 200 * 1024 then
+            M._compress_stats.skipped = M._compress_stats.skipped + 1
+            return true, string.format("Small file (%.1f KB), skipped", fsize / 1024)
+        end
+    end
     if w <= max_dim and h <= max_dim then
         M._compress_stats.skipped = M._compress_stats.skipped + 1
         return true, "Already within bounds"
     end
+    logger.info(string.format("[IMAGE COMPRESS] Compression needed for %s (%dx%d > %d)", path, w, h, max_dim))
     local safe_path = strings.shell_quote(path)
     local tmp_path = path .. ".compress_tmp"
     local bak_path = path .. ".compress_bak"
@@ -110,7 +123,7 @@ function M.compress_image(path, max_dim, quality)
         return rc
     end
     local cmd = string.format(
-        "timeout 10s ffmpeg -i %s -vf \"scale=%d:%d:force_original_aspect_ratio=downscale\" -q:v %d -y %s",
+        "timeout 5s ffmpeg -i %s -vf \"scale=%d:%d:force_original_aspect_ratio=downscale\" -t 2 -pix_fmt yuv420p -q:v %d -y %s",
         safe_path, max_dim, max_dim, math.ceil(31 * (100 - quality) / 100), tmp_path
     )
     local rc = run_cmd_with_exit_code(cmd)
@@ -126,7 +139,7 @@ function M.compress_image(path, max_dim, quality)
         return false, "Compression timed out (ffmpeg)"
     end
     cmd = string.format(
-        "timeout 10s convert %s -resize %dx%d -quality %d %s",
+        "timeout 5s convert %s -resize %dx%d -quality %d %s",
         safe_path, max_dim, max_dim, quality, tmp_path
     )
     rc = run_cmd_with_exit_code(cmd)
@@ -141,16 +154,38 @@ function M.compress_image(path, max_dim, quality)
         M._compress_stats.failed = M._compress_stats.failed + 1
         return false, "Compression timed out (ImageMagick)"
     end
-    -- Both failed: restore backup
+    -- Both failed: only restore backup if original file was modified
     os.execute(string.format("rm -f %s", strings.shell_quote(tmp_path)))
-    os.execute(string.format("mv %s %s", strings.shell_quote(bak_path), safe_path))
+    local current_size = 0
+    local current_f = io.open(path, "rb")
+    if current_f then
+        current_size = current_f:seek("end")
+        current_f:close()
+    end
+    local bak_size = 0
+    local bak_f = io.open(bak_path, "rb")
+    if bak_f then
+        bak_size = bak_f:seek("end")
+        bak_f:close()
+    end
+    -- Only restore if the original file size differs from backup (meaning it was corrupted/modified)
+    if current_size ~= bak_size then
+        os.execute(string.format("mv %s %s", strings.shell_quote(bak_path), safe_path))
+    else
+        os.execute(string.format("rm -f %s", strings.shell_quote(bak_path)))
+    end
     M._compress_stats.failed = M._compress_stats.failed + 1
     return false, "Both ffmpeg and ImageMagick failed"
 end
 function M.load_images_from_dir(dir_path)
     if not dir_path then return {} end
+    logger.info(string.format("[IMAGE DIAG] load_images_from_dir called with dir_path=%s", dir_path))
     local safe_dir = strings.shell_quote(dir_path)
-    if os.execute(string.format("test -d %s", safe_dir)) ~= 0 then return {} end
+    local p = io.popen(string.format("test -d %s && echo OK", safe_dir) .. " 2>/dev/null")
+    if not p then return {} end
+    local result = p:read("*l")
+    p:close()
+    if result ~= "OK" then return {} end
     local exts = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
     local patterns = {}
     for _, ext in ipairs(exts) do
@@ -158,9 +193,16 @@ function M.load_images_from_dir(dir_path)
     end
     local find_cmd = string.format("find %s -maxdepth 1 -type f \\( %s \\) 2>/dev/null", safe_dir, table.concat(patterns, " -o "))
     local p = io.popen(find_cmd)
-    if not p then return {} end
+    if not p then
+        logger.warn(string.format("[IMAGE] find_cmd failed to open: %s", find_cmd))
+        return {}
+    end
     local output = p:read("*a")
     p:close()
+    -- Diagnostic: log raw output line count
+    local line_count = 0
+    for _ in output:gmatch("[^\r\n]+") do line_count = line_count + 1 end
+    logger.info(string.format("[IMAGE] find_cmd='%s' returned %d lines", find_cmd, line_count))
     local mime_map = {
         ["png"] = "image/png", ["jpg"] = "image/jpeg", ["jpeg"] = "image/jpeg",
         ["gif"] = "image/gif", ["webp"] = "image/webp", ["bmp"] = "image/bmp"
@@ -183,7 +225,10 @@ function M.load_images_from_dir(dir_path)
         local ext = fname:match("%.([^%.]+)$"):lower()
         local mime = mime_map[ext]
         if mime then
-            M.compress_image(line, 512, 60)
+            local comp_ok, comp_msg = M.compress_image(line, 512, 60)
+            if not comp_ok then
+                logger.warn(string.format('[IMAGE COMPRESS FAILED] %s: %s', line, comp_msg))
+            end
             local f = io.open(line, "rb")
             if f then
                 local header = f:read(4)
@@ -199,6 +244,7 @@ function M.load_images_from_dir(dir_path)
                 if data and #data > 0 then
                     local b64 = encoding.base64_encode(data)
                     local hash = _compute_image_hash(b64)
+                    logger.info(string.format("[IMAGE] Loaded image: path=%s, mime=%s, b64_len=%d", line, mime, #b64))
                     table.insert(images, {
                         path = line,
                         mime_type = mime,

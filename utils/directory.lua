@@ -29,7 +29,7 @@ function M.explore_directory(root_path, target_subpath, max_depth)
     local safe_target = strings.shell_quote(absolute_target)
     local depth = tonumber(max_depth) or 1
     local cmd = string.format(
-        "find %s -maxdepth %d -not -path '*/\\.git*' -not -path '*/node_modules*' -not -path '*/build*' -not -path '*/\\.e-va-conf*' -not -path '*/lua_modules*' -not -path '*/.luacov*' -not -path '*/*.report.out' -not -path '*/*.stats.out' 2>/dev/null | sort",
+        "find %s -maxdepth %d -not -path '*/\\.git*' -not -path '*/node_modules*' -not -path '*/build*' -not -path '*/lua_modules*' -not -path '*/.luacov*' -not -path '*/*.report.out' -not -path '*/*.stats.out' 2>/dev/null | sort",
         safe_target, depth
     )
     local p = io.popen(cmd)

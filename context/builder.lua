@@ -97,6 +97,11 @@ function M.get_recency_block(ctx, already_present_paths)
     if #ctx.last_actions > 0 then
         table.insert(parts, "<last_actions>" .. M.get_actions_text(ctx) .. "</last_actions>")
     end
+    -- Image summary injection
+    local img_summary = images.get_image_summary(ctx)
+    if img_summary ~= '' then
+        table.insert(parts, '[VISUAL CONTEXT]\n' .. img_summary)
+    end
     -- Build set of execution_plan target files for full-content display
     local plan_target_files = {}
     if ctx.execution_plan and #ctx.execution_plan > 0 then

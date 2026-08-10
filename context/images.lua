@@ -23,6 +23,17 @@ function M.load_images(ctx, dir_path)
     local t_load = socket.gettime()
     local raw_images = utils.load_images_from_dir(dir_path)
     logger.info(string.format("[IMAGE DIAG] Loaded %d raw images from dir", #raw_images))
+    -- Attach dimensions to each image for accurate token estimation
+    for _, img in ipairs(raw_images) do
+        if img.path then
+            local w, h = utils.get_image_dimensions(img.path)
+            img.width = w
+            img.height = h
+            if w and h then
+                logger.info(string.format("[IMAGE] Dimensions for %s: %dx%d", img.path, w, h))
+            end
+        end
+    end
     local total_raw = 0
     for _, img in ipairs(raw_images) do total_raw = total_raw + #(img.base64_data or "") end
     logger.info(string.format("[IMAGE DIAG] Total raw base64 size: %d bytes (%.1f KB)", total_raw, total_raw / 1024))
@@ -233,7 +244,7 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
                 -- String content: wrap into multi-part array with text + images
                 messages[i].content = {
                     { type = "text", text = content },
-                    unpack(formatted_images)
+                    table.unpack(formatted_images)
                 }
             end
             injected = true
@@ -247,7 +258,7 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
             role = "user",
             content = {
                 { type = "text", text = "[SYSTEM: Images attached]" },
-                unpack(formatted_images)
+                table.unpack(formatted_images)
             }
         })
     end
@@ -261,30 +272,38 @@ function M.inject_images_into_messages(ctx, messages, tokens_per_byte)
     -- Calculate total image tokens using OpenAI tile-based model
     -- Low-res (short side < 768px, both <= 2048px): 85 tokens flat
     -- High-res: 85 + 170 * num_tiles (each tile is 512x512)
-    -- We estimate from base64 size: raw_bytes ≈ b64_len * 0.75
-    -- Approximate pixels from raw bytes assuming 3 bytes/pixel (RGB): pixels ≈ raw_bytes / 3
-    -- Tiles ≈ ceil(sqrt(pixels) / 512)^2, capped at 16 (2048x2048 max)
+    -- Prefer actual dimensions (img.width/img.height) when available.
+    -- Fall back to base64-size heuristic for images added via add_image without a path.
     local total_image_tokens = 0
     for _, img in ipairs(new_images) do
-        local b64_len = #(img.base64_data or "")
-        local raw_bytes = math.floor(b64_len * 0.75)
-        local approx_pixels = math.max(1, math.floor(raw_bytes / 3))
-        -- Estimate dimensions assuming square-ish image
-        local side = math.ceil(math.sqrt(approx_pixels))
+        local w, h = img.width, img.height
+        local method = "dimensions"
+        if not w or not h then
+            -- Fallback: estimate from base64 size
+            method = "base64_heuristic"
+            local b64_len = #(img.base64_data or "")
+            local raw_bytes = math.floor(b64_len * 0.75)
+            local approx_pixels = math.max(1, math.floor(raw_bytes / 3))
+            local side = math.ceil(math.sqrt(approx_pixels))
+            w, h = side, side
+        end
         -- Determine if low-res or high-res
-        -- Low-res heuristic: if estimated side < 768, treat as low-res
-        if side < 768 then
+        -- Low-res: short side < 768 AND both sides <= 2048
+        local short_side = math.min(w, h)
+        local long_side = math.max(w, h)
+        if short_side < 768 and long_side <= 2048 then
             total_image_tokens = total_image_tokens + 85
         else
             -- High-res: estimate number of 512x512 tiles
-            local tiles_x = math.ceil(side / 512)
-            local tiles_y = math.ceil(side / 512)
+            local tiles_x = math.ceil(w / 512)
+            local tiles_y = math.ceil(h / 512)
             -- Cap at 4x4 = 16 tiles (OpenAI limit for 2048x2048)
             tiles_x = math.min(tiles_x, 4)
             tiles_y = math.min(tiles_y, 4)
             local num_tiles = tiles_x * tiles_y
             total_image_tokens = total_image_tokens + 85 + (170 * num_tiles)
         end
+        logger.info(string.format("[IMAGE TOKENS] %s: %dx%d, method=%s", img.path or "inline", w, h, method))
     end
     local inject_elapsed = socket.gettime() - t_inject
     logger.info(string.format("[IMAGE DIAG] inject_images_into_messages completed: %.3fs elapsed", inject_elapsed))
