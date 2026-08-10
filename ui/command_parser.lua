@@ -7,6 +7,7 @@ M.COMMANDS = {
   ['/exit'] = 'ABORT',
   ['/status'] = 'STATUS',
   ['/help'] = 'HELP',
+  ['/messages'] = 'MESSAGES',
 }
 M.HELP_TEXT = [[
 Available commands:
@@ -15,6 +16,7 @@ Available commands:
   /exit     - Abort execution
   /mode <s> - Switch to stage <s>
   /status   - Show current status
+  /messages - Dump current LLM request messages to console
   /help     - Show this help message
 ]]
 function M.parse(input, config)
@@ -40,6 +42,8 @@ function M.parse(input, config)
       return { action = 'STATUS', message = 'Requesting status update.' }
     elseif action == 'HELP' then
       return { action = 'HELP', message = M.HELP_TEXT }
+    elseif action == 'MESSAGES' then
+      return { action = 'MESSAGES', message = 'Dumping current messages...' }
     end
   end
   -- Check for /mode <stage_name>

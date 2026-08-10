@@ -69,6 +69,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     status_server.add_log(string.format("Turn %d started for agent %s", turn, agent_name))
     local max_retries, retry_delay = 5, 5
     local interruption_retries, MAX_INTERRUPTION_RETRIES = 0, 3
+    local signal = nil
     while true do
         logger.info(string.format('\n[STREAM] Sending request to model=%s, stream=true', agent_cfg.model))
         for attempt = 1, max_retries do
@@ -92,11 +93,23 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         end
         if not response_data then break end
         if response_data.interrupted then
-            logger.log_messages_pretty(messages, turn, agent_name, ctx)
             interruption_retries = interruption_retries + 1
-            if interruption_retries > MAX_INTERRUPTION_RETRIES then break end
-            ui.interrupt.handle_interruption(messages, agent_name)
-            response_data = nil
+            if interruption_retries > MAX_INTERRUPTION_RETRIES then
+                logger.warn("[INTERRUPT] Max interruption retries reached. Returning AUTO_LOOP to restart turn cleanly.")
+                signal = "AUTO_LOOP"
+                break
+            end
+            local had_input = ui.interrupt.handle_interruption_with_capture(agent_name)
+            if had_input then
+                -- User provided input; store it in history so next build_context picks it up
+                ctx:add_message(agent_name, 'user', had_input)
+                logger.info("[INTERRUPT] User input stored in history. Returning AUTO_LOOP to rebuild context fresh.")
+                signal = "AUTO_LOOP"
+                break
+            else
+                -- User pressed Enter with no input; just retry within same loop
+                response_data = nil
+            end
         else break end
     end
 
@@ -106,7 +119,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         local diag_msg = string.format("FATAL: Network unreachable after %d attempts. Err=%s, URL=%s, Model=%s",
             max_retries, tostring(err or "nil"), agent_cfg.url or "UNSET", agent_cfg.model or "UNSET")
         logger.error(diag_msg)
-        json_logger.error(diag_msg)
+        logger.error(diag_msg)
         status_server.add_log(string.format("Turn %d ERROR: Network unreachable for agent %s (URL=%s, Model=%s)",
             turn, agent_name, agent_cfg.url or "UNSET", agent_cfg.model or "UNSET"))
         -- Print colored [FATAL FAILURE] block

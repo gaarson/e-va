@@ -34,6 +34,27 @@ function M.deduplicate_consecutive_messages(ctx, agent_name)
     for i = #history, write_idx + 1, -1 do
         history[i] = nil
     end
+    -- Secondary pass: remove cross-role duplicates (e.g., user says X, assistant echoes X)
+    -- Keep the first occurrence (usually the user message) and remove the echo
+    if #history >= 2 then
+        local write_idx2 = 1
+        history[1] = history[1]
+        for i = 2, #history do
+            local is_cross_role_dup = false
+            if history[i].role ~= history[write_idx2].role and history[i].content == history[write_idx2].content then
+                is_cross_role_dup = true
+            end
+            if not is_cross_role_dup then
+                write_idx2 = write_idx2 + 1
+                history[write_idx2] = history[i]
+            else
+                removed = removed + 1
+            end
+        end
+        for i = #history, write_idx2 + 1, -1 do
+            history[i] = nil
+        end
+    end
     if removed > 0 then
         logger.info(string.format("[DEDUP CONSECUTIVE] Removed %d consecutive duplicate message(s) for agent '%s'", removed, agent_name))
     end

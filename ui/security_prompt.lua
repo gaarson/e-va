@@ -48,18 +48,10 @@ function M.confirm_execution(agent_name, cmd)
         agent_name,
         colors.yellow, cmd, colors.reset,
         colors.reset))
-    io.write("Allow execution? (y = yes, n = no, or type a reason to deny): ")
-    io.flush()
-    local raw_ans = io.read("*l")
-    local ans = utils.trim(raw_ans or "n")
-    if ans:lower() == "y" or ans:lower() == "yes" then
-        return true, nil
-    elseif ans == "" or ans:lower() == "n" or ans:lower() == "no" then
-        return false, 'User declined'
-    else
-        -- User provided a reason to deny
-        return false, ans
-    end
+    local input = require('ui.input')
+    local result = input.confirm_with_reason(
+        string.format("Agent '%s' wants to execute: %s", agent_name, cmd), 'n')
+    return result.allowed, result.reason
 end
 --- Confirm session restoration
 -- Replaces inline logic in agent/state.lua
@@ -70,11 +62,7 @@ function M.confirm_session_restore()
         elseif M.non_tty_mode == 'auto_deny' then return false, 'User declined'
         end
     end
-    io.write("\n%s[SYSTEM] Previous session found. Continue (y) or start new (n)?%s ",
-        colors.yellow, colors.reset)
-    io.flush()
-    local raw_ans = io.read("*l")
-    local ans = utils.trim(raw_ans or "n")
-    return ans:lower() == "y" or ans:lower() == "yes"
+    local input = require('ui.input')
+    return input.confirm('\n[SYSTEM] Previous session found. Continue (y) or start new (n)?', 'n')
 end
 return M

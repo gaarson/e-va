@@ -67,6 +67,25 @@ function M.send_request(profile, messages, options)
     local body = json:encode(payload)
     local encode_elapsed = cqueues.monotime() - t_encode
     logger.info(string.format("[SEND DIAG] json.encode: %.3fs, body_size=%d bytes (%.1f KB)", encode_elapsed, #body, #body/1024))
+    -- JSON body validation before sending
+    if type(body) ~= "string" or #body == 0 then
+        logger.error("[JSON VALIDATION] Encoded body is empty or not a string.")
+        dedup._in_flight_requests[req_hash] = nil
+        return nil, "INVALID_JSON_BODY: Encoded body is empty or not a string"
+    end
+    if body:sub(1, 1) ~= "{" or body:sub(-1) ~= "}" then
+        logger.error(string.format("[JSON VALIDATION] Body does not look like a JSON object. Starts with '%s', ends with '%s'. Preview: %s",
+            body:sub(1, 1), body:sub(-1), body:sub(1, 200)))
+        dedup._in_flight_requests[req_hash] = nil
+        return nil, string.format("INVALID_JSON_BODY: Body does not start with '{{' or end with '}}'. Preview: %s", body:sub(1, 200))
+    end
+    local ok, decoded = pcall(json.decode, json, body)
+    if not ok then
+        logger.error(string.format("[JSON VALIDATION] Round-trip decode failed: %s. Preview: %s",
+            tostring(decoded), body:sub(1, 200)))
+        dedup._in_flight_requests[req_hash] = nil
+        return nil, string.format("INVALID_JSON_BODY: Round-trip decode failed. Preview: %s", body:sub(1, 200))
+    end
     req:set_body(body)
     req.headers:delete("expect")
     local conn_timeout = (profile.params and profile.params.connection_timeout) or 30

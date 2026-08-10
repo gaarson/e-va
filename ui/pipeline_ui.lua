@@ -20,6 +20,7 @@ function M.print_help()
     print('  /exit     - Abort execution')
     print('  /mode <s> - Switch to stage <s>')
     print('  /status   - Show current status')
+    print('  /messages - Dump current LLM request messages to console')
     print('  /help     - Show this help message')
 end
 function M.parse_command(input, config)

@@ -597,7 +597,22 @@ function M.confirm(prompt, default)
     if not ans or strings.trim(ans) == '' then ans = default end
     return ans:lower():sub(1, 1) == 'y'
 end
-
+function M.confirm_with_reason(prompt, default)
+    default = default or 'n'
+    local choices = default == 'y' and '[Y/n]' or '[y/N]'
+    io.write(colors.cyan .. prompt .. ' ' .. choices .. ' (or type reason to deny): ' .. colors.reset)
+    io.stdout:flush()
+    local ans = io.read('*l')
+    if not ans or strings.trim(ans) == '' then ans = default end
+    local lower = ans:lower()
+    if lower == 'y' or lower == 'yes' then
+        return {allowed = true, reason = nil}
+    elseif lower == 'n' or lower == 'no' then
+        return {allowed = false, reason = 'User declined'}
+    else
+        return {allowed = false, reason = strings.trim(ans)}
+    end
+end
 function M.select_from_options(prompt, options)
     print(colors.cyan .. prompt .. colors.reset)
     for i, opt in ipairs(options) do print(string.format('  %d. %s', i, opt)) end
