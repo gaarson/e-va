@@ -12,6 +12,30 @@ local utils = require("utils")
 -- Instead, we store only the list of known file paths. On restore (load_from_snapshot),
 -- files are re-read from disk lazily when accessed. This keeps snapshots lightweight
 -- and ensures the agent always works with the latest on-disk file versions.
+-- ============================================================================
+-- VALIDATE SNAPSHOT
+-- ============================================================================
+function M.validate_snapshot(state)
+    if type(state) ~= "table" then
+        return false, "Snapshot root is not a table"
+    end
+    local required_tables = {
+        "history", "file_states", "thoughts", "execution_plan",
+        "last_actions", "turn_requested_files", "calibration_data",
+        "coder_feedback", "task_outcomes", "executed_commands",
+        "file_access_rank", "search_history", "pinned_files",
+        "promoted_files"
+    }
+    for _, field in ipairs(required_tables) do
+        if state[field] ~= nil and type(state[field]) ~= "table" then
+            return false, string.format("Field '%s' must be a table, got %s", field, type(state[field]))
+        end
+    end
+    return true
+end
+-- ============================================================================
+-- SNAPSHOT
+-- ============================================================================
 function M.snapshot(ctx)
     -- Store only file paths, not full contents
     local kb_paths = {}
@@ -22,15 +46,19 @@ function M.snapshot(ctx)
     end
     local ok, result = pcall(function()
         return json:encode({
+            version = 2,
             knowledge_base_paths = kb_paths,
+            task_summary = ctx.task_summary,
             file_access_rank = ctx.file_access_rank,
             global_access_counter = ctx.global_access_counter,
             file_states = ctx.file_states,
             search_history = ctx.search_history,
+            search_history_order = ctx.search_history_order,
             history = ctx.history,
             thoughts = ctx.thoughts,
             execution_plan = ctx.execution_plan,
             current_task_index = ctx.current_task_index,
+            current_turn = ctx.current_turn,
             promoted_files = ctx.promoted_files,
             pinned_files = ctx.pinned_files,
             last_actions = ctx.last_actions,
@@ -40,7 +68,11 @@ function M.snapshot(ctx)
             calibration_data = ctx.calibration_data,
             coder_feedback = ctx.coder_feedback,
             task_outcomes = ctx.task_outcomes,
-            executed_commands = ctx.executed_commands
+            executed_commands = ctx.executed_commands,
+            images_loaded = ctx.images_loaded,
+            last_sent_image_hashes = ctx.last_sent_image_hashes,
+            consecutive_recoveries = ctx.consecutive_recoveries,
+            recent_tool_outputs = ctx.recent_tool_outputs
         })
     end)
     if not ok then
@@ -54,6 +86,16 @@ end
 function M.load_from_snapshot(ctx, json_str)
     local ok, state = pcall(function() return json:decode(json_str) end)
     if not ok or not state then return false, "Corrupted JSON" end
+    -- Version check: accept version 1 (legacy/no version), version 2, or nil (legacy)
+    local version = state.version
+    if version ~= nil and version ~= 1 and version ~= 2 then
+        return false, string.format("Unsupported snapshot version: %s", tostring(version))
+    end
+    -- Structural validation
+    local valid, err = M.validate_snapshot(state)
+    if not valid then
+        return false, "Snapshot validation failed: " .. tostring(err)
+    end
     -- Restore knowledge_base as empty; files will be re-read from disk on demand.
     -- state.knowledge_base_paths tells us which files were known previously.
     ctx.knowledge_base = ctx.knowledge_base or {}
@@ -65,14 +107,17 @@ function M.load_from_snapshot(ctx, json_str)
             end
         end
     end
+    ctx.task_summary = state.task_summary or ""
     ctx.file_access_rank = state.file_access_rank or {}
     ctx.global_access_counter = state.global_access_counter or 0
     ctx.file_states = state.file_states or {}
     ctx.search_history = state.search_history or {}
+    ctx.search_history_order = state.search_history_order or {}
     ctx.history = state.history or {}
     ctx.thoughts = state.thoughts or {}
     ctx.execution_plan = state.execution_plan or {}
     ctx.current_task_index = state.current_task_index or 1
+    ctx.current_turn = state.current_turn or 0
     ctx.pinned_files = state.pinned_files or {}
     ctx.last_actions = state.last_actions or {}
     ctx.handoff_memo = state.handoff_memo
@@ -89,6 +134,10 @@ function M.load_from_snapshot(ctx, json_str)
     }
     ctx.task_outcomes = state.task_outcomes or {}
     ctx.executed_commands = state.executed_commands or {}
+    ctx.images_loaded = state.images_loaded or false
+    ctx.last_sent_image_hashes = state.last_sent_image_hashes or {}
+    ctx.consecutive_recoveries = state.consecutive_recoveries or 0
+    ctx.recent_tool_outputs = state.recent_tool_outputs or {}
     return true
 end
 -- ============================================================================
