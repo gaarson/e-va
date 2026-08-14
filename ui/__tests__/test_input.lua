@@ -1195,3 +1195,50 @@ describe('ui/input.lua — _process_sequence edge cases', function()
         assert.equals("X", s.cur_line)
     end)
 end)
+-- ============================================================================
+-- CTRL+D DEDUP REGRESSION
+-- ============================================================================
+describe('ui/input.lua — Ctrl+D dedup regression', function()
+    local input = require('ui.input')
+    local utf8 = input._utf8
+    local function new_state()
+        return {
+            lines = {}, lines_below = {}, cur_line = "", cur_pos = 1,
+            esc_state = 0, esc_buf = "",
+            hist_idx = 0, hist_branch = nil,
+        }
+    end
+    before_each(function() input._history_module.clear() end)
+    it('Ctrl+D clears cur_line to prevent double-insertion in read_text', function()
+        local s = new_state()
+        s.cur_line = 'hello world'
+        local action = input._process_byte(s, 4, utf8, 80, 1)
+        assert.equals('submit', action)
+        assert.equals('', s.cur_line)
+        assert.equals('hello world', s.result)
+    end)
+    it('read_text submit handler does not duplicate after _process_byte clears cur_line', function()
+        local s = new_state()
+        s.cur_line = 'test message'
+        input._process_byte(s, 4, utf8, 80, 1)
+        -- Simulate what read_text does after receiving 'submit'
+        if s.cur_line ~= '' then table.insert(s.lines, s.cur_line) end
+        local result = table.concat(s.lines, '\n')
+        assert.equals('test message', result)
+    end)
+    it('Ctrl+D multiline: cur_line cleared, lines_below drained, no duplication', function()
+        local s = new_state()
+        s.lines = {'line1'}
+        s.cur_line = 'line2'
+        s.lines_below = {'line3'}
+        input._process_byte(s, 4, utf8, 80, 1)
+        assert.equals('line1\nline2\nline3', s.result)
+        assert.equals('', s.cur_line)
+        assert.equals(0, #s.lines_below)
+        -- Simulate read_text post-submit logic
+        if s.cur_line ~= '' then table.insert(s.lines, s.cur_line) end
+        for _, l in ipairs(s.lines_below) do table.insert(s.lines, l) end
+        local result = table.concat(s.lines, '\n')
+        assert.equals('line1\nline2\nline3', result)
+    end)
+end)

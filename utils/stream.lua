@@ -1,5 +1,7 @@
 local io = require("io")
+local tty = require('ui.tty')
 local M = {}
+local _is_tty = tty.is_tty
 -- ============================================================================
 -- CENTRALIZED STREAM TOKEN PRINTER
 -- ============================================================================
@@ -36,8 +38,11 @@ function M.stream_token_printer(agent_cfg)
                     chars_since_flush = chars_since_flush - (s - 1 + #tag_open)
                     in_thought = true
                 elseif chars_since_flush >= FLUSH_THRESHOLD or #print_buf > #tag_open then
-                    local safe_len = #print_buf - #tag_open
-                    io.write(print_buf:sub(1, safe_len))
+                    local safe_len = math.min(#print_buf, #print_buf - #tag_open)
+                    if safe_len <= 0 then safe_len = #print_buf end
+                    local chunk = print_buf:sub(1, safe_len)
+                    if not _is_tty then chunk = (chunk:gsub("%[[^%a]*%a", "")) end
+                    io.write(chunk)
                     io.stdout:flush()
                     chars_since_flush = chars_since_flush - safe_len
                     print_buf = print_buf:sub(safe_len + 1)
@@ -51,8 +56,11 @@ function M.stream_token_printer(agent_cfg)
                     chars_since_flush = chars_since_flush - (s - 1 + #tag_close)
                     in_thought = false
                 elseif chars_since_flush >= FLUSH_THRESHOLD or #print_buf > #tag_close then
-                    local safe_len = #print_buf - #tag_close
-                    io.write(print_buf:sub(1, safe_len))
+                    local safe_len = math.min(#print_buf, #print_buf - #tag_close)
+                    if safe_len <= 0 then safe_len = #print_buf end
+                    local chunk = print_buf:sub(1, safe_len)
+                    if not _is_tty then chunk = (chunk:gsub("%[[^%a]*%a", "")) end
+                    io.write(chunk)
                     io.stdout:flush()
                     chars_since_flush = chars_since_flush - safe_len
                     print_buf = print_buf:sub(safe_len + 1)

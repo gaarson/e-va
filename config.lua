@@ -237,7 +237,7 @@ function M.get()
             top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = true},
+            chat_template_kwargs = {enable_thinking = false},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
             repetition_penalty = 1.05
@@ -290,7 +290,7 @@ function M.get()
             name = "ARCHITECT",
             url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
             token = get_api_key(),
-            is_reasoning = true,
+            -- is_reasoning = true,
             model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",

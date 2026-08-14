@@ -385,6 +385,7 @@ function M._process_byte(state, b, utf8, term_width)
         return 'cancel'
     elseif b == 4 then  -- Ctrl+D: submit
         if state.cur_line ~= "" then table.insert(lines, state.cur_line) end
+        state.cur_line = ""
         for _, l in ipairs(lines_below) do table.insert(lines, l) end
         state.lines_below = {}
         state.result = table.concat(lines, '\n')
