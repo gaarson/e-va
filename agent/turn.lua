@@ -100,7 +100,12 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                 break
             end
             local had_input = ui.interrupt.handle_interruption_with_capture(agent_name)
-            if had_input then
+            if had_input and had_input:lower():sub(1, 8) == "/discard" then
+                -- User wants to discard the partial output and retry
+                ctx:drop_last_message(agent_name)
+                logger.info("[INTERRUPT] User discarded partial output. Retrying.")
+                response_data = nil
+            elseif had_input then
                 -- User provided input; store it in history so next build_context picks it up
                 ctx:add_message(agent_name, 'user', had_input)
                 logger.info("[INTERRUPT] User input stored in history. Returning AUTO_LOOP to rebuild context fresh.")

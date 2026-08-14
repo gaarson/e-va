@@ -10,7 +10,7 @@ function M.stream_token_printer(agent_cfg)
     local in_thought = (agent_cfg and agent_cfg.is_reasoning) or false
     local tag_open = "<thinking>"
     local tag_close = "</thinking>"
-
+    local has_tags = (#tag_open > 0 and #tag_close > 0)
     -- Helper: strip ANSI escape codes if not TTY
     local function strip_ansi(text)
         if _is_tty then
@@ -22,7 +22,6 @@ function M.stream_token_printer(agent_cfg)
     if in_thought and _is_tty then
         io.write("\27[90m")
     end
-
     local function flush_remaining()
         if #print_buf > 0 then
             local output = print_buf
@@ -39,14 +38,25 @@ function M.stream_token_printer(agent_cfg)
         io.write("\n")
         io.stdout:flush()
     end
-
     local FLUSH_THRESHOLD = 100
     local chars_since_flush = 0
-
     local function on_token(t)
         print_buf = print_buf .. t
         chars_since_flush = chars_since_flush + #t
-
+        if not has_tags then
+            -- No tag detection: just buffer and flush at threshold
+            if chars_since_flush >= FLUSH_THRESHOLD then
+                local chunk = print_buf
+                if not _is_tty then
+                    chunk = strip_ansi(chunk)
+                end
+                io.write(chunk)
+                io.stdout:flush()
+                chars_since_flush = 0
+                print_buf = ""
+            end
+            return
+        end
         while #print_buf > 0 do
             if not in_thought then
                 local s, e = print_buf:find(tag_open)
@@ -64,7 +74,6 @@ function M.stream_token_printer(agent_cfg)
                 elseif chars_since_flush >= FLUSH_THRESHOLD or #print_buf > #tag_open then
                     local safe_len = math.min(#print_buf, #print_buf - #tag_open)
                     if safe_len <= 0 then safe_len = #print_buf end
-                    
                     local chunk = print_buf:sub(1, safe_len)
                     if not _is_tty then
                         chunk = strip_ansi(chunk)
@@ -92,7 +101,6 @@ function M.stream_token_printer(agent_cfg)
                 elseif chars_since_flush >= FLUSH_THRESHOLD or #print_buf > #tag_close then
                     local safe_len = math.min(#print_buf, #print_buf - #tag_close)
                     if safe_len <= 0 then safe_len = #print_buf end
-
                     local chunk = print_buf:sub(1, safe_len)
                     if not _is_tty then
                         chunk = strip_ansi(chunk)

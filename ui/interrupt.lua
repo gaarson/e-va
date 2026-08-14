@@ -21,31 +21,10 @@ function M.sanitize_input(str)
   end
   return table.concat(out)
 end
---- Flush leftover bytes from terminal input buffer by reading /dev/tty non-blockingly.
+--- Restore terminal to sane (cooked) mode. The 200ms sleep in callers is sufficient
+--- for the terminal to stabilize after ESC monitor teardown.
 local function flush_terminal_buffer()
-  local fd = io.open('/dev/tty', 'r')
-  if not fd then return end
-  -- Try to read and discard any pending input
-  local ok, data = pcall(function() return fd:read('*a') end)
-  fd:close()
-  if not ok then end
-end
-function M.handle_interruption(messages, agent_name)
-  -- (1) Delay 200ms to let terminal state stabilize after ESC monitor teardown
-  socket.sleep(0.2)
-  -- (2) Flush leftover bytes from terminal input buffer
-  flush_terminal_buffer()
-  print('\n' .. colors.yellow .. '[SYSTEM] Generation interrupted. Provide additional context or corrections (or press Enter to continue):' .. colors.reset)
-  local user_input = input.read_line('')
-  -- (3) Sanitize user_input
-  if user_input then
-    user_input = M.sanitize_input(user_input)
-  end
-  if user_input and strings.trim(user_input) ~= '' then
-    table.insert(messages, { role = 'user', content = user_input })
-    return true -- user provided context, retry
-  end
-  return true -- just continue
+  os.execute('stty sane 2>/dev/null')
 end
 function M.should_abort(interruption_count)
   return interruption_count >= M.MAX_INTERRUPTION_RETRIES
@@ -55,14 +34,15 @@ end
 -- @param agent_name string (unused, kept for API consistency)
 -- @return string|nil sanitized user input if non-empty, nil otherwise
 function M.handle_interruption_with_capture(agent_name)
-  -- (1) Delay 200ms to let terminal state stabilize after ESC monitor teardown
-  socket.sleep(0.2)
+  -- (1) Delay 300ms to let terminal state stabilize after ESC monitor teardown
+  socket.sleep(0.3)
   -- (2) Restore terminal to cooked mode BEFORE flushing
   os.execute('stty sane 2>/dev/null')
-  -- (3) Flush leftover bytes from terminal input buffer
+  -- (3) Drain stale bytes from terminal input buffer (ESC key, simultaneous keystrokes)
   flush_terminal_buffer()
-  print('\n' .. colors.yellow .. '[SYSTEM] Generation interrupted. Provide additional context or corrections (or press Enter to continue):' .. colors.reset)
-  local user_input = input.read_line('')
+  os.execute('dd if=/dev/tty bs=256 count=1 2>/dev/null > /dev/null')
+  print('\n' .. colors.yellow .. '[SYSTEM] Generation interrupted. Provide additional context or corrections (or press Ctrl+D to continue):' .. colors.reset)
+  local user_input = input.read_text('[CORRECTION] ', nil)
   -- (4) Sanitize user_input
   if user_input then
     user_input = M.sanitize_input(user_input)

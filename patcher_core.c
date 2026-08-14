@@ -184,28 +184,21 @@ static int esc_thread_created = 0;
 static int esc_tty_fd = -1;
 static struct termios original_termios;
 static int termios_saved = 0;
-
-static void handle_sigusr1(int sig) {
-    (void)sig;
-    /* No-op handler just to wake the thread from pause/select if needed */
-}
-
+/* Pipe-based wakeup: write end used by teardown to unblock select() in monitor thread */
+static int wakeup_pipe[2] = {-1, -1};
 static void *esc_monitor_routine(void *arg) {
     (void)arg;
-    
     /* Open /dev/tty for direct terminal access, fallback to stdin */
     esc_tty_fd = open("/dev/tty", O_RDONLY);
     if (esc_tty_fd < 0) {
         esc_tty_fd = dup(STDIN_FILENO);
     }
-    
     if (esc_tty_fd < 0 || !isatty(esc_tty_fd)) {
         /* Not a terminal, nothing to monitor */
         if (esc_tty_fd >= 0) close(esc_tty_fd);
         esc_tty_fd = -1;
         return NULL;
     }
-
     /* Save original termios settings and switch to raw mode */
     if (tcgetattr(esc_tty_fd, &original_termios) == 0) {
         termios_saved = 1;
@@ -215,69 +208,82 @@ static void *esc_monitor_routine(void *arg) {
         raw.c_cc[VTIME] = 0;
         tcsetattr(esc_tty_fd, TCSANOW, &raw);
     }
-
     /* Set non-blocking mode via fcntl */
     int flags = fcntl(esc_tty_fd, F_GETFL, 0);
     fcntl(esc_tty_fd, F_SETFL, flags | O_NONBLOCK);
-
-    /* Monitor loop: poll with select() every 100ms */
+    /* Monitor loop: poll with select() on both tty and wakeup pipe */
     while (esc_monitor_active) {
         fd_set rfds;
         struct timeval tv;
         FD_ZERO(&rfds);
         FD_SET(esc_tty_fd, &rfds);
+        int max_fd = esc_tty_fd;
+        if (wakeup_pipe[0] >= 0) {
+            FD_SET(wakeup_pipe[0], &rfds);
+            if (wakeup_pipe[0] > max_fd) max_fd = wakeup_pipe[0];
+        }
         tv.tv_sec = 0;
         tv.tv_usec = 100000; // poll every 100ms
-
-        int ret = select(esc_tty_fd + 1, &rfds, NULL, NULL, &tv);
+        int ret = select(max_fd + 1, &rfds, NULL, NULL, &tv);
         if (ret > 0) {
-            unsigned char buf[16];
-            ssize_t n = read(esc_tty_fd, buf, sizeof(buf));
-            for (ssize_t i = 0; i < n; i++) {
-                if (buf[i] == 0x1B) {
-                    /* ESC key detected */
-                    esc_flag = 1;
-                    kill(getpid(), SIGUSR1);
-                    goto done;
+            /* Check if wakeup pipe signaled (teardown requested) */
+            if (wakeup_pipe[0] >= 0 && FD_ISSET(wakeup_pipe[0], &rfds)) {
+                /* Drain the wakeup byte */
+                char dummy;
+                (void)read(wakeup_pipe[0], &dummy, 1);
+                break;
+            }
+            /* Check tty for ESC key */
+            if (FD_ISSET(esc_tty_fd, &rfds)) {
+                unsigned char buf[16];
+                ssize_t n = read(esc_tty_fd, buf, sizeof(buf));
+                for (ssize_t i = 0; i < n; i++) {
+                    if (buf[i] == 0x1B) {
+                        /* ESC key detected */
+                        esc_flag = 1;
+                        goto done;
+                    }
                 }
             }
         }
     }
 done:
-    
     /* Restore original termios BEFORE closing the fd */
     if (termios_saved && esc_tty_fd >= 0) {
         tcsetattr(esc_tty_fd, TCSANOW, &original_termios);
     }
-    
     if (esc_tty_fd >= 0) {
         close(esc_tty_fd);
         esc_tty_fd = -1;
     }
-    
     return NULL;
 }
-
 static int l_setup_esc_monitor(lua_State *L) {
     /* Prevent double setup */
     if (esc_monitor_active) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    /* Setup SIGUSR1 handler */
-    struct sigaction sa;
-    sa.sa_handler = handle_sigusr1;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sigaction(SIGUSR1, &sa, NULL);
-    
+    /* Create wakeup pipe for reliable thread teardown */
+    if (pipe(wakeup_pipe) != 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    /* Set both ends non-blocking */
+    int fl = fcntl(wakeup_pipe[0], F_GETFL, 0);
+    fcntl(wakeup_pipe[0], F_SETFL, fl | O_NONBLOCK);
+    fl = fcntl(wakeup_pipe[1], F_GETFL, 0);
+    fcntl(wakeup_pipe[1], F_SETFL, fl | O_NONBLOCK);
     /* Start the ESC monitor thread */
     esc_flag = 0;
     esc_monitor_active = 1;
-    
     int rc = pthread_create(&esc_thread_id, NULL, esc_monitor_routine, NULL);
     if (rc != 0) {
         esc_monitor_active = 0;
+        close(wakeup_pipe[0]);
+        close(wakeup_pipe[1]);
+        wakeup_pipe[0] = -1;
+        wakeup_pipe[1] = -1;
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -285,26 +291,28 @@ static int l_setup_esc_monitor(lua_State *L) {
     lua_pushboolean(L, 1);
     return 1;
 }
-
 static int l_consume_esc(lua_State *L) {
     lua_pushboolean(L, esc_flag);
     esc_flag = 0;
     return 1;
 }
-
 static int l_teardown_esc_monitor(lua_State *L) {
     (void)L;
     esc_monitor_active = 0;
     if (!esc_thread_created) {
         return 0;
     }
-    /* Wake the thread if it's blocked on read */
-    if (esc_tty_fd >= 0) {
-        pthread_kill(esc_thread_id, SIGUSR1);
+    /* Write a byte to the wakeup pipe to unblock select() in the monitor thread */
+    if (wakeup_pipe[1] >= 0) {
+        char c = 1;
+        (void)write(wakeup_pipe[1], &c, 1);
     }
     /* Wait for thread to finish */
     pthread_join(esc_thread_id, NULL);
     esc_thread_created = 0;
+    /* Clean up pipe fds */
+    if (wakeup_pipe[0] >= 0) { close(wakeup_pipe[0]); wakeup_pipe[0] = -1; }
+    if (wakeup_pipe[1] >= 0) { close(wakeup_pipe[1]); wakeup_pipe[1] = -1; }
     return 0;
 }
 

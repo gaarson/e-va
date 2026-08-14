@@ -209,4 +209,103 @@ describe("Stream Processing", function()
         assert.equals("Let me think...", result.full_reason)
         assert.equals("Here is the answer", result.full_text)
     end)
+    it("should detect ESC interrupt on first poll", function()
+        package.loaded["patcher_core"] = nil
+        package.preload["patcher_core"] = function()
+            return {
+                setup_esc_monitor = function() end,
+                teardown_esc_monitor = function() end,
+                consume_esc = function() return true end,
+                consume_sigint = function() return false end
+            }
+        end
+        local chunk = "data: " .. json:encode({
+            choices = {{ delta = { content = "Hello" } }}
+        }) .. "\n\n"
+        local stream = make_mock_stream({ chunk })
+        local profile = make_mock_profile()
+        local provider = make_mock_provider()
+        local result = stream_mod.process_stream(stream, profile, provider, nil)
+        assert.is_not_nil(result)
+        assert.is_true(result.interrupted)
+    end)
+    it("should detect SIGINT interrupt", function()
+        package.loaded["patcher_core"] = nil
+        package.preload["patcher_core"] = function()
+            return {
+                setup_esc_monitor = function() end,
+                teardown_esc_monitor = function() end,
+                consume_esc = function() return false end,
+                consume_sigint = function() return true end
+            }
+        end
+        local chunk = "data: " .. json:encode({
+            choices = {{ delta = { content = "Hello" } }}
+        }) .. "\n\n"
+        local stream = make_mock_stream({ chunk })
+        local profile = make_mock_profile()
+        local provider = make_mock_provider()
+        local result = stream_mod.process_stream(stream, profile, provider, nil)
+        assert.is_not_nil(result)
+        assert.is_true(result.interrupted)
+        assert.truthy(result.choices[1].message.content:find("INTERRUPTED"),
+            "Content should contain INTERRUPTED message")
+    end)
+    it("should not set interrupted flag when no signal", function()
+        package.loaded["patcher_core"] = nil
+        package.preload["patcher_core"] = function()
+            return {
+                setup_esc_monitor = function() end,
+                teardown_esc_monitor = function() end,
+                consume_esc = function() return false end,
+                consume_sigint = function() return false end
+            }
+        end
+        local chunk1 = "data: " .. json:encode({
+            choices = {{ delta = { content = "Hello" } }}
+        }) .. "\n\n"
+        local chunk2 = "data: " .. json:encode({
+            choices = {{ delta = { content = " World" } }}
+        }) .. "\n\n"
+        local chunk_done = "data: [DONE]\n\n"
+        local stream = make_mock_stream({ chunk1, chunk2, chunk_done })
+        local profile = make_mock_profile()
+        local provider = make_mock_provider()
+        local result = stream_mod.process_stream(stream, profile, provider, nil)
+        assert.is_not_nil(result)
+        assert.is_false(result.interrupted)
+    end)
+    it("should include partial content before interrupt", function()
+        package.loaded["patcher_core"] = nil
+        local esc_call_count = 0
+        package.preload["patcher_core"] = function()
+            return {
+                setup_esc_monitor = function() end,
+                teardown_esc_monitor = function() end,
+                consume_esc = function()
+                    esc_call_count = esc_call_count + 1
+                    return esc_call_count >= 2
+                end,
+                consume_sigint = function() return false end
+            }
+        end
+        local chunk1 = "data: " .. json:encode({
+            choices = {{ delta = { content = "Hello" } }}
+        }) .. "\n\n"
+        local chunk2 = "data: " .. json:encode({
+            choices = {{ delta = { content = " World" } }}
+        }) .. "\n\n"
+        local stream = make_mock_stream({ chunk1, chunk2 })
+        local profile = make_mock_profile()
+        local provider = make_mock_provider()
+        local result = stream_mod.process_stream(stream, profile, provider, nil)
+        assert.is_not_nil(result)
+        assert.is_true(result.interrupted)
+        -- "Hello" was processed before the interrupt fired on the 2nd poll
+        assert.truthy(result.choices[1].message.content:find("Hello"),
+            "Content should contain 'Hello'")
+        -- "World" was NOT processed because interrupt fires before chunk2 parsing
+        assert.truthy(result.choices[1].message.content:find("INTERRUPTED"),
+            "Content should contain INTERRUPTED message")
+    end)
 end)
