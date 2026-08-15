@@ -125,11 +125,6 @@ DEBUG_LOG="$WORKSPACE_DIR/.e-va-conf/startup_debug.log"
 echo "[DEBUG] Startup debug log written to: $DEBUG_LOG"
 # --- RUN CONTAINER ---
 echo "[RUN] Starting sandbox container..."
-# If max_turns is provided, we prepend it as a hint in the task
-if [ -n "$MAX_TURNS" ]; then
-    TASK="__MAX_TURNS=$MAX_TURNS__
-$TASK"
-fi
 # Build docker run arguments
 # Using --network host for direct access to host network (e.g., LLM API at 192.168.0.102:8000)
 # Source .env file to pick up LLM configuration

@@ -123,7 +123,7 @@ function M.compress_image(path, max_dim, quality)
         return rc
     end
     local cmd = string.format(
-        "timeout 5s ffmpeg -i %s -vf \"scale=%d:%d:force_original_aspect_ratio=downscale\" -t 2 -pix_fmt yuv420p -q:v %d -y %s",
+        "timeout 5s ffmpeg -i %s -vf \"scale=w=%d:h=%d:force_original_aspect_ratio=decrease\" -q:v %d -y %s",
         safe_path, max_dim, max_dim, math.ceil(31 * (100 - quality) / 100), tmp_path
     )
     local rc = run_cmd_with_exit_code(cmd)

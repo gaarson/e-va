@@ -1,9 +1,6 @@
 local M = {}
 function M.get()
     return {
-        MCP_SERVERS = {
-          browser = "npx -y chrome-devtools-mcp@latest --headless=new --isolated --screenshot-format=jpeg --screenshot-quality=70 --screenshot-max-width=1024 --screenshot-max-height=768 --no-usage-statistics --no-performance-crux"
-        },
         AGENTS = {
             EXECUTOR = {
                 name = "EXECUTOR",

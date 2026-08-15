@@ -11,7 +11,7 @@ describe("ui/stream", function()
             assert.is_function(printer.on_token)
             assert.is_function(printer.flush)
             -- Should be callable via metatable __call
-            assert.is_function(printer)
+            assert.is_truthy(getmetatable(printer).__call)
         end)
 
         it("works with nil agent_cfg", function()

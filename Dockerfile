@@ -10,11 +10,12 @@ SHELL ["/bin/bash", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     tini \
-    lua5.1 \
-    liblua5.1-0-dev \
+    lua5.4 \
+    liblua5.4-dev \
     gcc \
     sudo \
     make \
+    m4 \
     git \
     curl \
     wget \
@@ -23,6 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     luarocks \
+    ripgrep \
+    ffmpeg \
+    imagemagick \
     fonts-liberation \
     libasound2t64 \
     libatk-bridge2.0-0 \
@@ -40,8 +44,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libxshmfence1 \
     xdg-utils \
+    libssl3t64 \
+    zlib1g \
+    libzstd1 \
+    liblua5.4-0 \
     && rm -rf /var/lib/apt/lists/*
-
+# Ensure 'lua' resolves to lua5.4 (Debian default may be lua5.1)
+# lua5.1 is already pulled in by nodejs; just switch the alternatives
+RUN update-alternatives --set lua-interpreter /usr/bin/lua5.4 && update-alternatives --set lua-compiler /usr/bin/luac5.4
 # Устанавливаем Chrome Stable
 RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
       | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
@@ -61,11 +71,36 @@ RUN mv /usr/bin/google-chrome-stable /usr/bin/google-chrome-stable-orig && \
 # Создаём непривилегированного пользователя
 RUN useradd -m -s /bin/bash chromeuser
 
+ENV LUA_INCDIR=/usr/include/lua5.4
+ENV LUA_LIBDIR=/usr/lib/x86_64-linux-gnu
 # Lua modules
-RUN luarocks --lua-version=5.1 install luasocket \
-    && luarocks --lua-version=5.1 install inspect \
-    && luarocks --lua-version=5.1 install lua-cjson
-
+RUN mkdir -p /opt/e-va/lua_modules && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules basexx \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules binaryheap \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules busted \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules compat53 \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules cqueues \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules datafile \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules dkjson \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules fifo \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules http \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules inspect \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules json-lua \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lpeg \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lpeg_patterns \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lua-cjson \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lua-term \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lua_cliargs \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luacov \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luafilesystem \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luaossl \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luassert \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luasocket \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luasystem \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules mediator_lua \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules penlight \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules say \
+    && luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luaposix
 # Copy source code
 COPY . /opt/e-va
 
@@ -74,6 +109,8 @@ WORKDIR /opt/e-va
 RUN make
 
 RUN chmod +x /opt/e-va/e-va
+ENV LUA_PATH="/opt/e-va/lua_modules/share/lua/5.4/?.lua;/opt/e-va/lua_modules/share/lua/5.4/?/init.lua"
+ENV LUA_CPATH="/opt/e-va/lua_modules/lib/lua/5.4/?.so"
 # Устанавливаем chrome-devtools-mcp
 RUN npm install -g chrome-devtools-mcp@latest
 WORKDIR /workspace

@@ -8,6 +8,11 @@ M._is_tty = tty.is_tty
 -- 'auto_deny' = always return false
 -- 'prompt' = force prompt anyway (may hang if no stdin)
 M.non_tty_mode = 'auto_deny'
+-- Allow overriding via environment variable (useful for sandbox/CI contexts)
+local env_mode = os.getenv('EVA_NON_TTY_MODE')
+if env_mode == 'auto_approve' or env_mode == 'auto_deny' or env_mode == 'prompt' then
+    M.non_tty_mode = env_mode
+end
 function M.set_non_tty_mode(mode)
     if mode == 'auto_approve' or mode == 'auto_deny' or mode == 'prompt' then
         M.non_tty_mode = mode

@@ -20,7 +20,7 @@ local SHELL_MANIFEST = {
 }
 
 local function register(registry)
-    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts. (1) Safe whitelist bypasses human approval: ls, cat, grep, rg, echo, pwd, ps, find, head, tail, whoami, make, test, npm, cargo. All other commands require human-in-the-loop confirmation. (2) 10-minute timeout (60s) enforced via timeout wrapper — long-running commands are killed. (3) Output truncation: logs exceeding 1,000,000 bytes are truncated to the last 1MB; early output may be lost for very verbose commands. (4) Circuit breaker: if test/build/check commands fail 3 consecutive times, a warning is injected telling the agent to stop blind patching and read the source code first. (5) Exit codes are captured and reported for silent commands. (6) Output is streamed in real-time to the terminal but returned as a single concatenated string to the agent. (7) Interactive mode: use interactive=true to enable interactive CLI sessions (password entry, etc.). Returns WAITING_USER_INPUT signal when interactive input is needed.", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts. (1) All commands require human-in-the-loop confirmation before execution. (2) 10-minute timeout (60s) enforced via timeout wrapper — long-running commands are killed. (3) Output truncation: logs exceeding 1,000,000 bytes are truncated to the last 1MB; early output may be lost for very verbose commands. (4) Circuit breaker: if test/build/check commands fail 3 consecutive times, a warning is injected telling the agent to stop blind patching and read the source code first. (5) Exit codes are captured and reported for silent commands. (6) Output is streamed in real-time to the terminal but returned as a single concatenated string to the agent. (7) Interactive mode: use interactive=true to enable interactive CLI sessions (password entry, etc.). Returns WAITING_USER_INPUT signal when interactive input is needed.", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
         -- Parse arguments: support key=value style for interactive mode
         local interactive = false
         if args:match("interactive%s*=%s*true") then
@@ -32,20 +32,13 @@ local function register(registry)
         if cmd == "" then
             return { output = "[SHELL]: No command provided." }
         end
-        local safe_prefixes = { "ls", "cat", "grep", "rg", "echo", "pwd", "ps", "find", "head", "tail", "whoami", "make", "test", "npm", "cargo" }
-        local is_safe = false
-        for _, prefix in ipairs(safe_prefixes) do
-            if cmd:match("^" .. prefix .. "%s") or cmd == prefix then is_safe = true; break end
-        end
-        if not is_safe then
-            local allowed, reason = ui.security_prompt.confirm_execution(agent_name, cmd)
-            if allowed then
-                -- User approved, continue execution
-            elseif reason == "denied" then
-                return { output = "\n[SYSTEM]: Command execution DENIED by user. Do not try this command again." }
-            else
-                return { output = string.format("\n[SYSTEM]: Command execution DENIED by user. Reason: %s", reason) }
-            end
+        local allowed, reason = ui.security_prompt.confirm_execution(agent_name, cmd)
+        if allowed then
+            -- User approved, continue execution
+        elseif reason == "denied" then
+            return { output = "\n[SYSTEM]: Command execution DENIED by user. Do not try this command again." }
+        else
+            return { output = string.format("\n[SYSTEM]: Command execution DENIED by user. Reason: %s", reason) }
         end
         -- INTERACTIVE MODE: Use a PTY-based approach
         if interactive then

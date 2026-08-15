@@ -498,50 +498,48 @@ function M.read_text(prompt, prompt_color)
         while true do
             local ch = io.read(1)
             if ch == nil then break end
-            if ch == '' then goto continue end
-            local b = ch:byte(1)
-            if not b then goto continue end
-
-            if b >= 128 then
-                local expected_len
-                if b < 0xE0 then expected_len = 2
-                elseif b < 0xF0 then expected_len = 3
-                else expected_len = 4 end
-
-                local char_bytes = string.char(b)
-                for i = 2, expected_len do
-                    local nb = io.read(1)
-                    if nb then char_bytes = char_bytes .. nb else break end
+            if ch == '' then
+                -- empty read, skip
+            else
+                local b = ch:byte(1)
+                if b then
+                    if b >= 128 then
+                        local expected_len
+                        if b < 0xE0 then expected_len = 2
+                        elseif b < 0xF0 then expected_len = 3
+                        else expected_len = 4 end
+                        local char_bytes = string.char(b)
+                        for i = 2, expected_len do
+                            local nb = io.read(1)
+                            if nb then char_bytes = char_bytes .. nb else break end
+                        end
+                        local action = M._process_sequence(state, char_bytes, utf8, term_width)
+                        if not state.is_pasting and action == 'redraw' then
+                            _full_redraw(state, term_width, term_height)
+                        end
+                    else
+                        local action = M._process_byte(state, b, utf8, term_width)
+                        if action == 'submit' then
+                            if state.cur_line ~= "" then table.insert(state.lines, state.cur_line) end
+                            for _, l in ipairs(state.lines_below) do table.insert(state.lines, l) end
+                            local result = table.concat(state.lines, '\n')
+                            local trimmed = strings.trim(result)
+                            if trimmed ~= '' then M._history_module.save(result) end
+                            return result
+                        elseif action == 'cancel' then
+                            io.write('\r\n')
+                            return nil
+                        elseif action == 'start_paste' then
+                            state.is_pasting = true
+                        elseif action == 'end_paste' then
+                            state.is_pasting = false
+                            _full_redraw(state, term_width, term_height)
+                        elseif not state.is_pasting and action == 'redraw' then
+                            _full_redraw(state, term_width, term_height)
+                        end
+                    end
                 end
-
-                local action = M._process_sequence(state, char_bytes, utf8, term_width)
-                if not state.is_pasting and action == 'redraw' then
-                    _full_redraw(state, term_width, term_height)
-                end
-                goto continue
             end
-
-            local action = M._process_byte(state, b, utf8, term_width)
-            
-            if action == 'submit' then
-                if state.cur_line ~= "" then table.insert(state.lines, state.cur_line) end
-                for _, l in ipairs(state.lines_below) do table.insert(state.lines, l) end
-                local result = table.concat(state.lines, '\n')
-                local trimmed = strings.trim(result)
-                if trimmed ~= '' then M._history_module.save(result) end
-                return result
-            elseif action == 'cancel' then
-                io.write('\r\n')
-                return nil
-            elseif action == 'start_paste' then
-                state.is_pasting = true
-            elseif action == 'end_paste' then
-                state.is_pasting = false
-                _full_redraw(state, term_width, term_height)
-            elseif not state.is_pasting and action == 'redraw' then
-                _full_redraw(state, term_width, term_height)
-            end
-            ::continue::
         end
 
         if state.cur_line ~= "" then table.insert(state.lines, state.cur_line) end

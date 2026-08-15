@@ -12,6 +12,7 @@ spec/
 examples/
 .git/
 .e-va-conf/
+lua_modules/
 # Environment files
 .env
 .env.local

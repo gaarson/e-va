@@ -237,7 +237,7 @@ function M.get()
             top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = false},
+            chat_template_kwargs = {enable_thinking = false, preserve_thinking = false},
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
             repetition_penalty = 1.05
@@ -248,7 +248,7 @@ function M.get()
             top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = false},
+            chat_template_kwargs = {enable_thinking = false, preserve_thinking = false},
             -- presence_penalty = 0.0
             repetition_penalty = 1.05
         }
@@ -280,7 +280,7 @@ function M.get()
         params = {
             stream = true,
             temperature = 0.1,
-            chat_template_kwargs = {enable_thinking = false},
+            chat_template_kwargs = {enable_thinking = false, preserve_thinking = false},
             max_tokens = 16384
         }
     }
