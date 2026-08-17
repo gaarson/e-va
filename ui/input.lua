@@ -76,7 +76,21 @@ end
 local function _tty_restore()
     os.execute('stty sane 2>/dev/null')
 end
-
+--- Drains any pending bytes from the stdin buffer.
+-- In non-TTY mode this is a no-op. In TTY mode, temporarily sets
+-- the terminal to non-blocking mode, reads and discards all pending
+-- bytes, then restores the terminal settings.
+function M.flush_input()
+    if not tty.is_tty then return end
+    pcall(function()
+        os.execute('stty raw -echo -icanon min 0 time 0 2>/dev/null')
+        while true do
+            local ch = io.read(1)
+            if ch == nil then break end
+        end
+        os.execute('stty sane 2>/dev/null')
+    end)
+end
 local function _get_term_size()
     local f = io.popen('stty size 2>/dev/null')
     if f then
@@ -569,6 +583,7 @@ end
 -- ОСТАЛЬНЫЕ ФУНКЦИИ БЕЗ ИЗМЕНЕНИЙ
 -- ============================================================================
 function M.read_line(prompt, prompt_color)
+    M.flush_input()
     prompt_color = prompt_color or colors.cyan
     io.write(prompt_color .. prompt .. colors.reset)
     io.stdout:flush()
@@ -588,6 +603,7 @@ function M.read_non_empty(prompt, prompt_color)
 end
 
 function M.confirm(prompt, default)
+    M.flush_input()
     default = default or 'n'
     local choices = default == 'y' and '[Y/n]' or '[y/N]'
     io.write(colors.cyan .. prompt .. ' ' .. choices .. ': ' .. colors.reset)
@@ -597,6 +613,7 @@ function M.confirm(prompt, default)
     return ans:lower():sub(1, 1) == 'y'
 end
 function M.confirm_with_reason(prompt, default)
+    M.flush_input()
     default = default or 'n'
     local choices = default == 'y' and '[Y/n]' or '[y/N]'
     io.write(colors.cyan .. prompt .. ' ' .. choices .. ' (or type reason to deny): ' .. colors.reset)
