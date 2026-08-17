@@ -41,16 +41,16 @@ function M:parse_command(text)
     -- Handle <think>...</thinking>, <thinking>...</thinking>, <antThinking>...</antThinking> (case-insensitive)
     local had_reasoning = false
     -- Strip <think>...</thinking> (common LLM reasoning tag, case-insensitive)
-    local n1 = select(2, text:gsub("<%s*thinking[^>]*>.-</%s*thinking%s*>", ""))
+    local n1 = select(2, text:gsub("<%s*thinking[^>]*>[^%z]*</%s*thinking%s*>", ""))
     if n1 > 0 then had_reasoning = true end
     -- Strip <antThinking>...</antThinking> (case-insensitive)
-    local n2 = select(2, text:gsub("<%s*antThinking[^>]*>.-</%s*antThinking%s*>", ""))
+    local n2 = select(2, text:gsub("<%s*antThinking[^>]*>[^%z]*</%s*antThinking%s*>", ""))
     if n2 > 0 then had_reasoning = true end
     -- Strip HTML-style <!-- thinking --> comments
-    local n3 = select(2, text:gsub("<!--%s*thinking[^>]*-->.-<!--%s*/thinking%s*-->", ""))
+    local n3 = select(2, text:gsub("<!--%s*thinking[^>]*-->[^%z]*<!--%s*/thinking%s*-->", ""))
     if n3 > 0 then had_reasoning = true end
     -- Strip <think>...` tags (system directive reasoning tag)
-    local n4 = select(2, text:gsub("<%s*think%s*>.-</%s*think%s*>", ""))
+    local n4 = select(2, text:gsub("<%s*think%s*>[^%z]*</%s*think%s*>", ""))
     if n4 > 0 then had_reasoning = true end
     if had_reasoning then
         local logger = require("logger")

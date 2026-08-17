@@ -226,6 +226,8 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
         local f = io.open(state_file, "w")
         if f then f:write(snap); f:close() end
     end
+    -- Disable thinking for multi-stage stages (intent/generate/review) to save tokens
+    local NO_THINK_OVERRIDE = { chat_template_kwargs = { enable_thinking = false }, thinking_token_budget = 0 }
     -- Fix #5: Attempt state recovery at loop start
     if multi_exec.load_state then
         local recovered = multi_exec:load_state()
@@ -269,7 +271,7 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
             ui.print_ai_prompt(agent_name, step.stage)
             local printer = deps.utils.stream_token_printer(agent_cfg)
             local response_data, err
-            response_data, err = deps.llm.send_request(agent_cfg, messages, { on_token = printer })
+            response_data, err = deps.llm.send_request(agent_cfg, messages, { on_token = printer, override_params = NO_THINK_OVERRIDE })
             deps.utils.flush_stream_buffer(printer)
             if not response_data then
                 deps.logger.error(string.format("[%s] FATAL: Network unreachable.", label), err)

@@ -91,27 +91,22 @@ Evaluate each SUCCESS_CRITERIA item individually.
 Response format (strict):
 <REVIEW>
 VERDICT: APPROVE | PARTIAL | REVISE
-CHECKLIST:
-- [ ] <criteria 1>: PASS/FAIL — <commentary>
-- [ ] <criteria 2>: PASS/FAIL — <commentary>
-PARTIAL_CRITERIA:
-<List which criteria PASSED (if using PARTIAL verdict)>
-- Criteria X: PASS — <reason>
-- Criteria Y: PASS — <reason>
-CORRECTION:
-<what specifically is wrong>
-<how to fix it — direction, not a ready-made payload>
+[ONLY IF NOT APPROVE:] CHECKLIST:
+- [ ] <criteria>: PASS/FAIL — <brief comment>
+[ONLY IF PARTIAL:] PARTIAL_CRITERIA:
+- <passed criteria list>
+[ONLY IF REVISE or PARTIAL:] CORRECTION:
+<what is wrong and how to fix>
 </REVIEW>
 {tool_specific_checks}
 Rules:
-1. APPROVE — ONLY if ALL criteria AND all tool-specific checks are PASS.
-2. PARTIAL — if MOST criteria are PASS but a FEW are FAIL. Use PARTIAL_CRITERIA to list which passed. This tells the generator to only fix the failed parts, preserving the successful ones.
-3. REVISE — if AT LEAST ONE criterion or tool-specific check is FAIL and PARTIAL is not appropriate (e.g., fundamental issues).
-4. In CORRECTION, be SPECIFIC: quote the exact lines that are wrong and describe the fix.
-   Do NOT write a ready-made payload. Give directional guidance.
-5. If the payload has syntax errors (JSON, Lua, C, etc.), flag them explicitly.
-6. If the execution result shows partial success, use PARTIAL verdict and list passed criteria in PARTIAL_CRITERIA.
-7. Do NOT add anything outside the <REVIEW>...</REVIEW> tags.
+1. APPROVE — ONLY if ALL criteria AND all tool-specific checks are PASS. When APPROVE, output ONLY the VERDICT line. No checklist, no commentary.
+2. PARTIAL — if MOST criteria PASS but a FEW FAIL. Include CHECKLIST and PARTIAL_CRITERIA.
+3. REVISE — if fundamental issues. Include CHECKLIST and CORRECTION.
+4. In CORRECTION, be SPECIFIC: quote exact wrong lines and describe the fix directionally.
+5. If syntax errors exist, flag them explicitly.
+6. Do NOT add anything outside the <REVIEW>...</REVIEW> tags.
+7. Be CONCISE. No filler text, no praise, no summaries.
 ]]
 
 return M

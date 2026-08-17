@@ -99,7 +99,7 @@ local function register(registry)
                 output = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. output:sub(-MAX_LOG_SIZE)
             end
             ui.printer.line("\n[SYSTEM: Interactive execution finished]")
-            return { output = "\n[SHELL STDOUT/STDERR]:\n" .. output, signal = "WAITING_USER_INPUT" }
+            return { output = "\n[SHELL STDOUT/STDERR]:\n" .. output }
         end
         -- NON-INTERACTIVE MODE (original behavior)
         ui.printer.line(string.format("\n[SYSTEM: Executing '%s']", cmd))
@@ -117,6 +117,8 @@ local function register(registry)
         local output_chunks = {}
         local last_pos = 0
         local exit_code = nil
+        local POLL_TIMEOUT = 90 -- seconds, slightly above the 60s command timeout
+        local poll_start = os.time()
         while true do
             local f = io.open(tmp_file, "rb")
             if f then
@@ -139,6 +141,11 @@ local function register(registry)
                 end
                 f_code:close()
             end
+            -- Safety: break out if we've exceeded the poll timeout
+            if os.time() - poll_start > POLL_TIMEOUT then
+                ui.printer.line("\n[SYSTEM WARNING: Polling timeout exceeded. Command may have hung.]")
+                break
+            end
             os.execute("sleep 0.1")
         end
         ui.printer.line("\n[SYSTEM: Execution finished]")
@@ -149,7 +156,7 @@ local function register(registry)
         if #res == 0 then
             res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")"
         end
-        local MAX_LOG_SIZE = 10000000
+        local MAX_LOG_SIZE = 1000000
         if #res > MAX_LOG_SIZE then
             res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE)
         end

@@ -604,6 +604,7 @@ end
 
 function M.confirm(prompt, default)
     M.flush_input()
+    if tty.is_tty then os.execute('stty icanon echo min 1 time 0 2>/dev/null') end
     default = default or 'n'
     local choices = default == 'y' and '[Y/n]' or '[y/N]'
     io.write(colors.cyan .. prompt .. ' ' .. choices .. ': ' .. colors.reset)
@@ -614,6 +615,7 @@ function M.confirm(prompt, default)
 end
 function M.confirm_with_reason(prompt, default)
     M.flush_input()
+    if tty.is_tty then os.execute('stty icanon echo min 1 time 0 2>/dev/null') end
     default = default or 'n'
     local choices = default == 'y' and '[Y/n]' or '[y/N]'
     io.write(colors.cyan .. prompt .. ' ' .. choices .. ' (or type reason to deny): ' .. colors.reset)
