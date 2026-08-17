@@ -53,7 +53,7 @@ M.register("openai", {
         if not ok or not part or not part.choices or not part.choices[1] then return nil, nil end
         local delta = part.choices[1].delta
         if not delta then return nil, nil end
-        local reasoning = delta.reasoning_content
+        local reasoning = delta.reasoning_content or delta.reasoning
         if reasoning == nil then reasoning = nil
         elseif reasoning == "" then reasoning = ""
         end

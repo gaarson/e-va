@@ -40,7 +40,7 @@ echo ">>> Running tests with coverage..."
 OVERALL_STATUS=0
 if [ $# -eq 0 ]; then
   # Auto-discover all test files in __tests/ or __tests__/ directories
-  TEST_FILES=$(find . -type f -name "*.lua" \( -path "*/__tests/*.lua" -o -path "*/__tests__/*.lua" \) | sort)
+  TEST_FILES=$(find . -type f -name "*.lua" \( -path "*/__tests/*.lua" -o -path "*/__tests__/*.lua" \) -not -path "./lua_modules/*" | sort)
   if [ -z "$TEST_FILES" ]; then
     echo ">>> No test files found in __tests/ directories."
     exit 1
