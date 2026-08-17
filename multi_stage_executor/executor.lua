@@ -127,7 +127,6 @@ function M:build_intent_prompt(task, project_context)
     })
 end
 
-
 function M:build_generate_prompt()
     local tool_name = self.intent and self.intent.TOOL or ""
     local tool = registry.tools[tool_name]
@@ -154,7 +153,6 @@ function M:build_generate_prompt()
         feedback_block = feedback_block,
     })
 end
-
 
 function M:build_review_prompt()
     local tool_name = self.intent and self.intent.TOOL or ""
@@ -307,17 +305,13 @@ function M:feed_response(llm_response)
         end
 
         self.state   = states.STATES.COMMAND_READY
-
         local effective_payload = self.payload
 
         if (self.intent.TOOL == "patch" or self.intent.TOOL == "create_file") and self.file_path and self.file_path ~= "" then
-
             effective_payload = self.file_path .. "\n" .. self.payload
-
         end
 
         return { stage = "execute", tool = self.intent.TOOL, payload = effective_payload }
-
     end
 
     if self.state == states.STATES.REVIEWING then
@@ -325,19 +319,13 @@ function M:feed_response(llm_response)
         local budget = self:calculate_token_budget()
 
         if self.total_tokens_used > budget then
-
             logger.warn(string.format(
-
                 "[MULTI-STAGE] Token budget exceeded (%d/%d, mode=%s). Force-approving to prevent runaway token consumption.",
-
                 self.total_tokens_used, budget, self.budget_mode
-
             ))
 
             self.state = states.STATES.APPROVED
-
             return { stage = "done", result = self.last_result, iterations = self.iteration, forced_approval = true }
-
         end
 
         local review, err = self:parse_review(llm_response)
@@ -409,45 +397,30 @@ function M:feed_response(llm_response)
             return { stage = "generate", prompt = self:build_generate_prompt() }
         end
         if self.review.verdict == "REVISE" then
-
             if self.iteration >= self.max_iterations then
-
                 self.state = states.STATES.ERROR
 
                 return {
-
                     stage = "error",
-
                     message = string.format(
-
                         "Failed to satisfy intent after %d iterations. Last correction: %s",
-
                         self.iteration, self.review.correction
-
                     ),
-
                 }
-
             end
 
             self.corrections[#self.corrections + 1] = self.review.correction
-
             self.intent_raw = self:_merge_correction(self.review.correction)
-
             self.state      = states.STATES.REVISING
-
             self.iteration  = self.iteration + 1
 
             return { stage = "generate", prompt = self:build_generate_prompt() }
 
         end
-
     end
 
     return { stage = "error", message = "Unexpected state: " .. self.state }
-
 end
-
 
 function M:feed_execution_result(output)
     if self.state ~= states.STATES.COMMAND_READY then

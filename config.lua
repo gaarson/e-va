@@ -237,8 +237,12 @@ function M.get()
             top_p = 0.95,
             top_k = 60,
             -- min_p = 0.02,
-            chat_template_kwargs = {enable_thinking = true, preserve_thinking = false},
-            thinking_token_budget = 8192,
+            chat_template_kwargs = {
+              enable_thinking = true, 
+              preserve_thinking = false,
+              thinking_token_budget = 8192,
+            },
+            reasoning_effort = "low",
             -- enable_thinking = true,
             -- frequency_penalty = 0.2
             repetition_penalty = 1.05

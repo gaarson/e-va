@@ -1,7 +1,6 @@
 
 local M = {}
 
-
 -- Load sub-modules
 local states = require("multi_stage_executor.states")
 local prompts = require("multi_stage_executor.prompts")
