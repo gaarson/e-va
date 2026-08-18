@@ -95,6 +95,7 @@ function M.send_request(profile, messages, options)
         string.sub(profile.token or "", -4)))
     logger.info("[SEND DIAG] Calling req:go with timeout=" .. conn_timeout)
     local t_send = cqueues.monotime()
+    local headers, stream_obj
     local ok, headers_or_err, stream_obj_or_err = pcall(function() return req:go(conn_timeout) end)
     local send_elapsed = cqueues.monotime() - t_send
     if ok then

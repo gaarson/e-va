@@ -60,12 +60,6 @@ end
 -- the C-level signal handling. Instead, we set up a periodic check.
 -- The most reliable approach in pure Lua is to override os.exit (done above)
 -- and ensure json_logger/status_server flush on any exit path.
--- Additional: set a metatable on the module to flush on GC
-setmetatable(_G, {
-    __mode = "k"
-})
--- Fallback: if Lua crashes without calling os.exit, the json_logger __gc hook
--- will flush. The status_server will be stopped by the OS killing the process.
 -- 2. Initialize ContextFlow
 local ctx = ContextFlow.new(config.CONTEXT_FLOW, config)
 local STATE_FILE = state_mgr.get_state_file_path(config)

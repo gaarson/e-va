@@ -23,8 +23,35 @@ local function register(registry)
                     signal = nil
                 }
             else
+                -- Mark all tasks as done by advancing index past the last one
+                ctx.current_task_index = #ctx.execution_plan + 1
+                -- Build completion report for the next agent
+                local report_parts = {}
+                table.insert(report_parts, "\n[SYSTEM]: ALL TASKS COMPLETE. Execution plan finished successfully.")
+                table.insert(report_parts, "")
+                table.insert(report_parts, "Completed steps:")
+                for i, task in ipairs(ctx.execution_plan) do
+                    table.insert(report_parts, string.format("  %d. %s — %s", i, tostring(task.file), tostring(task.instruction)))
+                end
+                -- List modified files
+                local modified = {}
+                for path, state in pairs(ctx.file_states) do
+                    if state == "MODIFIED" or state == "CREATED" then
+                        table.insert(modified, string.format("  - %s (%s)", path, state))
+                    end
+                end
+                if #modified > 0 then
+                    table.insert(report_parts, "")
+                    table.insert(report_parts, "Files modified:")
+                    table.sort(modified)
+                    for _, m in ipairs(modified) do
+                        table.insert(report_parts, m)
+                    end
+                end
+                table.insert(report_parts, "")
+                table.insert(report_parts, "Ready for architect analysis.")
                 return {
-                    output = "\n[SYSTEM]: All steps in the execution plan are complete. Ending stage.",
+                    output = table.concat(report_parts, "\n"),
                     signal = "PIPELINE_NEXT_STAGE"
                 }
             end

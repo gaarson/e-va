@@ -33,6 +33,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         optimizer = optimizer,
         registry = tool_registry
     }
+    ctx.current_turn = turn
     ctx.consecutive_recoveries = 0
     local synced_files = ctx:sync_files()
     if #synced_files > 0 then
@@ -88,7 +89,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
             if attempt < max_retries then
                 ui.printer.retry_message(attempt, max_retries, retry_delay)
                 socket.sleep(retry_delay)
-                retry_delay = retry_delay * 3
+                retry_delay = retry_delay * 2
             end
         end
         if not response_data then break end
@@ -151,8 +152,8 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
 
     -- HANDLE TIMED-OUT RESPONSES
     if response_data.timed_out then
-        logger.warn(string.format("[STREAM TIMEOUT] Partial response received (%d chars). Stream timed out but content is usable.", #(content or 0)))
-        ui.print_warning(string.format("Stream timed out after %d chars of content. Response may be incomplete.", #(content or 0)))
+        logger.warn(string.format("[STREAM TIMEOUT] Partial response received (%d chars). Stream timed out but content is usable.", #(content or "")))
+        ui.print_warning(string.format("Stream timed out after %d chars of content. Response may be incomplete.", #(content or "")))
     end
 
     -- SELECTIVE MULTI-STAGE ROUTING (Two-phase tool invocation)
@@ -351,6 +352,11 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         return "AUTO_LOOP"
     elseif result.type == "DUPLICATE" then
         logger.warn(string.format("[DEDUP] Blocked duplicate command. Message injected into history."))
+        save_state()
+        return "AUTO_LOOP"
+    elseif result.type == "RETRY" then
+        logger.warn(string.format("[RETRY] Command validation failed: %s", result.message or "unknown"))
+        ctx:add_message(agent_name, "user", result.message)
         save_state()
         return "AUTO_LOOP"
     elseif result.type == "EXECUTED" then

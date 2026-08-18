@@ -364,8 +364,6 @@ function M.inject_handoff_files(ctx, agent_name)
         if is_in_history(path) then return end
         local status = get_status(path)
         local line_count = count_lines(content)
-        -- Ensure file is pinned in knowledge base
-        history.pin_file(ctx, path)
         -- Post-handoff KB eviction: if enabled and file is not a plan target,
         -- remove from knowledge_base to free memory (it's already in agent history)
         local evict = handoff_cfg.evict_from_kb_after_handoff and not plan_target_files[path]
@@ -382,6 +380,8 @@ function M.inject_handoff_files(ctx, agent_name)
                 "<file_context path=\"%s\" status=\"%s\">\n%s\n</file_context>",
                 path, status, content
             ))
+            -- Pin only full-content files (lazy files don't need pinning)
+            history.pin_file(ctx, path)
         end
         -- Evict from KB if configured (file is already in agent's history)
         if evict then

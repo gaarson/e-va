@@ -11,7 +11,6 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     local in_reasoning = false
     local was_interrupted = false
     local last_part = nil
-    local first_token_received = false
     local STREAM_TIMEOUT = (profile.params and profile.params.stream_timeout) or 600
     local is_timeout = false
     local last_activity_time = cqueues.monotime()
@@ -119,10 +118,6 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                             if on_token_cb then on_token_cb(c_reason) end
                         end
                         table.insert(reason_parts, c_reason)
-                        if not first_token_received then
-                            logger.info("[STREAM] First token received")
-                            first_token_received = true
-                        end
                     elseif c_text and c_text ~= "" then
                         if in_reasoning then
                             in_reasoning = false
@@ -134,10 +129,6 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                             if on_token_cb then on_token_cb(c_text) end
                         end
                         table.insert(text_parts, c_text)
-                        if not first_token_received then
-                            logger.info("[STREAM] First token received")
-                            first_token_received = true
-                        end
                     end
                 end
             end

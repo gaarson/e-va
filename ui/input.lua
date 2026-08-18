@@ -84,6 +84,9 @@ function M.flush_input()
     if not tty.is_tty then return end
     pcall(function()
         os.execute('stty raw -echo -icanon min 0 time 0 2>/dev/null')
+        -- Drain stdin via shell to bypass Lua stdio buffer caching
+        os.execute('while IFS= read -r -n1 -t 0.05 ch; do :; done 2>/dev/null')
+        -- Also drain any bytes cached in Lua's internal stdio buffer
         while true do
             local ch = io.read(1)
             if ch == nil then break end
@@ -610,6 +613,10 @@ function M.confirm(prompt, default)
     io.write(colors.cyan .. prompt .. ' ' .. choices .. ': ' .. colors.reset)
     io.stdout:flush()
     local ans = io.read('*l')
+    if ans then
+        -- Strip control characters (backspace 0x7F, DEL, etc.) that may leak from stdio buffer
+        ans = ans:gsub('%c', '')
+    end
     if not ans or strings.trim(ans) == '' then ans = default end
     return ans:lower():sub(1, 1) == 'y'
 end
@@ -621,6 +628,9 @@ function M.confirm_with_reason(prompt, default)
     io.write(colors.cyan .. prompt .. ' ' .. choices .. ' (or type reason to deny): ' .. colors.reset)
     io.stdout:flush()
     local ans = io.read('*l')
+    if ans then
+        ans = ans:gsub('%c', '')
+    end
     if not ans or strings.trim(ans) == '' then ans = default end
     local lower = ans:lower()
     if lower == 'y' or lower == 'yes' then

@@ -41,7 +41,11 @@ function M.deduplicate_consecutive_messages(ctx, agent_name)
         history[1] = history[1]
         for i = 2, #history do
             local is_cross_role_dup = false
-            if history[i].role ~= history[write_idx2].role and history[i].content == history[write_idx2].content then
+            if history[i].role ~= history[write_idx2].role
+                and history[i].content == history[write_idx2].content
+                and #history[i].content < 200
+                and history[i].content:match("^(ok|OK|Ok|yes|Yes|YES|no|No|NO|understood|Got it|I see)")
+            then
                 is_cross_role_dup = true
             end
             if not is_cross_role_dup then

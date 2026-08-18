@@ -54,18 +54,18 @@ local function _get_cache_max_size(flow_config)
     end
     return _cache_max_size_default
 end
-local function _cache_get(text)
+local function _cache_get(text, model_key)
     if not text then return nil end
-    local h = _text_hash(text)
+    local h = _text_hash(text .. "|" .. (model_key or ""))
     local entry = _token_estimate_cache[h]
     if entry and entry.prefix == text:sub(1, 50) and entry.len == #text then
         return entry.value
     end
     return nil
 end
-local function _cache_set(text, value, flow_config)
+local function _cache_set(text, value, flow_config, model_key)
     if not text then return end
-    local h = _text_hash(text)
+    local h = _text_hash(text .. "|" .. (model_key or ""))
     local max_size = _get_cache_max_size(flow_config)
     local prefix = text:sub(1, 50)
     local len = #text
@@ -223,14 +223,14 @@ end
 
 function M.estimate_tokens(ctx, text, agent_cfg)
     if not text or #text == 0 then return 0 end
+    -- Get model-specific divisors (needed for cache key)
+    local model_name = (agent_cfg and agent_cfg.model) or "default"
+    local model_divs = M.MODEL_DIVISORS[model_name] or M.MODEL_DIVISORS["default"]
     -- Check cache first
-    local cached = _cache_get(text)
+    local cached = _cache_get(text, model_name)
     if cached then return cached end
     -- Detect content type
     local content_type = _detect_content_type(text)
-    -- Get model-specific divisors
-    local model_name = (agent_cfg and agent_cfg.model) or "default"
-    local model_divs = M.MODEL_DIVISORS[model_name] or M.MODEL_DIVISORS["default"]
     -- Get content-type divisor from model table
     local model_divisor = model_divs[content_type] or model_divs.mixed
     -- Blend: 80% model-calibrated, 20% content-type heuristic
@@ -258,7 +258,7 @@ function M.estimate_tokens(ctx, text, agent_cfg)
     local overhead = _calculate_structural_overhead(text, content_type)
     local total = raw_tokens + overhead
     -- Cache the result
-    _cache_set(text, total, ctx.flow_config)
+    _cache_set(text, total, ctx.flow_config, model_name)
     return total
 end
 

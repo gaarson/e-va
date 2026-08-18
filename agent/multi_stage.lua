@@ -206,7 +206,7 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
     local function save_state_local()
         local os_mod = require("os")
         os_mod.execute(string.format("mkdir -p '%s/.e-va-conf'", config.PROJECT_ROOT))
-        local state_file = config.PROJECT_ROOT .. "/.e-va-conf/.state.json"
+        local state_file = config.PROJECT_ROOT .. "/.e-va-conf/.multi_stage_state.json"
         -- Build lightweight snapshot instead of full ctx:snapshot()
         local lightweight = {
             task = multi_exec.task or "",
