@@ -182,6 +182,20 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     if patcher_core.teardown_esc_monitor then
         patcher_core.teardown_esc_monitor()
     end
+    -- Extract finish_reason from the last SSE chunk
+    local finish_reason = nil
+    if last_part and last_part.choices and last_part.choices[1] then
+        finish_reason = last_part.choices[1].finish_reason
+    end
+    if finish_reason then
+        logger.info(string.format("[STREAM] finish_reason=%s, usage=%s", finish_reason, last_part.usage and json:encode(last_part.usage) or "nil"))
+        if finish_reason == "length" then
+            logger.warn("[STREAM TRUNCATED] Response hit max_tokens limit. Output may be incomplete.")
+            local warn_msg = "\n\n[WARNING: Response truncated due to max_tokens limit. Content may be incomplete.]"
+            table.insert(content_parts, warn_msg)
+            if on_token_cb then on_token_cb(warn_msg) end
+        end
+    end
     local full_content = table.concat(content_parts)
     local full_text = table.concat(text_parts)
     local full_reason = table.concat(reason_parts)
@@ -207,6 +221,7 @@ function M.process_stream(stream, profile, provider, on_token_cb)
         full_text = full_text,
         interrupted = was_interrupted,
         timed_out = is_timeout,
+        finish_reason = finish_reason,
         usage = last_part and last_part.usage or nil
     }
 end

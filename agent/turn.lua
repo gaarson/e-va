@@ -155,7 +155,11 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         logger.warn(string.format("[STREAM TIMEOUT] Partial response received (%d chars). Stream timed out but content is usable.", #(content or "")))
         ui.print_warning(string.format("Stream timed out after %d chars of content. Response may be incomplete.", #(content or "")))
     end
-
+    -- HANDLE TRUNCATED RESPONSES (max_tokens hit)
+    if response_data.finish_reason == "length" then
+        logger.warn(string.format("[TRUNCATED] Response hit max_tokens limit (%d chars). Consider increasing max_tokens in agent config.", #(content or "")))
+        ui.print_warning(string.format("Response truncated: hit max_tokens limit (%d chars). Increase max_tokens in agent config for longer responses.", #(content or "")))
+    end
     -- SELECTIVE MULTI-STAGE ROUTING (Two-phase tool invocation)
     if agent_cfg.use_selective_multi_stage and agent_cfg.multi_stage_tools then
                 local executor_parse = command_executor.new(ctx, agent_name)
