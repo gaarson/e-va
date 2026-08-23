@@ -58,13 +58,13 @@ describe('ui.input.flush_input', function()
         end
 
         input.flush_input()
-
-        assert.are.equal(2, #exec_calls, 'expected exactly 2 os.execute calls')
+        assert.are.equal(3, #exec_calls, 'expected exactly 3 os.execute calls')
         assert.match('stty raw', exec_calls[1], 'first call should set raw mode')
         assert.match('-icanon', exec_calls[1], 'first call should disable canonical mode')
         assert.match('min 0', exec_calls[1], 'first call should set min 0')
         assert.match('time 0', exec_calls[1], 'first call should set time 0')
-        assert.match('stty sane', exec_calls[2], 'second call should restore sane mode')
+        assert.match('IFS=', exec_calls[2], 'second call should drain via shell')
+        assert.match('stty sane', exec_calls[3], 'third call should restore sane mode')
     end)
 
     -- ------------------------------------------------------------------
@@ -93,7 +93,7 @@ describe('ui.input.flush_input', function()
         input.flush_input()
 
         assert.are.equal(#pending + 1, read_count, 'should read all pending bytes plus one nil')
-        assert.are.equal(2, #exec_calls, 'should still call stty twice')
+        assert.are.equal(3, #exec_calls, 'should still call stty three times')
     end)
 
     -- ------------------------------------------------------------------

@@ -75,7 +75,8 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                                 if on_token_cb then on_token_cb(c_reason) end
                             end
                             table.insert(reason_parts, c_reason)
-                        elseif c_text and c_text ~= "" then
+                        end
+                        if c_text and c_text ~= "" then
                             if in_reasoning then
                                 in_reasoning = false
                                 local token = "</thinking>\n\n" .. c_text
@@ -118,7 +119,8 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                             if on_token_cb then on_token_cb(c_reason) end
                         end
                         table.insert(reason_parts, c_reason)
-                    elseif c_text and c_text ~= "" then
+                    end
+                    if c_text and c_text ~= "" then
                         if in_reasoning then
                             in_reasoning = false
                             local token = "</thinking>\n\n" .. c_text
@@ -161,7 +163,8 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                         if on_token_cb then on_token_cb(c_reason) end
                     end
                     table.insert(reason_parts, c_reason)
-                elseif c_text and c_text ~= "" then
+                end
+                if c_text and c_text ~= "" then
                     if in_reasoning then
                         in_reasoning = false
                         local token = "</thinking>\n\n" .. c_text

@@ -308,4 +308,25 @@ describe("Stream Processing", function()
         assert.truthy(result.choices[1].message.content:find("INTERRUPTED"),
             "Content should contain INTERRUPTED message")
     end)
+    it("should handle reasoning and text in the same chunk", function()
+        local chunk = "data: " .. json:encode({
+            choices = {{ delta = {
+                reasoning_content = "Final thought",
+                content = "The answer is 42"
+            }}}
+        }) .. "\n\n"
+        local chunk_done = "data:"
+        local stream = make_mock_stream({ chunk, chunk_done })
+        local profile = make_mock_profile()
+        local provider = make_mock_provider()
+        local result = stream_mod.process_stream(stream, profile, provider, nil)
+        assert.is_not_nil(result)
+        assert.equals("Final thought", result.full_reason)
+        assert.equals("The answer is 42", result.full_text)
+        local content = result.choices[1].message.content
+        assert.truthy(content:find("<thinking>"), "Content should contain <thinking> tag")
+        assert.truthy(content:find("Final thought"), "Content should contain reasoning text")
+        assert.truthy(content:find("</thinking>"), "Content should contain </thinking> tag")
+        assert.truthy(content:find("The answer is 42"), "Content should contain text content")
+    end)
 end)
