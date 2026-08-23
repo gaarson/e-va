@@ -242,27 +242,15 @@ function M.log_messages_pretty(messages, turn, agent_name, ctx)
     print("\n")
 end
 
-function M.log_final_dump(ctx, turn, agent_name)
+function M.log_final_dump(ctx, turn, agent_name, agent_cfg)
     local messages = {}
-
-    -- Get system prompt if available
-    local system_prompt_result = pcall(function() return ctx:get_system_prompt() end)
-    local system_prompt = ""
-    if system_prompt_result then
-        system_prompt_result = select(2, pcall(function() return ctx:get_system_prompt() end))
-        -- Actually let's just try directly with pcall result handling properly
-    end
-
-    -- Simpler approach that matches original behavior
-    system_prompt = ""
-    if ctx.get_system_prompt then
-        local ok, prompt_val = pcall(ctx.get_system_prompt, ctx)
+    -- Get system prompt
+    if agent_cfg and ctx.get_system_prompt then
+        local ok, prompt_val = pcall(ctx.get_system_prompt, ctx, agent_cfg)
         if ok and prompt_val and prompt_val ~= "" then
-            system_prompt = prompt_val
-            table.insert(messages, { role = "system", content = system_prompt })
+            table.insert(messages, { role = "system", content = prompt_val })
         end
     end
-
     -- Get full history for the agent
     if ctx.get_history then
         local ok, history_val = pcall(ctx.get_history, ctx, agent_name)
@@ -272,7 +260,6 @@ function M.log_final_dump(ctx, turn, agent_name)
             end
         end
     end
-
     if #messages > 0 then
         M.log_messages_pretty(messages, turn, agent_name, ctx)
     else

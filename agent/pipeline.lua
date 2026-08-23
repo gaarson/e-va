@@ -109,7 +109,7 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
                     elseif cmd.action == "HELP" then
                         ui.pipeline_ui.print_help()
                     elseif cmd.action == "MESSAGES" then
-                        logger.log_final_dump(ctx, turn, target_agent)
+                        logger.log_final_dump(ctx, turn, target_agent, config.AGENTS[target_agent])
                     elseif cmd.action == "ABORT" then
                         ui.print_error(cmd.message or "User aborted the execution.")
                         os.exit(0)

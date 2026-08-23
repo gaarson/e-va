@@ -303,7 +303,6 @@ function M.get()
             -- multi_stage_tools = { "delegate_plan" },
             allowed_tools = {
               "read_file",
-              -- "read_files", 
               "read_chunk", 
               "search", 
               "mcp_browser_*", 
@@ -330,16 +329,10 @@ function M.get()
             allowed_tools = {
               "patch",
               "create_file",
-              "shell",
               "read_file",
-              "mcp_browser_*", 
+              "shell",
               "read_chunk",
-              "search",
               "task_complete",
-              "outline",
-              "pin",
-              "unpin",
-              "optimize_context",
             }
         }
     }
