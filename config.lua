@@ -233,29 +233,29 @@ function M.get()
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 16384,
-            temperature = 0.2,
+            temperature = 0.3,
             top_p = 0.95,
-            top_k = 60,
-            -- min_p = 0.02,
+            top_k = 20,
+            min_p = 0.0,
             chat_template_kwargs = {
               enable_thinking = true,
               preserve_thinking = false,
             },
-            thinking_token_budget = 8192,
+            thinking_token_budget = 4096,
             reasoning_effort = "low",
             -- enable_thinking = true,
-            -- frequency_penalty = 0.2
-            repetition_penalty = 1.05
+            presence_penalty = 1.5,
+            repetition_penalty = 1.0
         },
         ENGINEERING = {
             max_tokens = 16384,
-            temperature = 0.1,
-            top_p = 0.95,
-            top_k = 60,
-            -- min_p = 0.02,
+            temperature = 0.2,
+            top_p = 0.80,
+            top_k = 20,
+            min_p = 0.0,
             chat_template_kwargs = {enable_thinking = false, preserve_thinking = false},
-            -- presence_penalty = 0.0
-            repetition_penalty = 1.05
+            presence_penalty = 1.5,
+            repetition_penalty = 1.0
         }
     }
 
@@ -291,6 +291,31 @@ function M.get()
     }
 
     cfg.AGENTS = {
+        ANALYZER = {
+            name = "ANALYZER",
+            url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
+            token = get_api_key(),
+            is_reasoning = true,
+            model = resolve_env("LLM_MODEL", "local_model"),
+            params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
+            prompt_file = "prompts/architect.md",
+            -- use_selective_multi_stage = true,
+            -- multi_stage_tools = { "delegate_plan" },
+            allowed_tools = {
+              "read_file",
+              "read_chunk", 
+              "search", 
+              "explore_tree", 
+              "shell", 
+              "delegate_plan", 
+              "task_complete",
+              "ask_user", 
+              "outline", 
+              "pin", 
+              "unpin",
+              "optimize_context",
+            }
+        },
         ARCHITECT = {
             name = "ARCHITECT",
             url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
@@ -305,14 +330,15 @@ function M.get()
               "read_file",
               "read_chunk", 
               "search", 
-              "mcp_browser_*", 
               "explore_tree", 
               "shell", 
               "delegate_plan", 
+              "task_complete",
               "ask_user", 
               "outline", 
               "pin", 
               "unpin",
+              "task_complete",
               "optimize_context",
             }
         },
@@ -320,7 +346,7 @@ function M.get()
             name = "CODER",
             url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
             token = get_api_key(),
-            is_reasoning = true,
+            is_reasoning = false,
             model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
             use_selective_multi_stage = true,
@@ -338,7 +364,7 @@ function M.get()
     }
 
     cfg.PIPELINE = {
-        { stage = "ANALYSIS_AND_PLANNING", agents = { "ARCHITECT" }, mode = "sequential" },
+        -- { stage = "ANALYSIS_AND_PLANNING", agents = { "ANALYZER" }, mode = "sequential" },
         { stage = "REVIEW_AND_CHAT", agents = { "ARCHITECT" }, mode = "interactive" },
         { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
     }

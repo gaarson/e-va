@@ -55,6 +55,7 @@ M.DEFAULT_GENERATE_PROMPT = [[
 You are a Command Generator. Convert the intent into a READY-TO-USE payload.
 Intent:
 {intent_text}
+{context_block}
 CRITICAL RULE:
 Your output will be INSERTED DIRECTLY AS THE TOOL'S PAYLOAD.
 No parsing. No wrapping. No markdown. No explanations.
@@ -63,8 +64,12 @@ FORBIDDEN:
 ✗ Wrapping in code fences (``` ... ```)
 ✗ Adding comments before or after the payload
 ✗ Using ||| COMMAND ||| markers
+✗ Outputting a tool invocation like 'create_file:path/to/file' or 'patch:path/to/file'
+✗ Repeating the command name and file path as your output
 REQUIRED:
 ✓ Output ONLY the raw payload
+✓ Your output is the RAW PAYLOAD for the tool — follow the tool-specific format below exactly
+✓ Do NOT output tool invocation syntax (e.g. 'patch:file' or 'create_file:file')
 ✓ Follow the PAYLOAD_HINT from the intent
 ✓ If there is a <REVISION> block, incorporate the reviewer's corrections EXACTLY.
    Read the correction carefully. Apply ONLY what the reviewer asked to change.

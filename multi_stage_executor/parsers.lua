@@ -53,6 +53,12 @@ local function validate_payload(tool_name, payload)
             return false, err or ("Validation failed for tool '" .. tool_name .. "'.")
         end
     end
+    
+    -- Guard: reject payloads that look like tool invocation strings (e.g. "create_file:path/to/file")
+    -- This happens when the LLM outputs command format instead of raw content
+    if #payload < 200 and payload:match("^[%w_]+:%S+$") and not payload:find("\n") then
+        return false, "Payload looks like a tool invocation string ('" .. payload:sub(1, 80) .. "'), not actual content. Generate stage must output RAW file content only."
+    end
     return true, nil
 end
 --- Extract field from block

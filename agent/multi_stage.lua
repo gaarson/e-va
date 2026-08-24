@@ -184,10 +184,21 @@ function M.recover_from_empty_response(ctx, agent_name, agent_cfg, config, messa
     end
     return nil, messages, err
 end
--- Shared multi-stage loop function
+-- Shared multi-stage loop function (KV-cache optimized: fork-and-rollback pattern)
 function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg, label, skip_intent, intent_params, ctx, config, deps)
     label = label or "MULTI-STAGE"
     local history = ctx.history[agent_name] or {}
+    -- === KV-CACHE OPTIMIZATION: Build base prefix ONCE ===
+    -- The prefix (system + tools + original history) stays byte-identical across all LLM calls,
+    -- enabling provider-side KV-cache / prompt caching hits.
+    local checkpoint = #history
+    local limits = config.LIMITS
+    local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
+    local context_data = ctx:build_context(agent_name, agent_cfg, available_tokens)
+    local base_messages = context_data.messages  -- immutable prefix
+    -- Minimal prefix for generate stage: prevents model from copying tool invocation patterns from history
+    local generate_prefix = {{ role = "system", content = "You are in RAW OUTPUT MODE. You must output ONLY the raw file/code content. Do NOT use any command syntax, tool invocation format, ||| COMMAND ||| markers, or file path prefixes. Your entire response will be written directly to a file. You will be provided with relevant source files in the prompt for reference. Use them as ground truth — do NOT invent code that differs from what is shown." }}
+    local tail = {}  -- grows incrementally with each stage prompt/response
     local step
     if skip_intent and intent_params then
         step = multi_exec:start_task_with_intent(
@@ -201,77 +212,49 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
     else
         step = multi_exec:start_task(last_user_msg, ctx.file_tree or "")
     end
-    
-    -- Local save_state helper for this scope (optimized: save only essential state)
-    local function save_state_local()
-        local os_mod = require("os")
-        os_mod.execute(string.format("mkdir -p '%s/.e-va-conf'", config.PROJECT_ROOT))
-        local state_file = config.PROJECT_ROOT .. "/.e-va-conf/.multi_stage_state.json"
-        -- Build lightweight snapshot instead of full ctx:snapshot()
-        local lightweight = {
-            task = multi_exec.task or "",
-            intent_tool = multi_exec.intent and multi_exec.intent.TOOL or "",
-            intent_goal = multi_exec.intent and multi_exec.intent.GOAL or "",
-            iteration = multi_exec.iteration or 0,
-            state = multi_exec.state or "",
-            total_tokens_used = multi_exec.total_tokens_used or 0,
-            last_result_summary = "",
-        }
-        if multi_exec.last_result then
-            local lr = tostring(multi_exec.last_result)
-            lightweight.last_result_summary = lr:sub(1, 500)
-        end
-        local json = require("JSON")
-        local snap = json:encode(lightweight)
-        local f = io.open(state_file, "w")
-        if f then f:write(snap); f:close() end
-    end
-    -- Disable thinking for multi-stage stages (intent/generate/review) to save tokens
-    local NO_THINK_OVERRIDE = { chat_template_kwargs = { enable_thinking = false }, thinking_token_budget = 0 }
-    -- Fix #5: Attempt state recovery at loop start
-    if multi_exec.load_state then
-        local recovered = multi_exec:load_state()
-        if recovered then
-            deps.logger.info(string.format("[%s] Recovered multi-stage state from disk (iteration=%d, state=%s)",
-                label, multi_exec.iteration, multi_exec.state))
-        end
-    end
+    -- Per-stage thinking overrides: enable thinking for intent/review (planning/evaluation),
+    -- disable for generate (raw output, speed)
+    local STAGE_OVERRIDES = {
+        intent   = {},
+        generate = { chat_template_kwargs = { enable_thinking = false }, thinking_token_budget = 0 },
+        review   = {},
+    }
     while step.stage ~= "done" and step.stage ~= "error" do
-        if step.stage == "intent" or step.stage == "generate" or step.stage == "review" then
-            local limits = config.LIMITS
-            local available_tokens = limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE
-            -- Build DEEP COPY of history for safe manipulation
-            local temp_history = {}
-            for i, msg in ipairs(history) do
-                temp_history[i] = { role = msg.role, content = msg.content }
+        if step.stage == "intent" or step.stage == "generate" or step.stage == "review" or step.stage == "intent_validate" then
+            -- Append stage prompt to tail (prefix stays cached)
+            table.insert(tail, { role = "user", content = step.prompt })
+            -- Construct full messages: use minimal prefix for generate stage (avoids tool invocation pattern contamination)
+            -- For generate stage: strip tools_manifest from system prompt to reduce noise
+            local prefix_to_use = base_messages
+            if (step.stage == 'generate' or step.stage == 'review') and #base_messages > 0 and base_messages[1].role == 'system' then
+                local sys_content = base_messages[1].content
+                local marker = '## TOOLCHAIN INTERFACE'
+                local pos = sys_content:find(marker, 1, true)
+                if pos then
+                    sys_content = sys_content:sub(1, pos - 1)
+                end
+                prefix_to_use = {}
+                for i, msg in ipairs(base_messages) do
+                    if i == 1 then
+                        prefix_to_use[i] = { role = 'system', content = sys_content }
+                    else
+                        prefix_to_use[i] = msg
+                    end
+                end
             end
-            -- Replace last user message with executor prompt for this round
-            local original_msg = last_user_msg
-            if temp_history[#temp_history] and temp_history[#temp_history].role == "user" then
-                temp_history[#temp_history].content = step.prompt
-            else
-                table.insert(temp_history, { role = "user", content = step.prompt })
-                original_msg = step.prompt
+            local full_messages = {}
+            for i, msg in ipairs(prefix_to_use) do
+                full_messages[i] = msg
             end
-            -- Build context from temporary history using pcall for safety
-            local ok, context_data = pcall(function()
-                local saved_history = ctx.history[agent_name]
-                ctx.history[agent_name] = temp_history
-                local result = ctx:build_context(agent_name, agent_cfg, available_tokens)
-                ctx.history[agent_name] = saved_history  -- Restore immediately
-                return result
-            end)
-            if not ok then
-                deps.logger.error(string.format("[%s] Context build failed: %s", label, tostring(context_data)))
-                step = { stage = "error", message = "Context build failed: " .. tostring(context_data) }
-                break
+            for i, msg in ipairs(tail) do
+                full_messages[#full_messages + 1] = msg
             end
-            local messages = context_data.messages
-            deps.logger.info(string.format("[%s %s] Sending prompt to LLM...", label, step.stage))
+            deps.logger.info(string.format("[%s %s] Sending prompt to LLM... (prefix=%d msgs, tail=%d msgs%s)", label, step.stage, #prefix_to_use, #tail, (step.stage == 'generate' and ' [MINIMAL]' or '')))
             ui.print_ai_prompt(agent_name, step.stage)
             local printer = deps.utils.stream_token_printer(agent_cfg)
             local response_data, err
-            response_data, err = deps.llm.send_request(agent_cfg, messages, { on_token = printer, override_params = NO_THINK_OVERRIDE })
+            local stage_override = STAGE_OVERRIDES[step.stage] or {}
+            response_data, err = deps.llm.send_request(agent_cfg, full_messages, { on_token = printer, override_params = stage_override })
             deps.utils.flush_stream_buffer(printer)
             if not response_data then
                 deps.logger.error(string.format("[%s] FATAL: Network unreachable.", label), err)
@@ -282,8 +265,10 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
             if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
                 content = response_data.choices[1].message.content
             end
+            -- Append assistant response to tail
+            table.insert(tail, { role = "assistant", content = content })
             step = multi_exec:feed_response(content)
-            -- Fix #5: Save state after LLM response processing
+            -- Save state after LLM response processing
             if multi_exec.save_state then multi_exec:save_state() end
         elseif step.stage == "execute" then
             deps.logger.info(string.format("[%s EXECUTE] Tool: %s", label, step.tool))
@@ -304,25 +289,39 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
                 step = multi_exec:feed_execution_result("[EXECUTION ERROR]: " .. tostring(res))
             else
                 step = multi_exec:feed_execution_result(res)
-                -- Fix #5: Save state after tool execution
+                -- Save state after tool execution
                 if multi_exec.save_state then multi_exec:save_state() end
-                if res.output then
-                    ctx:add_message(agent_name, "user", deps.utils.sanitize_for_json(res.output))
-                end
+                -- NOTE: No ctx:add_message here. History is managed via tail/rollback pattern.
             end
         end
     end
+    -- === ROLLBACK: Truncate history to checkpoint, leave single summary ===
+    while #history > checkpoint do
+        table.remove(history)
+    end
     if step.stage == "done" then
-        deps.logger.info(string.format("[%s] Task completed in %d iterations.", label, step.iterations))
+        deps.logger.info(string.format("[%s] Task completed in %d iterations. Rolling back to checkpoint.", label, step.iterations))
         local tool_name = multi_exec.intent and multi_exec.intent.TOOL or "unknown"
+        local result_summary = ""
+        if step.result then
+            result_summary = tostring(step.result)
+            if #result_summary > 500 then
+                result_summary = result_summary:sub(1, 500) .. "...[truncated]"
+            end
+        end
         ctx:add_message(agent_name, "system", string.format(
-            "[MULTI-STAGE COMPLETED] Task finished successfully in %d iteration(s). The tool '%s' executed and was approved by review.",
-            step.iterations, tool_name
+            "[MULTI-STAGE RESULT] Tool: %s. Iterations: %d.\n%s",
+            tool_name, step.iterations or 0, result_summary
         ))
-        save_state_local()
+        multi_exec:save_state()
         return "AUTO_LOOP"
     else
-        deps.logger.error(string.format("[%s] Error: %s", label, step.message))
+        deps.logger.error(string.format("[%s] Error: %s. Rolling back to checkpoint.", label, step.message))
+        local tool_name = multi_exec.intent and multi_exec.intent.TOOL or "unknown"
+        ctx:add_message(agent_name, "system", string.format(
+            "[MULTI-STAGE ERROR] Tool: %s. Failed: %s",
+            tool_name, tostring(step.message)
+        ))
         return "ERROR"
     end
 end

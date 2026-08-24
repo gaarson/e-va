@@ -186,7 +186,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                             file_path = utils.trim(first_line)
                         end
                         -- Check if there's actual SEARCH/REPLACE content (not just a file path)
-                        if args_part:find("<<<<<<< SEARCH") then
+                        if args_part:find("<<<<<<< SEARCH") or args_part:find("=======") then
                             has_payload = true
                         end
                     end
@@ -224,6 +224,9 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                     end
                 end
                 last_user_msg = last_user_msg or ""
+                -- Dynamic context truncation: scale to ~30% of available context (min 2000 chars)
+                local max_ctx_chars = math.floor((limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE) * 0.3 * (limits.CHARS_PER_TOKEN or 3.5))
+                last_user_msg = last_user_msg:sub(1, math.max(2000, max_ctx_chars))
                 local task_desc
                 local payload_hint
                 if has_payload then
@@ -254,10 +257,16 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                         file_path and string.format(" targeting file '%s'", file_path) or ""
                     )
                 end
-                local success_criteria = string.format(
-                    "Tool '%s' executes successfully without errors. The payload is syntactically valid and produces the expected result.",
-                    tool_name
-                )
+                local success_criteria
+                if tool_name == "patch" then
+                    success_criteria = "The SEARCH/REPLACE blocks match the actual file content exactly. The patch applies without [PATCH FAILED]. The resulting file is syntactically valid."
+                elseif tool_name == "create_file" then
+                    success_criteria = "The file is created successfully. The content is syntactically valid for the target language and matches the stated goal."
+                elseif tool_name == "delegate_plan" then
+                    success_criteria = "The payload is valid JSON with a non-empty plan array and a descriptive memo."
+                else
+                    success_criteria = string.format("Tool '%s' executes successfully without errors. The payload is syntactically valid and produces the expected result.", tool_name)
+                end
                 local multi_exec = multi_stage_executor.new(ctx, agent_name, {
                     max_iterations = agent_cfg.multi_stage_max_iterations or 3,
                     file_path = file_path

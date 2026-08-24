@@ -26,6 +26,7 @@ function M.new(ctx, agent_name, opts)
         max_tokens_per_task = opts.max_tokens_per_task or 32000,
         budget_mode       = opts.budget_mode or "adaptive",
         file_path         = opts.file_path or nil,
+        project_context   = nil,
         validation_retries = 0,
         max_validation_retries = opts.max_validation_retries or 2,
         tool_failures     = {},          -- Fix #6: per-tool failure tracking
@@ -147,8 +148,50 @@ function M:build_generate_prompt()
     if self.tool_failures and self.tool_failures[tool_name] and self.tool_failures[tool_name] >= 2 then
         feedback_block = "\n\n<FEEDBACK>\nThis tool ('" .. tool_name .. "') has failed " .. self.tool_failures[tool_name] .. " times previously.\nReview past corrections carefully and ensure the payload addresses ALL previous issues.\n</FEEDBACK>"
     end
+    -- Build context block from knowledge_base (relevant source files)
+    local context_block = ''
+    if self.ctx and self.ctx.knowledge_base then
+        local kb = self.ctx.knowledge_base
+        local intent_text = self.intent_raw or ''
+        local task_text = self.task or ''
+        local file_path = self.file_path or ''
+        local max_context_chars = 8000
+        local collected = {}
+        local total_len = 0
+        -- Collect files referenced in intent/task text
+        for path, file_content in pairs(kb) do
+            if total_len < max_context_chars then
+                local is_relevant = false
+                -- Check if file path appears in intent or task
+                if intent_text:find(path, 1, true) then
+                    is_relevant = true
+                elseif task_text:find(path, 1, true) then
+                    is_relevant = true
+                end
+                -- Also include the target file_path if it exists in KB
+                if file_path ~= '' and path == file_path then
+                    is_relevant = true
+                end
+                if is_relevant then
+                    local remaining = max_context_chars - total_len
+                    local fc = file_content
+                    if #fc > remaining - 50 then
+                        fc = fc:sub(1, math.max(remaining - 50, 0)) .. '\n...[truncated]'
+                    end
+                    local block = string.format('<file path="%s">\n%s\n</file>', path, fc)
+                    collected[#collected + 1] = block
+                    total_len = total_len + #block
+                end
+            end
+        end
+        if #collected > 0 then
+            local sep = '\n'
+            context_block = sep .. '<project_context>' .. sep .. 'Relevant source files for reference:' .. sep .. table.concat(collected, sep) .. sep .. '</project_context>'
+        end
+    end
     return parsers.render(self.prompts.generate, {
         intent_text = self.intent_raw or "",
+        context_block = context_block,
         tool_specific_hint = hint_block,
         feedback_block = feedback_block,
     })
@@ -205,10 +248,11 @@ function M:start_task_with_intent(task, project_context, tool_name, payload_hint
 
     if complexity == "simple" then
         self.max_iterations = 1
-        logger.info(string.format("[MULTI-STAGE] Complexity heuristic: '%s' classified as SIMPLE. Skipping review cycle.", tool_name))
+        logger.info(string.format("[MULTI-STAGE] Complexity heuristic: '%s' classified as SIMPLE. Limiting to 1 iteration (simple task). Review still runs but cannot revise.", tool_name))
     end
 
     self.task      = task
+    self.project_context = project_context or ''
     self.intent    = {
         GOAL             = task or "",
         TOOL             = tool_name,
@@ -223,8 +267,37 @@ function M:start_task_with_intent(task, project_context, tool_name, payload_hint
     self.state      = states.STATES.INTENT_READY
     self.iteration  = 1
 
+
+    -- FIX #2: Optional intent validation before generation
+    if opts and opts.require_intent_validation then
+        self.pending_intent_validation = true
+        return { stage = "intent_validate", prompt = self:build_intent_validation_prompt(project_context) }
+    end
+
     return { stage = "generate", prompt = self:build_generate_prompt() }
 
+end
+
+function M:build_intent_validation_prompt(project_context)
+    local intent_text = self.intent_raw or ""
+    return string.format([[
+You are an Intent Validator. Review the following planned intent and confirm it is correct and actionable.
+
+<INTENT>
+%s
+</INTENT>
+
+Project context:
+<context>
+%s
+</context>
+
+Rules:
+1. If the intent is correct, actionable, and references a valid tool — respond with ONLY: CONFIRM
+2. If something is wrong (wrong tool, missing file path, unclear goal) — respond with:
+CORRECTION: <specific fix needed>
+3. Do NOT add anything else.
+]], intent_text, project_context or "")
 end
 
 
@@ -232,6 +305,7 @@ function M:start_task(task, project_context)
     self:reset()
 
     self.task      = task
+    self.project_context = project_context or ''
     self.state     = states.STATES.INTENT_DRAFT
 
     self.iteration = 1
@@ -268,7 +342,8 @@ function M:feed_response(llm_response)
     -- Estimate tokens used by this response (rough: chars / 4)
     local tokens_used = 0
     if llm_response and type(llm_response) == "string" then
-        tokens_used = math.floor(#llm_response / 4)
+        local chars_per_token = (self.ctx.config.LIMITS and self.ctx.config.LIMITS.CHARS_PER_TOKEN) or 3.5
+        tokens_used = math.floor(#llm_response / chars_per_token)
     end
     if self.state == states.STATES.INTENT_DRAFT then
         self.total_tokens_used = self.total_tokens_used + tokens_used
@@ -285,6 +360,22 @@ function M:feed_response(llm_response)
         return { stage = "generate", prompt = self:build_generate_prompt() }
     end
 
+    -- FIX #2: Handle intent validation response
+    if self.state == states.STATES.INTENT_READY and self.pending_intent_validation then
+        self.total_tokens_used = self.total_tokens_used + tokens_used
+        self.pending_intent_validation = false
+        local upper_resp = (llm_response or ""):upper()
+        if upper_resp:find("^%s*CONFIRM") then
+            logger.info("[MULTI-STAGE] Intent validated: CONFIRM")
+            return { stage = "generate", prompt = self:build_generate_prompt() }
+        end
+        local correction = llm_response:match("CORRECTION:%s*(.*)")
+        if correction and utils.trim(correction) ~= "" then
+            logger.info(string.format("[MULTI-STAGE] Intent corrections: %s", utils.trim(correction):sub(1, 200)))
+            self.intent_raw = self.intent_raw .. "\n\n[INTENT VALIDATION] " .. utils.trim(correction):sub(1, 300)
+        end
+        return { stage = "generate", prompt = self:build_generate_prompt() }
+    end
     if self.state == states.STATES.INTENT_READY or self.state == states.STATES.REVISING then
         self.total_tokens_used = self.total_tokens_used + tokens_used
         self.payload = parsers.sanitize_payload(llm_response)
@@ -308,7 +399,9 @@ function M:feed_response(llm_response)
         local effective_payload = self.payload
 
         if (self.intent.TOOL == "patch" or self.intent.TOOL == "create_file") and self.file_path and self.file_path ~= "" then
-            effective_payload = self.file_path .. "\n" .. self.payload
+            if self.payload:sub(1, #self.file_path) ~= self.file_path then
+                effective_payload = self.file_path .. "\n" .. self.payload
+            end
         end
 
         return { stage = "execute", tool = self.intent.TOOL, payload = effective_payload }
@@ -320,10 +413,9 @@ function M:feed_response(llm_response)
 
         if self.total_tokens_used > budget then
             logger.warn(string.format(
-                "[MULTI-STAGE] Token budget exceeded (%d/%d, mode=%s). Force-approving to prevent runaway token consumption.",
+                "[MULTI-STAGE] Token budget exceeded (%d/%d, mode=%s). Force-approving.",
                 self.total_tokens_used, budget, self.budget_mode
             ))
-
             self.state = states.STATES.APPROVED
             return { stage = "done", result = self.last_result, iterations = self.iteration, forced_approval = true }
         end
@@ -465,10 +557,24 @@ function M:feed_execution_result(output)
     end
 
     self.last_result = enriched_result
-    self.state       = states.STATES.REVIEWING
-
+    -- FIX #6: Track tool failures for feedback in generate prompt
+    local has_failure = (signal_str:find('FAILURE') ~= nil) or (output_str:find('%[PATCH FAILED%]') ~= nil) or (output_str:find('%[ERROR%]') ~= nil) or (output_str:find('%[DISK ERROR%]') ~= nil)
+    if has_failure then
+        self.tool_failures[tool_name] = (self.tool_failures[tool_name] or 0) + 1
+        logger.info(string.format("[MULTI-STAGE] Tool failure detected for '%s' (count: %d)", tool_name, self.tool_failures[tool_name]))
+    end
+    -- FIX #5: If execution failed and we have iterations left, retry generation instead of reviewing
+    if has_failure and self.iteration < self.max_iterations then
+        local error_snippet = output_str:sub(1, 500)
+        local correction = 'EXECUTION FAILED: ' .. error_snippet .. '. Fix the payload to avoid this error.'
+        logger.info(string.format('[MULTI-STAGE] Execution failed, retrying generation (iteration %d/%d)', self.iteration + 1, self.max_iterations))
+        self.intent_raw = self:_merge_correction(correction)
+        self.state      = states.STATES.REVISING
+        self.iteration  = self.iteration + 1
+        return { stage = 'generate', prompt = self:build_generate_prompt() }
+    end
+    self.state = states.STATES.REVIEWING
     return { stage = "review", prompt = self:build_review_prompt() }
-
 end
 
 
@@ -516,6 +622,8 @@ function M:reset()
     self.validation_retries = 0
     self.tool_failures = {}
     self.partial_passed_criteria = {}
+    self.budget_retry_done = false
+    self.pending_intent_validation = false
 end
 -- Fix #5: State persistence
 function M:save_state()
@@ -552,7 +660,7 @@ function M:load_state()
     if not f then return false end
     local data = f:read("*a")
     f:close()
-    local ok, snap = pcall(json.decode, data)
+    local ok, snap = pcall(function() return json:decode(data) end)
     if not ok then return false end
     if snap.task then self.task = snap.task end
     if snap.intent_raw then self.intent_raw = snap.intent_raw end
