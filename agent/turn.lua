@@ -14,6 +14,49 @@ local command_executor = require("command_executor")
 
 local M = {}
 
+--- Safely truncates a UTF-8 string to max_len bytes without cutting multibyte characters.
+-- @param s string The input string.
+-- @param max_len number Maximum length in bytes.
+-- @return string Truncated string.
+local function utf8_safe_truncate(s, max_len)
+    if not s or #s <= max_len then return s end
+    
+    local cut_pos = max_len
+    -- If the byte at cut_pos is a continuation byte (10xxxxxx), back off until we find a start byte
+    while cut_pos > 1 do
+        local b = string.byte(s, cut_pos)
+        if b < 0x80 or b >= 0xC0 then
+            -- Found a potential start byte (or ASCII). 
+            -- If it's a start byte of a multibyte char, we need to check if the whole char fits.
+            -- But since we are cutting AT cut_pos, and s[cut_pos] is included in the result (1-based index),
+            -- we want to ensure that s[cut_pos] is not a continuation byte.
+            -- If b >= 0xC0, it's a leading byte. The character starting here might extend beyond max_len.
+            -- We should check if the full character fits within max_len.
+            
+            local char_len = 1
+            if b >= 0xF0 then char_len = 4
+            elseif b >= 0xE0 then char_len = 3
+            elseif b >= 0xC0 then char_len = 2
+            end
+            
+            if cut_pos + char_len - 1 > max_len then
+                -- The character starting at cut_pos extends beyond the limit. Exclude it.
+                return s:sub(1, cut_pos - 1)
+            else
+                -- The character fits exactly or within limits. Include it.
+                return s:sub(1, cut_pos + char_len - 1)
+            end
+        elseif b >= 0x80 and b < 0xC0 then
+            -- Continuation byte. Move back.
+            cut_pos = cut_pos - 1
+        else
+            break
+        end
+    end
+    
+    return s:sub(1, max_len)
+end
+
 --- Runs a single agent turn: syncs files, builds context, sends LLM request, handles retries/interruptions,
 --- routes selective multi-stage tools, recovers from empty responses, and processes the result.
 -- @param agent_name string
@@ -226,7 +269,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                 last_user_msg = last_user_msg or ""
                 -- Dynamic context truncation: scale to ~30% of available context (min 2000 chars)
                 local max_ctx_chars = math.floor((limits.MAX_CONTEXT - limits.RESERVED_OUTPUT - limits.SYSTEM_PROMPT_ESTIMATE) * 0.3 * (limits.CHARS_PER_TOKEN or 3.5))
-                last_user_msg = last_user_msg:sub(1, math.max(2000, max_ctx_chars))
+                last_user_msg = utf8_safe_truncate(last_user_msg, math.max(2000, max_ctx_chars))
                 local task_desc
                 local payload_hint
                 if has_payload then

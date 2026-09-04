@@ -5,7 +5,59 @@ local providers = require("llm_providers")
 local context_optimizer = require("context_optimizer")
 local dedup = require("llm_handler.dedup")
 local stream = require("llm_handler.stream")
+local encoding = require("utils.encoding")
 local _last_cleanup = nil
+-- Recursively sanitize all string values in a payload table for valid UTF-8 JSON.
+local function _sanitize_payload_strings(t)
+    if type(t) == "string" then
+        return encoding.sanitize_for_json(t)
+    elseif type(t) == "table" then
+        for k, v in pairs(t) do
+            t[k] = _sanitize_payload_strings(v)
+        end
+        return t
+    else
+        return t
+    end
+end
+-- Post-encode validation: scan the encoded body for invalid UTF-8 byte sequences.
+-- Returns (ok, error_position). A lone continuation byte (0x80-0xBF) not preceded
+-- by a valid leading byte indicates corruption that json.encode may have passed through.
+local function _validate_utf8_body(body)
+    local len = #body
+    local i = 1
+    while i <= len do
+        local b = string.byte(body, i)
+        if b == nil then break end
+        if b >= 0x80 and b <= 0xBF then
+            -- Continuation byte: must be preceded by a leading byte (0xC2-0xF4)
+            if i == 1 or not (string.byte(body, i - 1) >= 0xC2 and string.byte(body, i - 1) <= 0xF4) then
+                return false, i
+            end
+        elseif b >= 0xC2 and b <= 0xDF then
+            if i + 1 > len or not (string.byte(body, i + 1) >= 0x80 and string.byte(body, i + 1) <= 0xBF) then
+                return false, i
+            end
+            i = i + 2
+        elseif b >= 0xE0 and b <= 0xEF then
+            if i + 2 > len or not (string.byte(body, i + 1) >= 0x80 and string.byte(body, i + 1) <= 0xBF)
+                or not (string.byte(body, i + 2) >= 0x80 and string.byte(body, i + 2) <= 0xBF) then
+                return false, i
+            end
+            i = i + 3
+        elseif b >= 0xF0 and b <= 0xF4 then
+            if i + 3 > len or not (string.byte(body, i + 1) >= 0x80 and string.byte(body, i + 1) <= 0xBF)
+                or not (string.byte(body, i + 2) >= 0x80 and string.byte(body, i + 2) <= 0xBF)
+                or not (string.byte(body, i + 3) >= 0x80 and string.byte(body, i + 3) <= 0xBF) then
+                return false, i
+            end
+            i = i + 4
+        else
+            i = i + 1
+        end
+    end
+    return true, nil
+end
 local M = {}
 function M.send_request(profile, messages, options)
     options = options or {}
@@ -63,6 +115,7 @@ function M.send_request(profile, messages, options)
     req.headers:upsert("cache-control", "no-cache")
     req.headers:upsert("connection", "keep-alive")
     local payload = provider.build_payload(profile, messages, options)
+    _sanitize_payload_strings(payload)
     local t_encode = cqueues.monotime()
     local body = json:encode(payload)
     local encode_elapsed = cqueues.monotime() - t_encode
@@ -85,6 +138,15 @@ function M.send_request(profile, messages, options)
             tostring(decoded), body:sub(1, 200)))
         dedup._in_flight_requests[req_hash] = nil
         return nil, string.format("INVALID_JSON_BODY: Round-trip decode failed. Preview: %s", body:sub(1, 200))
+    end
+    -- Post-encode UTF-8 validation: detect invalid byte sequences that slipped through
+    local utf8_ok, utf8_pos = _validate_utf8_body(body)
+    if not utf8_ok then
+        logger.error(string.format("[UTF8 VALIDATION] Invalid UTF-8 at position %d. Preview around error: %s",
+            utf8_pos, body:sub(math.max(1, utf8_pos - 20), math.min(#body, utf8_pos + 20))))
+        dedup._in_flight_requests[req_hash] = nil
+        return nil, string.format("INVALID_UTF8_BODY: Invalid UTF-8 byte sequence at position %d. Preview: %s",
+            utf8_pos, body:sub(math.max(1, utf8_pos - 20), math.min(#body, utf8_pos + 20)))
     end
     req:set_body(body)
     req.headers:delete("expect")

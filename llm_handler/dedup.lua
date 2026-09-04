@@ -26,11 +26,19 @@ function M._request_hash(profile, messages, options)
         end
     end
     local h = table.concat(parts, "|")
-    local hash = 5381
     local len = #h
-    local step = math.max(1, math.floor(len / 50000))
-    for i = 1, len, step do
-        local byte = string.byte(h, i)
+    local msg_count = messages and #messages or 0
+    -- Two-pass hashing: first 4096 bytes + last 4096 bytes + length + message count
+    -- This ensures different content always produces different hashes regardless of size.
+    local SAMPLE_SIZE = 4096
+    local head = h:sub(1, math.min(SAMPLE_SIZE, len))
+    local tail_start = math.max(1, len - SAMPLE_SIZE + 1)
+    local tail = h:sub(tail_start, len)
+    local combined = string.format("%d|%d|%s|%s", len, msg_count, head, tail)
+    local hash = 5381
+    local clen = #combined
+    for i = 1, clen do
+        local byte = string.byte(combined, i)
         hash = ((hash * 33) + byte) % 4294967295
     end
     return string.format("%08x", hash)
