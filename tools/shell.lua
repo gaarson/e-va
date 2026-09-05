@@ -1,7 +1,7 @@
 local utils = require("utils")
 local os = require("os")
 local ui = require("ui")
-
+local shell_session = require("tools.shell_session")
 local SHELL_MANIFEST = {
     is_mutation = false,
     validate_payload = function(payload)
@@ -16,166 +16,170 @@ local SHELL_MANIFEST = {
     enrich_result = function(output_str)
         return output_str
     end,
-    intent_guideline = "shell: Executes POSIX shell commands. Use for running tests, builds, file operations, and system commands.",
+    intent_guideline = "shell: Executes POSIX shell commands. For interactive programs use  to start a session, then session=<id> input=<text> to send input.",
 }
-
+local MAX_LOG_SIZE = 1000000
+local function truncate_output(res)
+    if #res > MAX_LOG_SIZE then
+        return "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE)
+    end
+    return res
+end
 local function register(registry)
-    registry.register("shell", "Executes POSIX shell commands with streaming output and timeouts. (1) All commands require human-in-the-loop confirmation before execution. (2) 10-minute timeout (60s) enforced via timeout wrapper — long-running commands are killed. (3) Output truncation: logs exceeding 1,000,000 bytes are truncated to the last 1MB; early output may be lost for very verbose commands. (4) Circuit breaker: if test/build/check commands fail 3 consecutive times, a warning is injected telling the agent to stop blind patching and read the source code first. (5) Exit codes are captured and reported for silent commands. (6) Output is streamed in real-time to the terminal but returned as a single concatenated string to the agent. (7) Interactive mode: use interactive=true to enable interactive CLI sessions (password entry, etc.). Returns WAITING_USER_INPUT signal when interactive input is needed.", "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||", function(args, ctx, agent_name)
-        -- Parse arguments: support key=value style for interactive mode
-        local interactive = false
-        if args:match("interactive%s*=%s*true") then
-            interactive = true
-            -- Remove the interactive flag from the command
-            args = args:gsub("interactive%s*=%s*true", ""):gsub("^%s*,%s*", ""):gsub(",%s*$", "")
-        end
-        local cmd = utils.trim(args)
-        if cmd == "" then
-            return { output = "[SHELL]: No command provided." }
-        end
-        local allowed, reason = ui.security_prompt.confirm_execution(agent_name, cmd)
-        if allowed then
-            -- User approved, continue execution
-        elseif reason == "denied" then
-            return { output = "\n[SYSTEM]: Command execution DENIED by user. Do not try this command again." }
-        else
-            return { output = string.format("\n[SYSTEM]: Command execution DENIED by user. Reason: %s", reason) }
-        end
-        -- INTERACTIVE MODE: Use a PTY-based approach
-        if interactive then
-            ui.printer.line(string.format("\n[SYSTEM: Interactive Shell '%s']", cmd))
-            ui.printer.line("[INTERACTIVE MODE] Type your input below. Send empty line to finish.")
-            local tmp_in = os.tmpname()
-            local tmp_out = os.tmpname()
-            local exit_file = tmp_out .. ".exit_code"
-            -- Write initial input (empty) to stdin file
-            local fin = io.open(tmp_in, "w")
-            if fin then fin:close() end
-            -- Write command to a temp script file to avoid quoting issues
+    registry.register("shell",
+        "Executes POSIX shell commands. Supports interactive sessions for programs requiring input (sudo, ssh, etc.). Non-interactive: shell:<command>. Interactive start: shell:<command> . Send input: shell:session=<id> input=<text>. Poll: shell:session=<id>. Close: shell:session=<id> close=true.",
+        "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||",
+        function(args, ctx, agent_name)
+            args = args or ""
+            -- === SESSION MODE: session=<id> ===
+            local session_id = args:match("^%s*session%s*=%s*(%S+)")
+            if session_id then
+                local is_close = args:match("close%s*=%s*true") ~= nil
+                local input = args:match("input%s*=%s*(.+)")
+                if is_close then
+                    local ok = shell_session.close(session_id)
+                    if ok then
+                        return { output = "\n[SHELL SESSION]: Session " .. session_id .. " closed." }
+                    else
+                        return { output = "\n[SHELL SESSION ERROR]: Unknown session " .. session_id }
+                    end
+                end
+                if input then
+                    local result, err = shell_session.send_input(session_id, utils.trim(input))
+                    if not result then
+                        return { output = "\n[SHELL SESSION ERROR]: " .. tostring(err) }
+                    end
+                    local out = "\n[SHELL SESSION " .. session_id .. "]:\n" .. result.output
+                    if not result.alive then
+                        out = out .. "\n\n[SESSION COMPLETE] Exit code: " .. tostring(result.exit_code or 0)
+                        shell_session.close(session_id)
+                    else
+                        out = out .. "\n\n[SESSION ACTIVE] Send more input with: shell:session=" .. session_id .. " input=<text>"
+                    end
+                    return { output = out }
+                end
+                -- Just poll
+                local result, err = shell_session.poll(session_id)
+                if not result then
+                    return { output = "\n[SHELL SESSION ERROR]: " .. tostring(err) }
+                end
+                local out = "\n[SHELL SESSION " .. session_id .. "]:\n" .. (result.output ~= "" and result.output or "(no new output)")
+                if not result.alive then
+                    out = out .. "\n\n[SESSION COMPLETE] Exit code: " .. tostring(result.exit_code or 0)
+                    shell_session.close(session_id)
+                else
+                    out = out .. "\n\n[SESSION ACTIVE] Send input with: shell:session=" .. session_id .. " input=<text>"
+                end
+                return { output = out }
+            end
+            -- === INTERACTIVE START:  ===
+            local interactive = args:match("interactive%s*=%s*true") ~= nil
+            if interactive then
+                args = args:gsub("interactive%s*=%s*true", "")
+            end
+            local cmd = utils.trim(args)
+            if cmd == "" then
+                return { output = "[SHELL]: No command provided." }
+            end
+            local allowed, reason = ui.security_prompt.confirm_execution(agent_name, cmd)
+            if not allowed then
+                if reason == "denied" then
+                    return { output = "\n[SYSTEM]: Command execution DENIED by user." }
+                end
+                return { output = string.format("\n[SYSTEM]: Command execution DENIED. Reason: %s", reason) }
+            end
+            if interactive then
+                -- Start interactive session
+                ui.printer.line(string.format("\n[SYSTEM: Starting interactive session: '%s']", cmd))
+                local session, err = shell_session.start(cmd)
+                if not session then
+                    return { output = "\n[SHELL SESSION ERROR]: " .. tostring(err) }
+                end
+                local out = "\n[SHELL SESSION " .. session.id .. " STARTED]:\n"
+                if session.output ~= "" then
+                    out = out .. session.output
+                else
+                    out = out .. "(waiting for program output...)"
+                end
+                if not session.alive then
+                    out = out .. "\n\n[SESSION COMPLETE] Exit code: " .. tostring(session.exit_code or 0)
+                    shell_session.close(session.id)
+                else
+                    out = out .. "\n\n[SESSION ACTIVE] To send input: shell:session=" .. session.id .. " input=<your text>"
+                    out = out .. "\nTo poll for output: shell:session=" .. session.id
+                    out = out .. "\nTo close: shell:session=" .. session.id .. " close=true"
+                end
+                return { output = out }
+            end
+            -- === NON-INTERACTIVE MODE (original) ===
+            ui.printer.line(string.format("\n[SYSTEM: Executing '%s']", cmd))
+            local tmp_file = os.tmpname()
+            local exit_file = tmp_file .. ".exit_code"
             local tmp_script = os.tmpname() .. ".sh"
             local sf = io.open(tmp_script, "w")
             if sf then sf:write("#!/bin/sh\n" .. cmd); sf:close() end
             local wrapper_script = string.format(
-                "timeout 60 sh '%s' < '%s' > '%s' 2>&1; echo $? > '%s'",
-                tmp_script, tmp_in, tmp_out, exit_file
+                "timeout 60 sh '%s' > '%s' 2>&1; echo $? > '%s'",
+                tmp_script, tmp_file, exit_file
             )
-            -- For interactive mode, we collect user inputs first, then run
-            local user_inputs = {}
+            os.execute(wrapper_script .. " &")
+            local output_chunks = {}
+            local last_pos = 0
+            local exit_code = nil
+            local POLL_TIMEOUT = 90
+            local poll_start = os.time()
             while true do
-                local line = ui.input.read_line("[INPUT> ]")
-                if line == "" then break end
-                table.insert(user_inputs, line)
-            end
-            -- Write collected inputs to stdin file
-            local fin = io.open(tmp_in, "w")
-            if fin then
-                for _, line in ipairs(user_inputs) do
-                    fin:write(line .. "\n")
+                local f = io.open(tmp_file, "rb")
+                if f then
+                    f:seek("set", last_pos)
+                    local chunk = f:read("*a")
+                    if chunk and #chunk > 0 then
+                        ui.printer.raw(chunk)
+                        table.insert(output_chunks, chunk)
+                        last_pos = f:seek()
+                    end
+                    f:close()
                 end
-                fin:close()
-            end
-            os.execute(wrapper_script)
-            local output = ""
-            local fout = io.open(tmp_out, "r")
-            if fout then
-                output = fout:read("*a")
-                fout:close()
-            end
-            local exit_code = 0
-            local fc = io.open(exit_file, "r")
-            if fc then
-                local cs = fc:read("*a")
-                if cs then exit_code = tonumber(utils.trim(cs)) or 0 end
-                fc:close()
-            end
-            os.remove(tmp_in)
-            os.remove(tmp_out)
-            os.remove(exit_file)
-            os.remove(tmp_script)
-            if #output == 0 then
-                output = "(Command executed silently. Status: " .. tostring(exit_code) .. ")"
-            end
-            local MAX_LOG_SIZE = 1000000
-            if #output > MAX_LOG_SIZE then
-                output = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. output:sub(-MAX_LOG_SIZE)
-            end
-            ui.printer.line("\n[SYSTEM: Interactive execution finished]")
-            return { output = "\n[SHELL STDOUT/STDERR]:\n" .. output }
-        end
-        -- NON-INTERACTIVE MODE (original behavior)
-        ui.printer.line(string.format("\n[SYSTEM: Executing '%s']", cmd))
-        local tmp_file = os.tmpname()
-        local exit_file = tmp_file .. ".exit_code"
-        -- Write command to a temp script file to avoid quoting issues
-        local tmp_script = os.tmpname() .. ".sh"
-        local sf = io.open(tmp_script, "w")
-        if sf then sf:write("#!/bin/sh\n" .. cmd); sf:close() end
-        local wrapper_script = string.format(
-            "timeout 60 sh '%s' > '%s' 2>&1; echo $? > '%s'",
-            tmp_script, tmp_file, exit_file
-        )
-        os.execute(wrapper_script .. " &")
-        local output_chunks = {}
-        local last_pos = 0
-        local exit_code = nil
-        local POLL_TIMEOUT = 90 -- seconds, slightly above the 60s command timeout
-        local poll_start = os.time()
-        while true do
-            local f = io.open(tmp_file, "rb")
-            if f then
-                f:seek("set", last_pos)
-                local chunk = f:read("*a")
-                if chunk and #chunk > 0 then
-                    ui.printer.raw(chunk)
-                    table.insert(output_chunks, chunk)
-                    last_pos = f:seek()
-                end
-                f:close()
-            end
-            local f_code = io.open(exit_file, "r")
-            if f_code then
-                local code_str = f_code:read("*a")
-                if code_str and #code_str > 0 then
-                    exit_code = tonumber(utils.trim(code_str))
+                local f_code = io.open(exit_file, "r")
+                if f_code then
+                    local code_str = f_code:read("*a")
+                    if code_str and #code_str > 0 then
+                        exit_code = tonumber(utils.trim(code_str))
+                        f_code:close()
+                        break
+                    end
                     f_code:close()
+                end
+                if os.time() - poll_start > POLL_TIMEOUT then
+                    ui.printer.line("\n[SYSTEM WARNING: Polling timeout exceeded.]")
                     break
                 end
-                f_code:close()
+                os.execute("sleep 0.1")
             end
-            -- Safety: break out if we've exceeded the poll timeout
-            if os.time() - poll_start > POLL_TIMEOUT then
-                ui.printer.line("\n[SYSTEM WARNING: Polling timeout exceeded. Command may have hung.]")
-                break
+            ui.printer.line("\n[SYSTEM: Execution finished]")
+            os.remove(tmp_file)
+            os.remove(exit_file)
+            os.remove(tmp_script)
+            local res = table.concat(output_chunks)
+            if #res == 0 then
+                res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")"
             end
-            os.execute("sleep 0.1")
-        end
-        ui.printer.line("\n[SYSTEM: Execution finished]")
-        os.remove(tmp_file)
-        os.remove(exit_file)
-        os.remove(tmp_script)
-        local res = table.concat(output_chunks)
-        if #res == 0 then
-            res = "(Command executed silently. Status: " .. tostring(exit_code or 0) .. ")"
-        end
-        local MAX_LOG_SIZE = 1000000
-        if #res > MAX_LOG_SIZE then
-            res = "\n...[SYSTEM WARNING: LOG TRUNCATED. SHOWING LAST " .. MAX_LOG_SIZE .. " BYTES]...\n" .. res:sub(-MAX_LOG_SIZE)
-        end
-        local output = "\n[SHELL STDOUT/STDERR]:\n" .. res
-        ctx.test_failures = ctx.test_failures or 0
-        if cmd:match("test") or cmd:match("make") or cmd:match("check") or cmd:match("build") then
-            if res:match("[Ee]rror") or res:match("[Ff]ail") or res:match("command not found") or (exit_code and exit_code ~= 0) then
-                ctx.test_failures = ctx.test_failures + 1
-                if ctx.test_failures >= 3 then
-                    output = output .. "\n\n[CIRCUIT BREAKER TRIGGERED]: You have failed this shell validation 3 times in a row. STOP BLIND PATCHING. Read the actual error and use ||| COMMAND |||\nread_chunk\n||| END_COMMAND ||| to verify the source code before trying again."
+            res = truncate_output(res)
+            local output = "\n[SHELL STDOUT/STDERR]:\n" .. res
+            ctx.test_failures = ctx.test_failures or 0
+            if cmd:match("test") or cmd:match("make") or cmd:match("check") or cmd:match("build") then
+                if res:match("[Ee]rror") or res:match("[Ff]ail") or res:match("command not found") or (exit_code and exit_code ~= 0) then
+                    ctx.test_failures = ctx.test_failures + 1
+                    if ctx.test_failures >= 3 then
+                        output = output .. "\n\n[CIRCUIT BREAKER TRIGGERED]: You have failed this shell validation 3 times in a row. STOP BLIND PATCHING. Read the actual error and use read_chunk to verify the source code before trying again."
+                        ctx.test_failures = 0
+                    end
+                else
                     ctx.test_failures = 0
                 end
-            else
-                ctx.test_failures = 0
             end
-        end
-        return { output = output }
-    end,
-    SHELL_MANIFEST)
+            return { output = output }
+        end,
+        SHELL_MANIFEST)
 end
-
 return { register = register }

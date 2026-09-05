@@ -11,6 +11,7 @@ local multi_stage_executor = require("multi_stage_executor")
 local multi_stage = require("agent.multi_stage")
 local tool_registry = require("tool_registry")
 local command_executor = require("command_executor")
+local command_parser = require("ui.command_parser")
 
 local M = {}
 
@@ -144,17 +145,30 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
                 break
             end
             local had_input = ui.interrupt.handle_interruption_with_capture(agent_name)
-            if had_input and had_input:lower():sub(1, 8) == "/discard" then
-                -- User wants to discard the partial output and retry
-                ctx:drop_last_message(agent_name)
-                logger.info("[INTERRUPT] User discarded partial output. Retrying.")
-                response_data = nil
-            elseif had_input then
-                -- User provided input; store it in history so next build_context picks it up
-                ctx:add_message(agent_name, 'user', had_input)
-                logger.info("[INTERRUPT] User input stored in history. Returning AUTO_LOOP to rebuild context fresh.")
-                signal = "AUTO_LOOP"
-                break
+            if had_input then
+                local cmd = command_parser.parse(had_input, config)
+                if cmd.action == 'DISCARD' then
+                    ctx:drop_last_message(agent_name)
+                    logger.info("[INTERRUPT] User discarded partial output. Retrying.")
+                    response_data = nil
+                elseif cmd.action == 'MESSAGES' then
+                    logger.log_final_dump(ctx, turn, agent_name, agent_cfg)
+                    response_data = nil
+                elseif cmd.action == 'STATUS' then
+                    ui.printer.line(string.format('[INTERRUPT] Turn %d | Agent: %s', turn, agent_name))
+                    response_data = nil
+                elseif cmd.action == 'HELP' then
+                    io.write(command_parser.HELP_TEXT)
+                    response_data = nil
+                elseif cmd.action == 'ABORT' then
+                    os.exit(0)
+                else
+                    -- Non-command input: store in history, rebuild context
+                    ctx:add_message(agent_name, 'user', had_input)
+                    logger.info("[INTERRUPT] User input stored in history. Returning AUTO_LOOP to rebuild context fresh.")
+                    signal = "AUTO_LOOP"
+                    break
+                end
             else
                 -- User pressed Enter with no input; just retry within same loop
                 response_data = nil

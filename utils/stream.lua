@@ -7,10 +7,9 @@ local _is_tty = tty.is_tty
 -- ============================================================================
 function M.stream_token_printer(agent_cfg)
     local print_buf = ""
-    local in_thought = (agent_cfg and agent_cfg.is_reasoning) or false
+    local in_thought = false
     local tag_open = "<thinking>"
     local tag_close = "</thinking>"
-    if in_thought then io.write("\27[90m") end
     local function flush_remaining()
         if #print_buf > 0 then
             if in_thought then

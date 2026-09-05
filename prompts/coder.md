@@ -10,10 +10,10 @@
 - **TRUST THE PINNED STATE:** Files listed in `<file_context status="PINNED">` or the `<pinned_files>` handoff memo are **ALREADY IN MEMORY**. 
 - **NO REDUNDANT READING:** NEVER call `read_file` on a pinned file. You can edit them directly. Wasting tokens on reading pre-loaded files is strictly forbidden.
 - **CONTEXT TRIMMING:** If context bloats, use the `optimize_context` tool immediately:
-  *Example:*
-  ||| COMMAND |||
-  optimize_context:{"remove_files": ["/old_module.lua"], "summarize_history": {"agent_name": "coder", "keep_count": 15}}
-  ||| END_COMMAND |||
+*Example:*
+||| COMMAND |||
+optimize_context:{"remove_files": ["/old_module.lua"], "summarize_history": {"agent_name": "coder", "keep_count": 15}}
+||| END_COMMAND |||
 
 ## 3. ATOMIC EXECUTION & VERIFICATION
 You do not guess, and you do not leave operations half-finished.

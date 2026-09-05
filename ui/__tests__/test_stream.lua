@@ -97,9 +97,9 @@ describe("ui/stream", function()
     -- Tag detection behavior (via on_token with reasoning)
     -- ============================================================
     describe("tag detection", function()
-        it("reasoning printer starts in thought mode", function()
+        it("reasoning printer does NOT start in thought mode", function()
             local printer = stream.stream_token_printer({ is_reasoning = true })
-            -- Feed a token; should not crash
+            -- Text before any thinking tag must NOT be gray
             printer.on_token("some reasoning text")
             printer:flush()
         end)

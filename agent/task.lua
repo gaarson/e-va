@@ -1,4 +1,6 @@
 local ui = require('ui')
+local command_parser = require("ui.command_parser")
+local logger = require("logger")
 local M = {}
 --- Sets up and runs a task: builds initial context (file tree, README, docs, task file),
 --- adds first message, and calls execute_pipeline.
@@ -103,11 +105,50 @@ function M.run_pipe_mode(ctx, config, utils, logger, execute_pipeline_fn, run_ag
             ui.printer.pipe_marker("=== PIPE MODE EXIT ===")
             break
         end
-        if trimmed ~= "" then
-            ui.printer.pipe_marker("=== RESPONSE START ===")
-            M.setup_and_run_task(nil, trimmed, nil, ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
-            ui.printer.pipe_marker("=== RESPONSE END ===")
-            io.flush()
+        if trimmed:match("^/") then
+            local cmd = command_parser.parse(trimmed, config)
+            if cmd.action == "MESSAGES" then
+                for agent_name, _ in pairs(ctx.history) do
+                    logger.log_final_dump(ctx, 0, agent_name, nil)
+                end
+                io.flush()
+            elseif cmd.action == "STATUS" then
+                ui.printer.line("Pipe mode ready. Awaiting task instruction.")
+                io.flush()
+            elseif cmd.action == "HELP" then
+                io.write(command_parser.HELP_TEXT)
+                io.flush()
+            elseif cmd.action == "ABORT" then
+                ui.printer.pipe_marker("=== PIPE MODE EXIT ===")
+                break
+            elseif cmd.action == "NEXT_STAGE" or cmd.action == "PREV_STAGE" or cmd.action == "SWITCH_STAGE" then
+                ui.printer.line("[WARNING] Not available in pipe mode.")
+                io.flush()
+            elseif cmd.action == "ERROR" then
+                ui.printer.line(cmd.message)
+                io.flush()
+            elseif cmd.action == "MESSAGE" then
+                if trimmed ~= "" then
+                    ui.printer.pipe_marker("=== RESPONSE START ===")
+                    M.setup_and_run_task(nil, trimmed, nil, ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
+                    ui.printer.pipe_marker("=== RESPONSE END ===")
+                    io.flush()
+                end
+            else
+                if trimmed ~= "" then
+                    ui.printer.pipe_marker("=== RESPONSE START ===")
+                    M.setup_and_run_task(nil, trimmed, nil, ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
+                    ui.printer.pipe_marker("=== RESPONSE END ===")
+                    io.flush()
+                end
+            end
+        else
+            if trimmed ~= "" then
+                ui.printer.pipe_marker("=== RESPONSE START ===")
+                M.setup_and_run_task(nil, trimmed, nil, ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
+                ui.printer.pipe_marker("=== RESPONSE END ===")
+                io.flush()
+            end
         end
     end
 end

@@ -38,20 +38,47 @@ function M:parse_command(text)
     -- Normalize line endings only
     text = text:gsub("\r\n", "\n")
     -- Strip reasoning/thinking tags to prevent fake command markers inside reasoning blocks
-    -- Handle <think>...</thinking>, <thinking>...</thinking>, <antThinking>...</antThinking> (case-insensitive)
+    -- Robust loop-based stripper: handles multiple blocks, case-insensitivity, and unclosed (truncated) tags.
     local had_reasoning = false
-    -- Strip <think>...</thinking> (common LLM reasoning tag, case-insensitive)
-    local n1 = select(2, text:gsub("<%s*thinking[^>]*>[^%z]*</%s*thinking%s*>", ""))
-    if n1 > 0 then had_reasoning = true end
-    -- Strip <antThinking>...</antThinking> (case-insensitive)
-    local n2 = select(2, text:gsub("<%s*antThinking[^>]*>[^%z]*</%s*antThinking%s*>", ""))
-    if n2 > 0 then had_reasoning = true end
-    -- Strip HTML-style <!-- thinking --> comments
-    local n3 = select(2, text:gsub("<!--%s*thinking[^>]*-->[^%z]*<!--%s*/thinking%s*-->", ""))
-    if n3 > 0 then had_reasoning = true end
-    -- Strip <think>...` tags (system directive reasoning tag)
-    local n4 = select(2, text:gsub("<%s*think%s*>[^%z]*</%s*think%s*>", ""))
-    if n4 > 0 then had_reasoning = true end
+    local function strip_thinking_blocks(s)
+        local count = 0
+        -- Tag patterns (longest first to avoid partial matches), case-insensitive via char classes
+        local tags = {
+            { open = "<%s*[aA][nN][tT][tT][hH][iI][nN][kK][iI][nN][gG]%s*[^>]*>", close = "</%s*[aA][nN][tT][tT][hH][iI][nN][kK][iI][nN][gG]%s*>" },
+            { open = "<%s*[tT][hH][iI][nN][kK][iI][nN][gG]%s*[^>]*>", close = "</%s*[tT][hH][iI][nN][kK][iI][nN][gG]%s*>" },
+            { open = "<%s*[tT][hH][iI][nN][kK]%s*>", close = "</%s*[tT][hH][iI][nN][kK]%s*>" },
+        }
+        for _, tag in ipairs(tags) do
+            while true do
+                local os_, oe = s:find(tag.open)
+                if not os_ then break end
+                local cs, ce = s:find(tag.close, oe + 1)
+                if cs then
+                    s = s:sub(1, os_ - 1) .. s:sub(ce + 1)
+                else
+                    -- Unclosed tag (truncation): strip from opening tag to end of string
+                    s = s:sub(1, os_ - 1)
+                end
+                count = count + 1
+            end
+        end
+        return s, count
+    end
+    text, had_reasoning_count = strip_thinking_blocks(text)
+    if had_reasoning_count > 0 then had_reasoning = true end
+    -- Strip HTML-style <!-- thinking --> comments (loop-based, handles truncation)
+    while true do
+        local os_, oe = text:find("<!--%s*[tT][hH][iI][nN][kK]%s*-->")
+        if not os_ then break end
+        local cs, ce = text:find("<!--%s*/[tT][hH][iI][nN][kK]%s*-->", oe + 1)
+        if cs then
+            text = text:sub(1, os_ - 1) .. text:sub(ce + 1)
+        else
+            -- Unclosed comment: strip to end
+            text = text:sub(1, os_ - 1)
+        end
+        had_reasoning = true
+    end
     if had_reasoning then
         local logger = require("logger")
         logger.info("[PARSE] Stripped reasoning/thinking tags before command parsing")

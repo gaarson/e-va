@@ -36,7 +36,7 @@ describe("Pipeline UI Integration - End-to-End", function()
             for k, _ in pairs(command_parser.COMMANDS) do
                 count = count + 1
             end
-            assert.equals(6, count)
+            assert.equals(8, count)
         end)
     end)
     describe("HELP text consistency", function()

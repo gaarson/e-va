@@ -266,14 +266,6 @@ function M:start_task_with_intent(task, project_context, tool_name, payload_hint
     self.intent_raw = self.intent.raw
     self.state      = states.STATES.INTENT_READY
     self.iteration  = 1
-
-
-    -- FIX #2: Optional intent validation before generation
-    if opts and opts.require_intent_validation then
-        self.pending_intent_validation = true
-        return { stage = "intent_validate", prompt = self:build_intent_validation_prompt(project_context) }
-    end
-
     return { stage = "generate", prompt = self:build_generate_prompt() }
 
 end
@@ -435,33 +427,22 @@ function M:feed_response(llm_response)
                     inferred_verdict = "REVISE"
                 end
             end
-            -- (2) Fallback: count occurrences
+            -- (2) Keyword inference from upper-cased response
             if not inferred_verdict then
-                local _, approve_count = upper_resp:gsub("APPROVE", "")
-                local _, revise_count = upper_resp:gsub("REVISE", "")
-                local _, fail_count = upper_resp:gsub("FAIL", "")
-                -- Check for conditional approval words after APPROVE
-                local has_conditional = upper_resp:find("BUT") or upper_resp:find("HOWEVER") or upper_resp:find("EXCEPT") or upper_resp:find("UNLESS")
-                if revise_count > approve_count or fail_count > approve_count then
-                    inferred_verdict = "REVISE"
-                elseif approve_count > revise_count and not has_conditional then
+                if upper_resp:find("APPROVE") and not upper_resp:find("REVISE") then
                     inferred_verdict = "APPROVE"
-                elseif has_conditional then
+                elseif upper_resp:find("REVISE") then
                     inferred_verdict = "REVISE"
                 end
             end
-            if inferred_verdict == "APPROVE" then
-                logger.warn("[MULTI-STAGE] Review parse failed but APPROVE inferred from response. Auto-approving.")
-                self.state = states.STATES.APPROVED
-                return { stage = "done", result = self.last_result, iterations = self.iteration }
-            elseif inferred_verdict == "REVISE" then
-                logger.warn(string.format("[MULTI-STAGE] Review parse failed but REVISE inferred. Using fallback correction: '%s'", err))
-                self.review = { verdict = "REVISE", correction = "Reviewer could not be parsed. Correction: " .. err, raw = utils.trim(llm_response) }
+            -- (3) Safe default
+            local final_verdict = inferred_verdict or "REVISE"
+            if inferred_verdict then
+                logger.warn(string.format("[MULTI-STAGE] Review parse failed. Inferred verdict: %s from keywords. Error: %s", final_verdict, err))
             else
-                logger.warn(string.format("[MULTI-STAGE] Review parse failed and no verdict inferable. Auto-approving to prevent infinite loop. Error: %s", err))
-                self.state = states.STATES.APPROVED
-                return { stage = "done", result = self.last_result, iterations = self.iteration }
+                logger.warn(string.format("[MULTI-STAGE] Review parse failed and no VERDICT line found. Defaulting to REVISE (safe fallback). Error: %s", err))
             end
+            self.review = { verdict = final_verdict, correction = "Reviewer response could not be parsed into a structured verdict. Please regenerate with clearer output.", raw = utils.trim(llm_response) }
         else
 
             self.review = review
@@ -630,7 +611,7 @@ function M:save_state()
     local json = require("JSON")
     local os_mod = require("os")
     os_mod.execute(string.format("mkdir -p '%s/.e-va-conf'", self.ctx.config.PROJECT_ROOT))
-    local state_file = self.ctx.config.PROJECT_ROOT .. "/.e-va-conf/.multi_stage_state.json"
+    local state_file = string.format("%s/.e-va-conf/.multi_stage_state_%s.json", self.ctx.config.PROJECT_ROOT, self.agent_name)
     local snap = {
         task = self.task or "",
         intent_tool = self.intent and self.intent.TOOL or "",
@@ -655,7 +636,7 @@ function M:save_state()
 end
 function M:load_state()
     local json = require("JSON")
-    local state_file = self.ctx.config.PROJECT_ROOT .. "/.e-va-conf/.multi_stage_state.json"
+    local state_file = string.format("%s/.e-va-conf/.multi_stage_state_%s.json", self.ctx.config.PROJECT_ROOT, self.agent_name)
     local f = io.open(state_file, "r")
     if not f then return false end
     local data = f:read("*a")

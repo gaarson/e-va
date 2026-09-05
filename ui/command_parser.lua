@@ -5,18 +5,22 @@ M.COMMANDS = {
   ['/go'] = 'NEXT_STAGE',
   ['/back'] = 'PREV_STAGE',
   ['/exit'] = 'ABORT',
+  ['/quit'] = 'ABORT',
   ['/status'] = 'STATUS',
   ['/help'] = 'HELP',
   ['/messages'] = 'MESSAGES',
+  ['/discard'] = 'DISCARD',
 }
 M.HELP_TEXT = [[
 Available commands:
   /go       - Move to the next pipeline stage
   /back     - Move back to the previous stage
   /exit     - Abort execution
+  /quit     - Alias for /exit
   /mode <s> - Switch to stage <s>
   /status   - Show current status
   /messages - Dump current LLM request messages to console
+  /discard  - Discard partial output and retry
   /help     - Show this help message
 ]]
 function M.parse(input, config)
@@ -44,6 +48,8 @@ function M.parse(input, config)
       return { action = 'HELP', message = M.HELP_TEXT }
     elseif action == 'MESSAGES' then
       return { action = 'MESSAGES', message = 'Dumping current messages...' }
+    elseif action == 'DISCARD' then
+      return { action = 'DISCARD', message = 'Discarding partial output.' }
     end
   end
   -- Check for /mode <stage_name>
