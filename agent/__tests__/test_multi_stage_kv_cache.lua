@@ -224,8 +224,8 @@ describe("Multi-Stage KV-Cache Fork-and-Rollback", function()
                 assert.are.equal(mock_llm.calls[1][i].content, mock_llm.calls[3][i].content,
                     string.format("Intent vs Review msg %d: content mismatch (KV-cache miss!)", i))
             end
-            -- Generate call now uses the same full base prefix as intent/review
-            assert.are.equal(base_prefix_len, #mock_llm.calls[2] - 3, "Generate call should use full base prefix")
+            -- Generate call uses minimal generate_prefix (1 system msg) to prevent contamination
+            assert.are.equal(1, #mock_llm.calls[2] - 3, "Generate call should use minimal generate_prefix (1 msg)")
         end)
         it("tail grows incrementally with each stage", function()
             local initial_history = { { role = "user", content = "Task please" } }
@@ -239,7 +239,7 @@ describe("Multi-Stage KV-Cache Fork-and-Rollback", function()
             )
             local base_len = 2  -- 1 system + 1 history
             assert.are.equal(base_len + 1, #mock_llm.calls[1], "Call 1 (intent): base + 1 tail")
-            assert.are.equal(base_len + 3, #mock_llm.calls[2], "Call 2 (generate): base + 3 tail")
+            assert.are.equal(1 + 3, #mock_llm.calls[2], "Call 2 (generate): generate_prefix(1) + 3 tail")
             assert.are.equal(base_len + 5, #mock_llm.calls[3], "Call 3 (review): base + 5 tail")
         end)
     end)
@@ -365,13 +365,8 @@ describe("Multi-Stage KV-Cache Fork-and-Rollback", function()
                         string.format("Prefix mismatch at call %d msg %d", call_idx, i))
                 end
             end
-            -- Generate calls now use the same full base prefix as other stages
-            for i = 1, #mock_llm.calls[1] do
-                assert.are.equal(mock_llm.calls[1][i].role, mock_llm.calls[2][i].role,
-                    "Generate vs Intent msg %d: role mismatch", i)
-                assert.are.equal(mock_llm.calls[1][i].content, mock_llm.calls[2][i].content,
-                    "Generate vs Intent msg %d: content mismatch (KV-cache miss!)", i)
-            end
+            -- Generate calls use minimal generate_prefix (1 system msg), not the full base prefix
+            assert.are.equal(1, #mock_llm.calls[2] - 3, "Generate call should use minimal generate_prefix (1 msg)")
             local final_history = ctx.history.test_agent
             assert.are.equal(2, #final_history)
             assert.truthy(final_history[2].content:find("[MULTI-STAGE RESULT]"))

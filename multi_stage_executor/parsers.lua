@@ -50,10 +50,15 @@ local function validate_payload(tool_name, payload)
     if tool and tool.manifest and tool.manifest.validate_payload then
         local ok, err = tool.manifest.validate_payload(payload)
         if not ok then
+            -- Enhance error with meta-reasoning detection to guide LLM on retry
+            local first_line = payload:match("^[^\r\n]+") or ""
+            local is_meta_reasoning = first_line:match("^%s*(I need to|Let me|I should|The SEARCH|I'll |I will|We need to|First,|Looking at)") ~= nil
+            if is_meta_reasoning then
+                return false, err .. " DETECTED META-REASONING: Your output starts with explanatory text ('" .. first_line:sub(1, 60) .. "'). You MUST output ONLY the raw payload. Start directly with the first line of content. No explanations, no preamble."
+            end
             return false, err or ("Validation failed for tool '" .. tool_name .. "'.")
         end
     end
-    
     -- Guard: reject payloads that look like tool invocation strings (e.g. "create_file:path/to/file")
     -- This happens when the LLM outputs command format instead of raw content
     if #payload < 200 and payload:match("^[%w_]+:%S+$") and not payload:find("\n") then

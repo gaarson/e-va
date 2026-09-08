@@ -467,12 +467,16 @@ function M.read_text(prompt, prompt_color)
 
     if not tty.is_tty then
         io.write(prompt_color .. prompt .. colors.reset)
-        io.write(colors.dim .. ' (Ctrl+D submit, Ctrl+C cancel)' .. colors.reset .. '\n')
+        io.write(colors.dim .. ' (empty line = submit, Ctrl+C cancel)' .. colors.reset .. '\n')
         io.stdout:flush()
         local lines = {}
         while true do
             local line = io.read('*l')
             if line == nil then break end
+            -- Empty line after at least one non-empty line = submit (pipe mode analog of Ctrl+D)
+            if line == '' and #lines > 0 then
+                break
+            end
             table.insert(lines, line)
         end
         local result = table.concat(lines, '\n')

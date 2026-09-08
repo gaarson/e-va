@@ -224,9 +224,12 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
             -- Append stage prompt to tail (prefix stays cached)
             table.insert(tail, { role = "user", content = step.prompt })
             -- Construct full messages: use minimal prefix for generate stage (avoids tool invocation pattern contamination)
-            -- For generate stage: strip tools_manifest from system prompt to reduce noise
-            local prefix_to_use = base_messages
-            if (step.stage == 'generate' or step.stage == 'review') and #base_messages > 0 and base_messages[1].role == 'system' then
+            local prefix_to_use
+            if step.stage == 'generate' then
+                -- Use minimal RAW OUTPUT MODE prefix to prevent model from copying command patterns from history
+                prefix_to_use = generate_prefix
+            elseif step.stage == 'review' and #base_messages > 0 and base_messages[1].role == 'system' then
+                -- For review: strip tools_manifest from system prompt to reduce noise
                 local sys_content = base_messages[1].content
                 local marker = '## TOOLCHAIN INTERFACE'
                 local pos = sys_content:find(marker, 1, true)
@@ -241,6 +244,8 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
                         prefix_to_use[i] = msg
                     end
                 end
+            else
+                prefix_to_use = base_messages
             end
             local full_messages = {}
             for i, msg in ipairs(prefix_to_use) do
