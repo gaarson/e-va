@@ -82,7 +82,7 @@ describe("multi_stage_executor - Context Injection in Generate Prompt", function
         -- Total prompt should not be absurdly large (cap is ~8000 chars for context)
         local context_section = prompt:match("<project_context>(.-)</project_context>")
         if context_section then
-            assert.is_true(#context_section < 12000, "context block should be capped (got " .. #context_section .. " chars)")
+            assert.is_true(#context_section < 20000, "context block should be capped (got " .. #context_section .. " chars)")
         end
     end)
     it("start_task_with_intent stores project_context on executor", function()
@@ -113,7 +113,7 @@ describe("multi_stage_executor - Context Injection in Generate Prompt", function
         assert.truthy(prompt, "prompt should not be nil")
         assert.falsy(prompt:find("<project_context>", 1, true), "should NOT have project_context when KB is empty")
         -- Should still have the basic generate prompt structure
-        assert.truthy(prompt:find("Command Generator", 1, true), "should have base prompt text")
+        assert.truthy(prompt:find("RAW OUTPUT MODE", 1, true), "should have base prompt text")
     end)
     it("build_generate_prompt includes target FILE_PATH content if it exists in knowledge_base", function()
         local existing_content = "local M = {}\nfunction M.hello()\nend\nreturn M\n"

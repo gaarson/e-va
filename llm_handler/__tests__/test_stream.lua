@@ -1,7 +1,6 @@
 describe("Stream Processing", function()
     local stream_mod = require("llm_handler.stream")
     local json = require("JSON")
-
     -- Helper: create a mock stream object
     local function make_mock_stream(chunks)
         local idx = 0
@@ -15,14 +14,12 @@ describe("Stream Processing", function()
             end
         }
     end
-
     -- Helper: create a mock profile
     local function make_mock_profile()
         return {
             params = { stream_timeout = 10 }
         }
     end
-
     -- Helper: create a mock provider
     local function make_mock_provider()
         return {
@@ -37,7 +34,6 @@ describe("Stream Processing", function()
             end
         }
     end
-
     -- Mock patcher_core
     package.preload["patcher_core"] = function()
         return {
@@ -47,9 +43,7 @@ describe("Stream Processing", function()
             consume_sigint = function() return false end
         }
     end
-
     before_each(function()
-        -- Reset patcher_core mock — clear cache so require() re-loads from preload
         package.loaded["patcher_core"] = nil
         package.preload["patcher_core"] = function()
             return {
@@ -60,12 +54,10 @@ describe("Stream Processing", function()
             }
         end
     end)
-
     it("should load the module and have process_stream function", function()
         assert.is_not_nil(stream_mod)
         assert.is_function(stream_mod.process_stream)
     end)
-
     it("should parse text content from SSE chunks", function()
         local chunk = "data: " .. json:encode({
             choices = {{ delta = { content = "Hello" } }}
@@ -77,19 +69,16 @@ describe("Stream Processing", function()
         local stream = make_mock_stream({ chunk, chunk2, chunk_done })
         local profile = make_mock_profile()
         local provider = make_mock_provider()
-
         local collected = {}
         local result = stream_mod.process_stream(stream, profile, provider, function(token)
             table.insert(collected, token)
         end)
-
         assert.is_not_nil(result)
         assert.is_not_nil(result.choices)
         assert.equals("assistant", result.choices[1].message.role)
         assert.equals("Hello World", result.choices[1].message.content)
     end)
-
-    it("should handle reasoning content", function()
+    it("should handle reasoning content separately from text", function()
         local chunk = "data: " .. json:encode({
             choices = {{ delta = { reasoning_content = "Let me think..." } }}
         }) .. "\n\n"
@@ -101,25 +90,23 @@ describe("Stream Processing", function()
         local result = stream_mod.process_stream(stream, profile, provider, function(token)
             table.insert(collected, token)
         end)
-
         assert.is_not_nil(result)
-        assert.is_not_nil(result.full_reason)
+        -- Reasoning is stored separately
         assert.equals("Let me think...", result.full_reason)
+        -- Content should NOT contain reasoning (no thinking tags)
+        assert.equals("", result.choices[1].message.content)
+        -- full_text should be empty (no text tokens were sent)
+        assert.equals("", result.full_text)
     end)
-
     it("should handle EOF correctly", function()
         local stream = make_mock_stream({})
         local profile = make_mock_profile()
         local provider = make_mock_provider()
-
         local result = stream_mod.process_stream(stream, profile, provider, nil)
-
         assert.is_not_nil(result)
         assert.is_not_nil(result.choices)
-        -- Empty content is expected for empty stream
         assert.equals("", result.choices[1].message.content)
     end)
-
     it("should handle mixed text and reasoning content", function()
         local chunk_reason = "data: " .. json:encode({
             choices = {{ delta = { reasoning_content = "Thinking..." } }}
@@ -131,20 +118,19 @@ describe("Stream Processing", function()
         local stream = make_mock_stream({ chunk_reason, chunk_text, chunk_done })
         local profile = make_mock_profile()
         local provider = make_mock_provider()
-
         local result = stream_mod.process_stream(stream, profile, provider, nil)
-
         assert.is_not_nil(result)
-        assert.is_not_nil(result.full_reason)
-        assert.is_not_nil(result.full_text)
+        -- Reasoning and text are fully separated
         assert.equals("Thinking...", result.full_reason)
         assert.equals("Answer", result.full_text)
+        -- Content contains ONLY text, no reasoning tags
+        assert.equals("Answer", result.choices[1].message.content)
+        -- No thinking tags in content
+        assert.falsy(result.choices[1].message.content:find("<thinking>"))
+        assert.falsy(result.choices[1].message.content:find("</thinking>"))
     end)
-
     it("should set interrupted flag when ESC is pressed", function()
-        -- Clear cached patcher_core so it re-loads from preload
         package.loaded["patcher_core"] = nil
-        -- Create a mock patcher_core that simulates ESC press
         package.preload["patcher_core"] = function()
             return {
                 setup_esc_monitor = function() end,
@@ -153,39 +139,17 @@ describe("Stream Processing", function()
                 consume_sigint = function() return false end
             }
         end
-
         local chunk = "data: " .. json:encode({
             choices = {{ delta = { content = "Hello" } }}
         }) .. "\n\n"
         local stream = make_mock_stream({ chunk })
         local profile = make_mock_profile()
         local provider = make_mock_provider()
-
         local result = stream_mod.process_stream(stream, profile, provider, nil)
-
         assert.is_not_nil(result)
         assert.is_true(result.interrupted)
     end)
-    it("should emit <thinking> tag when reasoning starts", function()
-        local chunk_reason = "data: " .. json:encode({
-            choices = {{ delta = { reasoning_content = "Thinking..." } }}
-        }) .. "\n\n"
-        local chunk_done = "data: [DONE]\n\n"
-        local stream = make_mock_stream({ chunk_reason, chunk_done })
-        local profile = make_mock_profile()
-        local provider = make_mock_provider()
-        local collected = {}
-        local result = stream_mod.process_stream(stream, profile, provider, function(token)
-            table.insert(collected, token)
-        end)
-        assert.is_not_nil(result)
-        -- The first token should contain the opening <thinking> tag
-        local first_token = collected[1]
-        assert.truthy(first_token:find("<thinking>"), "First token should contain <thinking> tag: " .. tostring(first_token))
-        assert.equals("Thinking...", result.full_reason)
-        assert.truthy(result.choices[1].message.content:find("<thinking>"), "Full content should contain <thinking> tag")
-    end)
-    it("should emit complete <thinking>...</thinking> wrapper for reasoning followed by text", function()
+    it("should NOT include thinking tags in content when reasoning precedes text", function()
         local chunk_reason = "data: " .. json:encode({
             choices = {{ delta = { reasoning_content = "Let me think..." } }}
         }) .. "\n\n"
@@ -201,11 +165,12 @@ describe("Stream Processing", function()
             table.insert(collected, token)
         end)
         assert.is_not_nil(result)
-        -- Verify full_content has proper <thinking>...</thinking> wrapper
-        assert.truthy(result.choices[1].message.content:find("<thinking>"), "Content should start with <thinking> tag")
-        assert.truthy(result.choices[1].message.content:find("</thinking>"), "Content should contain </thinking> tag")
-        assert.truthy(result.choices[1].message.content:find("Here is the answer"), "Content should contain text after </thinking>")
-        -- Verify separate fields
+        -- Content should be text-only, NO thinking tags
+        local content = result.choices[1].message.content
+        assert.equals("Here is the answer", content)
+        assert.falsy(content:find("<thinking>"), "Content must NOT contain <thinking> tag")
+        assert.falsy(content:find("</thinking>"), "Content must NOT contain </thinking> tag")
+        -- Separate fields are correct
         assert.equals("Let me think...", result.full_reason)
         assert.equals("Here is the answer", result.full_text)
     end)
@@ -301,10 +266,8 @@ describe("Stream Processing", function()
         local result = stream_mod.process_stream(stream, profile, provider, nil)
         assert.is_not_nil(result)
         assert.is_true(result.interrupted)
-        -- "Hello" was processed before the interrupt fired on the 2nd poll
         assert.truthy(result.choices[1].message.content:find("Hello"),
             "Content should contain 'Hello'")
-        -- "World" was NOT processed because interrupt fires before chunk2 parsing
         assert.truthy(result.choices[1].message.content:find("INTERRUPTED"),
             "Content should contain INTERRUPTED message")
     end)
@@ -323,10 +286,29 @@ describe("Stream Processing", function()
         assert.is_not_nil(result)
         assert.equals("Final thought", result.full_reason)
         assert.equals("The answer is 42", result.full_text)
+        -- Content should be text-only, no thinking tags
         local content = result.choices[1].message.content
-        assert.truthy(content:find("<thinking>"), "Content should contain <thinking> tag")
-        assert.truthy(content:find("Final thought"), "Content should contain reasoning text")
-        assert.truthy(content:find("</thinking>"), "Content should contain </thinking> tag")
-        assert.truthy(content:find("The answer is 42"), "Content should contain text content")
+        assert.equals("The answer is 42", content)
+        assert.falsy(content:find("<thinking>"), "Content must NOT contain <thinking> tag")
+    end)
+    it("should accumulate multiple reasoning chunks into full_reason", function()
+        local chunk1 = "data: " .. json:encode({
+            choices = {{ delta = { reasoning_content = "Step one. " } }}
+        }) .. "\n\n"
+        local chunk2 = "data: " .. json:encode({
+            choices = {{ delta = { reasoning_content = "Step two." } }}
+        }) .. "\n\n"
+        local chunk3 = "data: " .. json:encode({
+            choices = {{ delta = { content = "Done" } }}
+        }) .. "\n\n"
+        local chunk_done = "data: [DONE]\n\n"
+        local stream = make_mock_stream({ chunk1, chunk2, chunk3, chunk_done })
+        local profile = make_mock_profile()
+        local provider = make_mock_provider()
+        local result = stream_mod.process_stream(stream, profile, provider, nil)
+        assert.is_not_nil(result)
+        assert.equals("Step one. Step two.", result.full_reason)
+        assert.equals("Done", result.full_text)
+        assert.equals("Done", result.choices[1].message.content)
     end)
 end)

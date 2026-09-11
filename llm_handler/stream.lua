@@ -4,11 +4,10 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     local patcher_core = require("patcher_core")
     local cqueues = require("cqueues")
     local json = require("JSON")
-    local content_parts = {}
-    local text_parts = {}
-    local reason_parts = {}
+    local content_parts = {}  -- text only (what goes to history)
+    local text_parts = {}     -- same as content_parts, kept for clarity
+    local reason_parts = {}   -- reasoning only (stored separately)
     local buffer = ""
-    local in_reasoning = false
     local was_interrupted = false
     local last_part = nil
     local STREAM_TIMEOUT = (profile.params and profile.params.stream_timeout) or 600
@@ -18,6 +17,38 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     local last_parse_time = cqueues.monotime()
     if patcher_core.setup_esc_monitor then
         patcher_core.setup_esc_monitor()
+    end
+    -- Helper: process a single SSE data line (no [DONE])
+    local in_reasoning_ui = false
+    local function process_data_line(json_str)
+        local ok, part = pcall(json.decode, json, json_str)
+        if ok and part then last_part = part end
+        local c_text, c_reason = provider.extract_stream(json_str)
+        -- Reasoning: store separately, show in UI with <thinking> tags but NOT in content
+        if c_reason and c_reason ~= "" then
+            table.insert(reason_parts, c_reason)
+            if on_token_cb then
+                if not in_reasoning_ui then
+                    in_reasoning_ui = true
+                    on_token_cb("\n<thinking>\n" .. c_reason)
+                else
+                    on_token_cb(c_reason)
+                end
+            end
+        end
+        -- Text: this is what goes into content/history (clean, no tags)
+        if c_text and c_text ~= "" then
+            table.insert(content_parts, c_text)
+            table.insert(text_parts, c_text)
+            if on_token_cb then
+                if in_reasoning_ui then
+                    in_reasoning_ui = false
+                    on_token_cb("</thinking>\n\n" .. c_text)
+                else
+                    on_token_cb(c_text)
+                end
+            end
+        end
     end
     while true do
         local chunk, err = stream:get_next_chunk(STREAM_TIMEOUT)
@@ -30,13 +61,8 @@ function M.process_stream(stream, profile, provider, on_token_cb)
         end
         local now = cqueues.monotime()
         last_activity_time = now
-        -- Debug logging for chunks
-        if logger.debug then
-            logger.debug(string.format("[STREAM] Remaining buffer after loop: %d bytes", #buffer))
-        end
         local esc_pressed = patcher_core.consume_esc and patcher_core.consume_esc()
         local sigint_pressed = patcher_core.consume_sigint and patcher_core.consume_sigint()
-        
         if esc_pressed or sigint_pressed then
             if esc_pressed then
                 logger.warn("Generation interrupted by ESC key.")
@@ -55,39 +81,12 @@ function M.process_stream(stream, profile, provider, on_token_cb)
             local newline_pos = buffer:find("\n")
             if not newline_pos then
                 logger.warn(string.format("[STREAM] Buffer exceeded %d bytes without newline. Force-flushing.", BUFFER_LIMIT))
-                -- Treat entire buffer as one line
                 local line = buffer:gsub("\r", ""):gsub("^%s+", ""):gsub("%s+$", "")
                 buffer = ""
                 if line ~= "" and line:sub(1, 5) == "data:" then
                     local json_str = line:sub(6):gsub("^%s+", ""):gsub("%s+$", "")
                     if not json_str:match("%[DONE%]") then
-                        local ok, part = pcall(json.decode, json, json_str)
-                        if ok and part then last_part = part end
-                        local c_text, c_reason = provider.extract_stream(json_str)
-                        if c_reason and c_reason ~= "" then
-                            if not in_reasoning then
-                                in_reasoning = true
-                                local token = "\n<thinking>\n" .. c_reason
-                                table.insert(content_parts, token)
-                                if on_token_cb then on_token_cb(token) end
-                            else
-                                table.insert(content_parts, c_reason)
-                                if on_token_cb then on_token_cb(c_reason) end
-                            end
-                            table.insert(reason_parts, c_reason)
-                        end
-                        if c_text and c_text ~= "" then
-                            if in_reasoning then
-                                in_reasoning = false
-                                local token = "</thinking>\n\n" .. c_text
-                                table.insert(content_parts, token)
-                                if on_token_cb then on_token_cb(token) end
-                            else
-                                table.insert(content_parts, c_text)
-                                if on_token_cb then on_token_cb(c_text) end
-                            end
-                            table.insert(text_parts, c_text)
-                        end
+                        process_data_line(json_str)
                     end
                 end
             end
@@ -105,33 +104,7 @@ function M.process_stream(stream, profile, provider, on_token_cb)
                 last_parse_time = cqueues.monotime()
                 local json_str = line:sub(6):gsub("^%s+", ""):gsub("%s+$", "")
                 if not json_str:match("%[DONE%]") then
-                    local ok, part = pcall(json.decode, json, json_str)
-                    if ok and part then last_part = part end
-                    local c_text, c_reason = provider.extract_stream(json_str)
-                    if c_reason and c_reason ~= "" then
-                        if not in_reasoning then
-                            in_reasoning = true
-                            local token = "\n<thinking>\n" .. c_reason
-                            table.insert(content_parts, token)
-                            if on_token_cb then on_token_cb(token) end
-                        else
-                            table.insert(content_parts, c_reason)
-                            if on_token_cb then on_token_cb(c_reason) end
-                        end
-                        table.insert(reason_parts, c_reason)
-                    end
-                    if c_text and c_text ~= "" then
-                        if in_reasoning then
-                            in_reasoning = false
-                            local token = "</thinking>\n\n" .. c_text
-                            table.insert(content_parts, token)
-                            if on_token_cb then on_token_cb(token) end
-                        else
-                            table.insert(content_parts, c_text)
-                            if on_token_cb then on_token_cb(c_text) end
-                        end
-                        table.insert(text_parts, c_text)
-                    end
+                    process_data_line(json_str)
                 end
             end
         end
@@ -149,37 +122,8 @@ function M.process_stream(stream, profile, provider, on_token_cb)
         if buffer ~= "" and buffer:sub(1, 5) == "data:" then
             local json_str = buffer:sub(6):gsub("^%s+", ""):gsub("%s+$", "")
             if not json_str:match("%[DONE%]") then
-                local ok, part = pcall(json.decode, json, json_str)
-                if ok and part then last_part = part end
-                local c_text, c_reason = provider.extract_stream(json_str)
-                if c_reason and c_reason ~= "" then
-                    if not in_reasoning then
-                        in_reasoning = true
-                        local token = "\n<thinking>\n" .. c_reason
-                        table.insert(content_parts, token)
-                        if on_token_cb then on_token_cb(token) end
-                    else
-                        table.insert(content_parts, c_reason)
-                        if on_token_cb then on_token_cb(c_reason) end
-                    end
-                    table.insert(reason_parts, c_reason)
-                end
-                if c_text and c_text ~= "" then
-                    if in_reasoning then
-                        in_reasoning = false
-                        local token = "</thinking>\n\n" .. c_text
-                        table.insert(content_parts, token)
-                        if on_token_cb then on_token_cb(token) end
-                    else
-                        table.insert(content_parts, c_text)
-                        if on_token_cb then on_token_cb(c_text) end
-                    end
-                    table.insert(text_parts, c_text)
-                end
+                process_data_line(json_str)
             end
-        end
-        if logger.debug then
-            logger.debug(string.format("[STREAM] Remaining buffer after loop: %d bytes", #buffer))
         end
     end
     if patcher_core.teardown_esc_monitor then

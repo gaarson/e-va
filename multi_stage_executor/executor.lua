@@ -128,7 +128,7 @@ function M:build_intent_prompt(task, project_context)
     })
 end
 
-function M:build_generate_prompt()
+function M:build_generate_system_context()
     local tool_name = self.intent and self.intent.TOOL or ""
     local tool = registry.tools[tool_name]
     local tool_hint = ""
@@ -143,32 +143,24 @@ function M:build_generate_prompt()
     if tool_hint ~= "" then
         hint_block = "\n\n" .. tool_hint
     end
-    -- Fix #6: Build feedback block after 2+ failures on same tool
-    local feedback_block = ""
-    if self.tool_failures and self.tool_failures[tool_name] and self.tool_failures[tool_name] >= 2 then
-        feedback_block = "\n\n<FEEDBACK>\nThis tool ('" .. tool_name .. "') has failed " .. self.tool_failures[tool_name] .. " times previously.\nReview past corrections carefully and ensure the payload addresses ALL previous issues.\n</FEEDBACK>"
-    end
     -- Build context block from knowledge_base (relevant source files)
     local context_block = ''
+    local max_context_chars = 16000
+    local collected = {}
+    local total_len = 0
     if self.ctx and self.ctx.knowledge_base then
         local kb = self.ctx.knowledge_base
         local intent_text = self.intent_raw or ''
         local task_text = self.task or ''
         local file_path = self.file_path or ''
-        local max_context_chars = 8000
-        local collected = {}
-        local total_len = 0
-        -- Collect files referenced in intent/task text
         for path, file_content in pairs(kb) do
             if total_len < max_context_chars then
                 local is_relevant = false
-                -- Check if file path appears in intent or task
                 if intent_text:find(path, 1, true) then
                     is_relevant = true
                 elseif task_text:find(path, 1, true) then
                     is_relevant = true
                 end
-                -- Also include the target file_path if it exists in KB
                 if file_path ~= '' and path == file_path then
                     is_relevant = true
                 end
@@ -184,17 +176,66 @@ function M:build_generate_prompt()
                 end
             end
         end
-        if #collected > 0 then
-            local sep = '\n'
-            context_block = sep .. '<project_context>' .. sep .. 'Relevant source files for reference:' .. sep .. table.concat(collected, sep) .. sep .. '</project_context>'
+    end
+    -- If target file not in KB, try reading from disk
+    if self.file_path and self.file_path ~= '' then
+        local already_included = false
+        for _, block in ipairs(collected) do
+            if block:find(self.file_path, 1, true) then
+                already_included = true
+                break
+            end
+        end
+        if not already_included and self.ctx and self.ctx.config and self.ctx.config.PROJECT_ROOT then
+            local full_path = self.ctx.config.PROJECT_ROOT .. '/' .. self.file_path
+            local f = io.open(full_path, 'r')
+            if f then
+                local fc = f:read('*a')
+                f:close()
+                local remaining = max_context_chars - total_len
+                if remaining > 100 then
+                    if #fc > remaining - 50 then
+                        fc = fc:sub(1, math.max(remaining - 50, 0)) .. '\n...[truncated]'
+                    end
+                    local block = string.format('<file path="%s">\n%s\n</file>', self.file_path, fc)
+                    collected[#collected + 1] = block
+                end
+            end
         end
     end
-    return parsers.render(self.prompts.generate, {
-        intent_text = self.intent_raw or "",
+    if #collected > 0 then
+        local sep = '\n'
+        context_block = sep .. '<project_context>' .. sep .. 'Relevant source files for reference (use as ground truth):' .. sep .. table.concat(collected, sep) .. sep .. '</project_context>'
+    end
+    -- Include thinking history so generate stage has awareness of prior reasoning
+    if self.ctx and self.ctx.thoughts and #self.ctx.thoughts > 0 then
+        local thoughts_lines = {}
+        for _, th in ipairs(self.ctx.thoughts) do
+            table.insert(thoughts_lines, th.content)
+        end
+        context_block = context_block .. '\n\n<thinking_history>\n' .. table.concat(thoughts_lines, '\n') .. '\n</thinking_history>'
+    end
+    local template = self.prompts.generate_system or prompts.DEFAULT_GENERATE_SYSTEM
+    return parsers.render(template, {
         context_block = context_block,
         tool_specific_hint = hint_block,
+    })
+end
+function M:build_generate_user_message()
+    local tool_name = self.intent and self.intent.TOOL or ""
+    local feedback_block = ""
+    if self.tool_failures and self.tool_failures[tool_name] and self.tool_failures[tool_name] >= 2 then
+        feedback_block = "\n\n<FEEDBACK>\nThis tool ('" .. tool_name .. "') has failed " .. self.tool_failures[tool_name] .. " times previously.\nReview past corrections carefully and ensure the payload addresses ALL previous issues.\n</FEEDBACK>"
+    end
+    local template = self.prompts.generate_user or prompts.DEFAULT_GENERATE_USER
+    return parsers.render(template, {
+        intent_text = self.intent_raw or "",
         feedback_block = feedback_block,
     })
+end
+-- DEPRECATED: Kept for backward compatibility with tests.
+function M:build_generate_prompt()
+    return self:build_generate_system_context() .. "\n\n" .. self:build_generate_user_message()
 end
 
 function M:build_review_prompt()
@@ -266,7 +307,7 @@ function M:start_task_with_intent(task, project_context, tool_name, payload_hint
     self.intent_raw = self.intent.raw
     self.state      = states.STATES.INTENT_READY
     self.iteration  = 1
-    return { stage = "generate", prompt = self:build_generate_prompt() }
+    return { stage = "generate", system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
 
 end
 
@@ -349,7 +390,7 @@ function M:feed_response(llm_response)
             self.file_path = utils.trim(intent.FILE_PATH)
         end
         self.state      = states.STATES.INTENT_READY
-        return { stage = "generate", prompt = self:build_generate_prompt() }
+        return { stage = "generate", system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
     end
 
     -- FIX #2: Handle intent validation response
@@ -359,14 +400,14 @@ function M:feed_response(llm_response)
         local upper_resp = (llm_response or ""):upper()
         if upper_resp:find("^%s*CONFIRM") then
             logger.info("[MULTI-STAGE] Intent validated: CONFIRM")
-            return { stage = "generate", prompt = self:build_generate_prompt() }
+            return { stage = "generate", system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
         end
         local correction = llm_response:match("CORRECTION:%s*(.*)")
         if correction and utils.trim(correction) ~= "" then
             logger.info(string.format("[MULTI-STAGE] Intent corrections: %s", utils.trim(correction):sub(1, 200)))
             self.intent_raw = self.intent_raw .. "\n\n[INTENT VALIDATION] " .. utils.trim(correction):sub(1, 300)
         end
-        return { stage = "generate", prompt = self:build_generate_prompt() }
+        return { stage = "generate", system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
     end
     if self.state == states.STATES.INTENT_READY or self.state == states.STATES.REVISING then
         self.total_tokens_used = self.total_tokens_used + tokens_used
@@ -384,7 +425,7 @@ function M:feed_response(llm_response)
             self.intent_raw = self:_merge_correction("PAYLOAD VALIDATION ERROR: " .. err_msg .. ". Please fix the payload to satisfy validation requirements.")
             self.state = states.STATES.REVISING
             self.iteration = self.iteration + 1
-            return { stage = "generate", prompt = self:build_generate_prompt() }
+            return { stage = "generate", system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
         end
 
         self.state   = states.STATES.COMMAND_READY
@@ -467,7 +508,7 @@ function M:feed_response(llm_response)
             self.intent_raw = self:_merge_correction(self.review.correction)
             self.state = states.STATES.REVISING
             self.iteration = self.iteration + 1
-            return { stage = "generate", prompt = self:build_generate_prompt() }
+            return { stage = "generate", system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
         end
         if self.review.verdict == "REVISE" then
             if self.iteration >= self.max_iterations then
@@ -487,7 +528,7 @@ function M:feed_response(llm_response)
             self.state      = states.STATES.REVISING
             self.iteration  = self.iteration + 1
 
-            return { stage = "generate", prompt = self:build_generate_prompt() }
+            return { stage = "generate", system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
 
         end
     end
@@ -552,7 +593,7 @@ function M:feed_execution_result(output)
         self.intent_raw = self:_merge_correction(correction)
         self.state      = states.STATES.REVISING
         self.iteration  = self.iteration + 1
-        return { stage = 'generate', prompt = self:build_generate_prompt() }
+        return { stage = 'generate', system_context = self:build_generate_system_context(), prompt = self:build_generate_user_message() }
     end
     self.state = states.STATES.REVIEWING
     return { stage = "review", prompt = self:build_review_prompt() }

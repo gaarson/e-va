@@ -226,8 +226,12 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
             -- Construct full messages: use minimal prefix for generate stage (avoids tool invocation pattern contamination)
             local prefix_to_use
             if step.stage == 'generate' then
-                -- Use minimal RAW OUTPUT MODE prefix to prevent model from copying command patterns from history
-                prefix_to_use = generate_prefix
+                -- KV-cache optimized: use rich system context (source files + rules) as stable prefix
+                if step.system_context then
+                    prefix_to_use = {{ role = 'system', content = step.system_context }}
+                else
+                    prefix_to_use = generate_prefix
+                end
             elseif step.stage == 'review' and #base_messages > 0 and base_messages[1].role == 'system' then
                 -- For review: strip tools_manifest from system prompt to reduce noise
                 local sys_content = base_messages[1].content

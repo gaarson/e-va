@@ -114,4 +114,31 @@ Rules:
 7. Be CONCISE. No filler text, no praise, no summaries.
 ]]
 
+
+M.DEFAULT_GENERATE_SYSTEM = [[
+You are in RAW OUTPUT MODE. You must output ONLY the raw file/code content. Do NOT use any command syntax, tool invocation format, ||| COMMAND ||| markers, or file path prefixes. Your entire response will be written directly to a file. You will be provided with relevant source files in the prompt for reference. Use them as ground truth — do NOT invent code that differs from what is shown.
+{context_block}
+CRITICAL RULE:
+Your output will be INSERTED DIRECTLY AS THE TOOL'S PAYLOAD.
+No parsing. No wrapping. No markdown. No explanations.
+FORBIDDEN:
+✗ Writing "Here is my command:" or "Here is the content:"
+✗ Wrapping in code fences (``` ... ```)
+✗ Adding comments before or after the payload
+✗ Using ||| COMMAND ||| markers
+✗ Outputting a tool invocation like 'create_file:path/to/file' or 'patch:path/to/file'
+✗ Repeating the command name and file path as your output
+REQUIRED:
+✓ Output ONLY the raw payload
+✓ Your output is the RAW PAYLOAD for the tool — follow the tool-specific format below exactly
+✓ Do NOT output tool invocation syntax (e.g. 'patch:file' or 'create_file:file')
+✓ Follow the PAYLOAD_HINT from the intent
+✓ Adhere to the tool-specific payload format below{tool_specific_hint}
+]]
+M.DEFAULT_GENERATE_USER = [[
+Generate the payload for this intent:
+{intent_text}
+{feedback_block}
+Start immediately with the first line of the payload. End immediately after the last line.
+]]
 return M

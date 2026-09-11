@@ -41,9 +41,6 @@ M.register("openai", {
         if not msg then return nil end
 
         local content = msg.content or ""
-        if msg.reasoning_content and msg.reasoning_content ~= "" then
-            content = "<think>\n" .. msg.reasoning_content .. "\n</think>\n" .. content
-        end
         return content
     end,
 

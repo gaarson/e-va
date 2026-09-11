@@ -206,6 +206,10 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     if response_data.choices and response_data.choices[1] and response_data.choices[1].message then
         content = response_data.choices[1].message.content
     end
+    -- Store reasoning separately for tool access (multi-stage generate, etc.)
+    if response_data.full_reason and response_data.full_reason ~= "" then
+        ctx:add_thought(turn, response_data.full_reason)
+    end
 
     -- HANDLE TIMED-OUT RESPONSES
     if response_data.timed_out then

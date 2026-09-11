@@ -72,7 +72,7 @@ describe("LLM Request Handler", function()
             local content = llm_handler.extract_content(mock_response, "openai")
             assert.equals("Hello, world!", content)
         end)
-        it("should extract content with reasoning", function()
+        it("should extract content WITHOUT reasoning (separated)", function()
             local mock_response = {
                 choices = {
                     {
@@ -85,8 +85,8 @@ describe("LLM Request Handler", function()
                 }
             }
             local content = llm_handler.extract_content(mock_response, "openai")
-            assert.truthy(content:match("Let me think%."))
-            assert.truthy(content:match("Final answer"))
+            assert.equals("Final answer", content)
+            assert.falsy(content:match("Let me think"))
         end)
         it("should return nil for malformed response", function()
             local mock_response = { invalid = "data" }
