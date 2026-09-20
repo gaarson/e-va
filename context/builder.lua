@@ -185,13 +185,24 @@ function M.get_engine_directives(ctx, agent_cfg)
     local rule = has_delegate and has_complete and "Use `task_complete` to advance." or
                  has_delegate and "Use `delegate_plan` to advance." or
                  has_complete and "Use `task_complete` to finish." or "Analyze and respond."
-    -- Multi-stage info
     local multi_stage_note = ""
     if agent_cfg.use_selective_multi_stage and agent_cfg.multi_stage_tools and #agent_cfg.multi_stage_tools > 0 then
         local tool_list = table.concat(agent_cfg.multi_stage_tools, ", ")
         multi_stage_note = string.format("\n3. MULTI-STAGE: Tools [%s] go through Intent->Generate->Review. Others execute directly.", tool_list)
     end
-    return string.format("\n==================================================\nENGINE DIRECTIVES:\n1. PIPELINE: %s\n2. ONE COMMAND PER TURN. Use batch tools if needed.%s\n==================================================", rule, multi_stage_note)
+    local strict_syntax = [[
+4. STRICT COMMAND SYNTAX (MANDATORY):
+   ALL tool invocations MUST use EXACTLY this format:
+   ||| COMMAND |||
+   tool_name:arguments
+   ||| END_COMMAND |||
+   - Markers must be on their OWN lines.
+   - NO function-calling JSON. NO plain-text commands without markers.
+   - WRONG: {"tool": "read_file", "args": {"path": "src/main.c"}}
+   - WRONG: read_file:src/main.c (without markers)
+   - RIGHT: ||| COMMAND ||| then newline then read_file:src/main.c then newline then ||| END_COMMAND |||
+]]
+    return string.format("\n==================================================\nENGINE DIRECTIVES:\n1. PIPELINE: %s\n2. ONE COMMAND PER TURN. Use batch tools if needed.%s%s\n==================================================", rule, multi_stage_note, strict_syntax)
 end
 -- ============================================================================
 -- LOAD PROMPT
