@@ -81,7 +81,7 @@ function M.compress_image(path, max_dim, quality)
     end
     logger.info(string.format("[IMAGE COMPRESS] Compression needed for %s (%dx%d > %d)", path, w, h, max_dim))
     local safe_path = strings.shell_quote(path)
-    local tmp_path = path .. ".compress_tmp"
+    local tmp_path = path .. ".compress_tmp.jpg"
     local bak_path = path .. ".compress_bak"
     -- Backup original before compression
     os.execute(string.format("cp %s %s", safe_path, strings.shell_quote(bak_path)))
@@ -123,7 +123,7 @@ function M.compress_image(path, max_dim, quality)
         return rc
     end
     local cmd = string.format(
-        "timeout 5s ffmpeg -i %s -vf \"scale=w=%d:h=%d:force_original_aspect_ratio=decrease\" -q:v %d -y %s",
+        "timeout 10s ffmpeg -nostdin -i %s -vf \"scale=w=%d:h=%d:force_original_aspect_ratio=decrease\" -q:v %d -update 1 -y %s",
         safe_path, max_dim, max_dim, math.ceil(31 * (100 - quality) / 100), tmp_path
     )
     local rc = run_cmd_with_exit_code(cmd)
@@ -139,7 +139,7 @@ function M.compress_image(path, max_dim, quality)
         return false, "Compression timed out (ffmpeg)"
     end
     cmd = string.format(
-        "timeout 5s convert %s -resize %dx%d -quality %d %s",
+        "timeout 10s convert %s -resize %dx%d -quality %d %s",
         safe_path, max_dim, max_dim, quality, tmp_path
     )
     rc = run_cmd_with_exit_code(cmd)
@@ -225,7 +225,7 @@ function M.load_images_from_dir(dir_path)
         local ext = fname:match("%.([^%.]+)$"):lower()
         local mime = mime_map[ext]
         if mime then
-            local comp_ok, comp_msg = M.compress_image(line, 512, 60)
+            local comp_ok, comp_msg = M.compress_image(line, 1024, 85)
             if not comp_ok then
                 logger.warn(string.format('[IMAGE COMPRESS FAILED] %s: %s', line, comp_msg))
             end

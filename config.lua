@@ -222,7 +222,7 @@ function M.get()
         -- resized via ffmpeg (primary) or ImageMagick (fallback). Quality is hardcoded at 60.
         -- Files < 200KB or already within bounds are skipped. Value 512px chosen for
         -- aggressive token economy (Option A).
-        max_image_dimension = 512,
+        max_image_dimension = 1024,
     }
 
     -- Source .env file early to populate cache for AGENT_DEFAULTS
