@@ -11,8 +11,10 @@ set -e
 #   --clean         Wipe sandbox-workspace before run
 #   --snapshot NAME Create a .tar.gz snapshot of workspace before run
 IMAGE_NAME="e-va-agent"
-WORKSPACE_DIR="$(pwd)/sandbox-workspace"
-ENV_FILE="$(pwd)/.env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+WORKSPACE_DIR="$SCRIPT_DIR/sandbox-workspace"
+ENV_FILE="$PROJECT_ROOT/.env"
 RESULT_LOG="$WORKSPACE_DIR/.e-va-conf/result.log"
 STATUS_PORT="${STATUS_PORT:-8081}"
 LIVE_MODE=false
@@ -22,7 +24,7 @@ AGENT_MODE=""
 # --- BUILD IMAGE IF MISSING ---
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     echo "[BUILD] Image '$IMAGE_NAME' not found. Building..."
-    docker build -t "$IMAGE_NAME" .
+    docker build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Dockerfile" "$PROJECT_ROOT"
     echo "[BUILD] Image built successfully."
 fi
 # --- PARSE FLAGS ---

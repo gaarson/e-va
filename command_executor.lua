@@ -37,13 +37,14 @@ function M:parse_command(text)
 
     -- Normalize line endings only
     text = text:gsub("\r\n", "\n")
+    text = text:gsub("\\u000a", "\n")
     local lines = {}
     for line in text:gmatch("([^\n]*)") do
         table.insert(lines, line)
     end
 
-    local start_pat = "^%s*" .. escape_pattern(self.cmd_start) .. "%s*$"
-    local end_pat   = "^%s*" .. escape_pattern(self.cmd_end)   .. "%s*$"
+    local start_pat = "^%s*|+%s*COMMAND%s*|+%s*$"
+    local end_pat   = "^%s*|+%s*END_COMMAND%s*|+%s*$"
 
     local start_idx = nil
     local end_idx = nil
@@ -101,7 +102,7 @@ function M:parse_command(text)
                 -- (5) SAFEGUARD: Check if ANY line between first and last contains ||| COMMAND |||
                 local has_nested_command = false
                 for i = first + 1, last - 1 do
-                    if lns[i]:match("||| COMMAND |||") then
+                    if lns[i]:match("|+%s*COMMAND%s*|+") then
                         has_nested_command = true
                         break
                     end

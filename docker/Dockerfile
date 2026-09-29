@@ -157,7 +157,7 @@ RUN echo "chromeuser ALL=(ALL) NOPASSWD: /usr/bin/google-chrome-stable, /usr/bin
 RUN mkdir -p /workspace && chown chromeuser:chromeuser /workspace
 RUN mkdir -p /opt/e-va/logs && chown chromeuser:chromeuser /opt/e-va/logs
 # Copy init script and make it executable
-COPY init.sh /opt/e-va/init.sh
+COPY docker/init.sh /opt/e-va/init.sh
 RUN chmod +x /opt/e-va/init.sh
 # Healthcheck: Verify core binaries exist (does NOT require agent to be running)
 # This allows the container to report healthy even during idle periods

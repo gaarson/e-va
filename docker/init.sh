@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 # --- INIT SCRIPT FOR E-va AGENT ---
-# Runs as root, fixes workspace ownership, then drops to chromeuser.
+# Runs as root, fixes workspace ownership, starts display stack, then drops to chromeuser.
 # --- BOOTSTRAP ENVIRONMENT LOGGING ---
 {
     echo "[BOOTSTRAP] === INIT.SH STARTUP LOG ==="
@@ -46,9 +46,6 @@ if [ "$STDIN_SIZE" -eq 0 ] && [ -f "/tmp/eva_task_input" ]; then
     cp /tmp/eva_task_input "$STDIN_FILE"
     STDIN_SIZE=$(wc -c < "$STDIN_FILE")
     echo "[DEBUG] Fallback stdin: $STDIN_SIZE bytes" >&2
-    if [ "$STDIN_SIZE" -gt 0 ]; then
-        echo "[DEBUG] Fallback content preview: $(head -c 100 "$STDIN_FILE")" >&2
-    fi
 fi
 chown chromeuser:chromeuser "$STDIN_FILE" 2>/dev/null || true
 chmod 644 "$STDIN_FILE" 2>/dev/null || true
@@ -59,7 +56,7 @@ if [ -f "/opt/e-va/.env" ]; then
     source /opt/e-va/.env
     set +a
 fi
-# 4. Export environment variables so they survive the user switch
+# 5. Export environment variables so they survive the user switch
 export PATH
 export EVA_STATUS_PORT
 export EVA_API_KEY
@@ -70,7 +67,52 @@ export STDIN_FILE
 export LLM_API_KEY
 export LLM_BASE_URL
 export LLM_MODEL
-# 5. Encode arguments safely for passing through su -c
+# 6. START DISPLAY STACK (cage + chrome + wayvnc)
+# Only if DRM devices are available
+if [ -d /dev/dri ] && [ "$(ls /dev/dri/renderD* 2>/dev/null | wc -l)" -gt 0 ]; then
+    echo "[DISPLAY] Starting display stack (cage + chrome + wayvnc)..." >&2
+    
+    # Setup XDG runtime dir
+    mkdir -p /tmp/xdg && chmod 700 /tmp/xdg
+    export XDG_RUNTIME_DIR=/tmp/xdg
+    
+    # Start cage (Wayland compositor) - use Intel card only to avoid NVIDIA conflicts
+    # WLR_DRM_DEVICES restricts to specific render nodes
+    export WLR_DRM_DEVICES="/dev/dri/renderD128"
+    cage -x &
+    CAGE_PID=$!
+    echo "[DISPLAY] cage started (PID $CAGE_PID)" >&2
+    
+    # Wait for Wayland socket
+    sleep 3
+    if [ ! -S /tmp/xdg/wayland-0 ]; then
+        echo "[DISPLAY] WARNING: Wayland socket not found, continuing anyway" >&2
+    fi
+    export WAYLAND_DISPLAY=wayland-0
+    
+    # Start Chrome with remote debugging
+    google-chrome-stable \
+        --no-sandbox \
+        --ozone-platform=wayland \
+        --disable-gpu \
+        --remote-debugging-port=9222 \
+        --new-window about:blank &
+    CHROME_PID=$!
+    echo "[DISPLAY] chrome started (PID $CHROME_PID)" >&2
+    
+    # Wait for Chrome DevTools port
+    sleep 5
+    
+    # Start wayvnc
+    wayvnc -a 0.0.0.0:5900 &
+    WAYVNC_PID=$!
+    echo "[DISPLAY] wayvnc started (PID $WAYVNC_PID)" >&2
+    
+    echo "[DISPLAY] Display stack ready: VNC on :5900, Chrome DevTools on :9222" >&2
+else
+    echo "[DISPLAY] No DRM render devices found, skipping display stack" >&2
+fi
+# 7. Encode arguments safely for passing through su -c
 EV_ARGS=""
 for a in "$@"; do
     if [ -z "$EV_ARGS" ]; then
@@ -80,8 +122,8 @@ for a in "$@"; do
     fi
 done
 export EV_ARGS
-# 6. Drop to chromeuser and exec e-va with stdin redirected from captured file
-exec su -s /bin/bash chromeuser -c '
+# 8. Drop to chromeuser and exec e-va with stdin redirected from captured file
+exec su -m -s /bin/bash chromeuser -c '
 export PATH="$PATH"
 export EVA_STATUS_PORT="$EVA_STATUS_PORT"
 export EVA_API_KEY="$EVA_API_KEY"
@@ -92,6 +134,8 @@ export STDIN_FILE="$STDIN_FILE"
 export LLM_API_KEY="$LLM_API_KEY"
 export LLM_BASE_URL="$LLM_BASE_URL"
 export LLM_MODEL="$LLM_MODEL"
+export XDG_RUNTIME_DIR=/tmp/xdg
+export WAYLAND_DISPLAY=wayland-0
 if [ -n "$EV_ARGS" ]; then
     eval "set -- \$EV_ARGS"
     if [ -s "$STDIN_FILE" ]; then

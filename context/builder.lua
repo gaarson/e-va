@@ -191,12 +191,13 @@ function M.get_engine_directives(ctx, agent_cfg)
         multi_stage_note = string.format("\n3. MULTI-STAGE: Tools [%s] go through Intent->Generate->Review. Others execute directly.", tool_list)
     end
     local strict_syntax = [[
-4. STRICT COMMAND SYNTAX (MANDATORY):
+4. COMMAND SYNTAX (MANDATORY):
    ALL tool invocations MUST use EXACTLY this format:
    ||| COMMAND |||
    tool_name:arguments
    ||| END_COMMAND |||
    - Markers must be on their OWN lines.
+   - The number of pipes (|) is flexible: use at least 3, any count works.
    - NO function-calling JSON. NO plain-text commands without markers.
    - WRONG: {"tool": "read_file", "args": {"path": "src/main.c"}}
    - WRONG: read_file:src/main.c (without markers)
