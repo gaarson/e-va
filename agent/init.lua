@@ -85,6 +85,9 @@ for i = 1, #arg do
     cli_args[i] = arg[i]
 end
 local parsed = cli_parser.parse_args(cli_args, config, logger)
+if parsed.is_debug then
+    logger.set_debug(true)
+end
 -- 6. Handle Pipe Mode (Must be before session restoration)
 if parsed.is_pipe then
     status_server.update_status({agent_name="PIPE", current_turn=0, current_stage="pipe_mode", stage_index=0, total_stages=0, state="running"})

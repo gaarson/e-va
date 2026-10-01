@@ -12,6 +12,7 @@ local log_dir = string.format("%s/logs/%s", agent_home, project_name)
 os.execute(string.format("mkdir -p '%s'", log_dir))
 
 -- Module-level state
+local debug_mode = false
 local indent_level = 0
 local logging_enabled = true
 local log_file = nil
@@ -116,8 +117,10 @@ function M.info(msg, data)
     local d_str = data and inspect_impl(data) or ""
     local full_msg = msg .. d_str
 
-    -- Console output (unchanged format)
-    print(string.format("\27[32m[INFO]\27[0m %s", full_msg))
+    -- Console output (only in debug mode)
+    if debug_mode then
+        print(string.format("\27[32m[INFO]\27[0m %s", full_msg))
+    end
 
     -- File output (with timestamp and indent)
     write_to_file("INFO", full_msg)

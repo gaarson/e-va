@@ -11,6 +11,7 @@ function M.parse_args(cli_args, config, logger)
     local is_bootstrap = false
     local target_agent = nil
     local is_pipe = false
+    local is_debug = false
     local idx = 1
     while idx <= #cli_args do
         local a = cli_args[idx]
@@ -19,6 +20,8 @@ function M.parse_args(cli_args, config, logger)
                 is_bootstrap = true
             elseif a == "--pipe" then
                 is_pipe = true
+            elseif a == "--debug" then
+                is_debug = true
             elseif a == "--agent" and idx < #cli_args then
                 target_agent = cli_args[idx + 1]
                 idx = idx + 1
@@ -49,7 +52,8 @@ function M.parse_args(cli_args, config, logger)
         instruction = instruction,
         is_bootstrap = is_bootstrap,
         target_agent = target_agent,
-        is_pipe = is_pipe
+        is_pipe = is_pipe,
+        is_debug = is_debug
     }
 end
 
