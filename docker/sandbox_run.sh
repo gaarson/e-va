@@ -128,7 +128,8 @@ echo "[DEBUG] Startup debug log written to: $DEBUG_LOG"
 # --- RUN CONTAINER ---
 echo "[RUN] Starting sandbox container..."
 # Build docker run arguments
-# Using --network host for direct access to host network (e.g., LLM API at 192.168.0.102:8000)
+# Using bridge network for isolation. Container can reach external LLM endpoints via NAT.
+# If LLM_BASE_URL uses localhost, change to host.docker.internal in .env.
 # Source .env file to pick up LLM configuration
 if [ -f "$ENV_FILE" ]; then
     set -a
@@ -139,7 +140,9 @@ fi
 DOCKER_ARGS=(
     -i
     --rm
-    --network host
+    --network bridge
+    --add-host=host.docker.internal:host-gateway
+    -p "${STATUS_PORT}:${STATUS_PORT}"
     -v "$WORKSPACE_DIR:/workspace"
     -v "$ENV_FILE:/opt/e-va/.env:ro"
     -v "$WORKSPACE_DIR/.e-va-conf/agent-logs:/opt/e-va/logs"
@@ -225,7 +228,7 @@ TASK_FILE=$(mktemp)
 echo "$TASK" > "$TASK_FILE"
 # Mount task file into container
 DOCKER_ARGS+=(-v "$TASK_FILE:/tmp/eva_task_input:ro")
-# Note: --network host gives container direct access to host network stack
+# Note: bridge network isolates container; outbound NAT allows LLM access
 # Build container command arguments
 CONTAINER_CMD=()
 if [ -n "$AGENT_MODE" ]; then

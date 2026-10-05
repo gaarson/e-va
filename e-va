@@ -33,7 +33,22 @@ if [ -w "$AGENT_HOME" ]; then
     echo "[WARNING] This poses a risk of accidental self-modification." >&2
     # We do not exit here to allow local development flexibility, but we log the warning.
 fi
-if [ -n "$GIT_EVA_URL" ]; then echo "Cloning $GIT_EVA_URL ..."; rm -rf /app/*; rm -rf /app/.* 2>/dev/null; git clone "$GIT_EVA_URL" /tmp/repo; cp -a /tmp/repo/. /app/; rm -rf /tmp/repo; fi
+if [ -n "$GIT_EVA_URL" ]; then
+    echo "Cloning $GIT_EVA_URL ..."
+    rm -rf "$AGENT_HOME"/*; rm -rf "$AGENT_HOME"/.* 2>/dev/null
+    git clone "$GIT_EVA_URL" /tmp/repo
+    if [ -n "$GIT_EVA_SHA256" ]; then
+        ACTUAL_HASH=$(tar -C /tmp/repo -cf - . | sha256sum | awk '{print $1}')
+        if [ "$ACTUAL_HASH" != "$GIT_EVA_SHA256" ]; then
+            echo "[FATAL] SHA256 mismatch: expected $GIT_EVA_SHA256, got $ACTUAL_HASH" >&2
+            rm -rf /tmp/repo
+            exit 1
+        fi
+        echo "[OK] SHA256 verified."
+    fi
+    cp -a /tmp/repo/. "$AGENT_HOME"/
+    rm -rf /tmp/repo
+fi
 
 # --- PIPE MODE DOCUMENTATION ---
 # The --pipe flag enables continuous stdin/stdout mode for external communication.

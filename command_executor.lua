@@ -153,8 +153,8 @@ local function _sanitize_shell_command(args)
         { pattern = ">+/usr/sbin/", desc = "redirects to /usr/sbin/", severity = "BLOCK" },
         { pattern = "%-%-.*(/etc/)", desc = "writes to /etc/", severity = "WARN" },
         { pattern = "chmod%s+[0-7]*777", desc = "world-writable chmod", severity = "WARN" },
-        { pattern = "curl.*%|.*sh", desc = "pipe curl to shell", severity = "BLOCK" },
-        { pattern = "wget.*%|.*sh", desc = "pipe wget to shell", severity = "BLOCK" },
+        { pattern = "curl[^|]*%|%s*(/bin/)?(ba)?sh", desc = "pipe curl to shell", severity = "BLOCK" },
+        { pattern = "wget[^|]*%|%s*(/bin/)?(ba)?sh", desc = "pipe wget to shell", severity = "BLOCK" },
     }
     for _, rule in ipairs(dangerous_patterns) do
         if args:match(rule.pattern) then

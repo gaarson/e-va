@@ -1,118 +1,78 @@
 #!/bin/bash
 set -e
-# --- INIT SCRIPT FOR E-va AGENT ---
-# Runs as root, fixes workspace ownership, starts display stack, then drops to chromeuser.
-# --- BOOTSTRAP ENVIRONMENT LOGGING ---
-{
-    echo "[BOOTSTRAP] === INIT.SH STARTUP LOG ==="
-    echo "[BOOTSTRAP] Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    echo "[BOOTSTRAP] PID: $$"
-    echo "[BOOTSTRAP] User: $(whoami)"
-    echo "[BOOTSTRAP] Arguments: $*"
-    echo "[BOOTSTRAP] === ENVIRONMENT VARIABLES ==="
-    env | sort
-    echo "[BOOTSTRAP] === WORKSPACE CONTENTS ==="
-    ls -la /workspace/ 2>/dev/null || echo "(workspace not accessible)"
-    echo "[BOOTSTRAP] === .ENV FILE CONTENTS (MASKED) ==="
-    if [ -f "/opt/e-va/.env" ]; then
-        sed 's/=.*$/=<MASKED>/' /opt/e-va/.env
-    else
-        echo "(.env not found at /opt/e-va/.env)"
-    fi
-    echo "[BOOTSTRAP] === END STARTUP LOG ==="
-} >&2
-# 1. Fix workspace ownership recursively
+
+# --- E-VA MODULAR INIT SYSTEM ---
+AGENT_HOME="/opt/e-va"
 WORKSPACE_DIR="/workspace"
-chown -R chromeuser:chromeuser "$WORKSPACE_DIR" 2>/dev/null || true
-# 2. Ensure .e-va-conf exists with correct permissions
-CONF_DIR="$WORKSPACE_DIR/.e-va-conf"
-mkdir -p "$CONF_DIR"
-chown chromeuser:chromeuser "$CONF_DIR" 2>/dev/null || true
-# 3. Capture stdin to a file BEFORE dropping privileges
-STDIN_FILE="/tmp/eva_stdin"
-if [ ! -t 0 ]; then
-    timeout 5 cat > "$STDIN_FILE" 2>/dev/null || true
+TASK_FILE="/tmp/eva_task_input"
+STDIN_CAPTURE="/tmp/eva_stdin"
+
+# 1. Логирование окружения (только в stderr, чтобы не портить pipe-вывод)
+{
+    echo "[INIT] === E-VA MODULAR STARTUP ==="
+    echo "[INIT] Time: $(date -u)"
+    echo "[INIT] Modules: DESKTOP=${EVA_MODULE_DESKTOP:-0}, BROWSER=${EVA_MODULE_BROWSER:-0}"
+} >&2
+
+# 2. Права на workspace (init.sh запускается от root)
+chown -R agentuser:agentuser "$WORKSPACE_DIR" 2>/dev/null || true
+mkdir -p "$WORKSPACE_DIR/.e-va-conf"
+chown agentuser:agentuser "$WORKSPACE_DIR/.e-va-conf" 2>/dev/null || true
+
+# 3. Надежный захват задачи (Без агрессивных таймаутов)
+# Приоритет 1: Файл, смонтированный из хоста (sandbox_run.sh)
+# Приоритет 2: Pipe из stdin (docker run -i)
+if [ -s "$TASK_FILE" ]; then
+    export EVA_TASK_SOURCE="file"
+    cp "$TASK_FILE" "$STDIN_CAPTURE"
+elif [ ! -t 0 ]; then
+    export EVA_TASK_SOURCE="stdin"
+    cat > "$STDIN_CAPTURE" 2>/dev/null || true
 else
-    echo "[BOOTSTRAP] Stdin is a terminal, skipping cat redirect" >&2
+    export EVA_TASK_SOURCE="tty"
+    touch "$STDIN_CAPTURE"
 fi
-STDIN_SIZE=$(wc -c < "$STDIN_FILE")
-echo "[DEBUG] Captured stdin: $STDIN_SIZE bytes" >&2
-if [ "$STDIN_SIZE" -gt 0 ]; then
-    echo "[DEBUG] Stdin content preview: $(head -c 100 "$STDIN_FILE")" >&2
-fi
-# Fallback: if stdin is empty, check for mounted task file
-if [ "$STDIN_SIZE" -eq 0 ] && [ -f "/tmp/eva_task_input" ]; then
-    echo "[DEBUG] Stdin empty, falling back to /tmp/eva_task_input" >&2
-    cp /tmp/eva_task_input "$STDIN_FILE"
-    STDIN_SIZE=$(wc -c < "$STDIN_FILE")
-    echo "[DEBUG] Fallback stdin: $STDIN_SIZE bytes" >&2
-fi
-chown chromeuser:chromeuser "$STDIN_FILE" 2>/dev/null || true
-chmod 644 "$STDIN_FILE" 2>/dev/null || true
-# 4. Source .env file to pick up LLM configuration
-if [ -f "/opt/e-va/.env" ]; then
+chown agentuser:agentuser "$STDIN_CAPTURE" 2>/dev/null || true
+chmod 644 "$STDIN_CAPTURE" 2>/dev/null || true
+
+# 4. Загрузка .env
+if [ -f "$AGENT_HOME/.env" ]; then
     set -a
-    # shellcheck source=/dev/null
-    source /opt/e-va/.env
+    source "$AGENT_HOME/.env"
     set +a
 fi
-# 5. Export environment variables so they survive the user switch
-export PATH
-export EVA_STATUS_PORT
-export EVA_API_KEY
-export EVA_MODEL
-export EVA_MAX_TURNS
-export EVA_TEMPERATURE
-export STDIN_FILE
-export LLM_API_KEY
-export LLM_BASE_URL
-export LLM_MODEL
-# 6. START DISPLAY STACK (cage + chrome + wayvnc)
-# Only if DRM devices are available
-if [ -d /dev/dri ] && [ "$(ls /dev/dri/renderD* 2>/dev/null | wc -l)" -gt 0 ]; then
-    echo "[DISPLAY] Starting display stack (cage + chrome + wayvnc)..." >&2
+
+# 5. ЗАПУСК МОДУЛЕЙ (Display Stack / Browser)
+export XDG_RUNTIME_DIR=/tmp/xdg
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+
+if [ "$EVA_MODULE_DESKTOP" = "1" ] && [ -d /dev/dri ] && [ "$(ls /dev/dri/renderD* 2>/dev/null | wc -l)" -gt 0 ]; then
+    echo "[MODULE:DESKTOP] Starting Wayland + VNC..." >&2
+    export WLR_DRM_DEVICES="${WLR_DRM_DEVICES:-/dev/dri/renderD128}"
+    export WLR_LIBINPUT_NO_DEVICES=1
     
-    # Setup XDG runtime dir
-    mkdir -p /tmp/xdg && chmod 700 /tmp/xdg
-    export XDG_RUNTIME_DIR=/tmp/xdg
-    
-    # Start cage (Wayland compositor) - use Intel card only to avoid NVIDIA conflicts
-    # WLR_DRM_DEVICES restricts to specific render nodes
-    export WLR_DRM_DEVICES="/dev/dri/renderD128"
     cage -x &
-    CAGE_PID=$!
-    echo "[DISPLAY] cage started (PID $CAGE_PID)" >&2
-    
-    # Wait for Wayland socket
     sleep 3
-    if [ ! -S /tmp/xdg/wayland-0 ]; then
-        echo "[DISPLAY] WARNING: Wayland socket not found, continuing anyway" >&2
-    fi
     export WAYLAND_DISPLAY=wayland-0
-    
-    # Start Chrome with remote debugging
-    google-chrome-stable \
-        --no-sandbox \
-        --ozone-platform=wayland \
-        --disable-gpu \
-        --remote-debugging-port=9222 \
-        --new-window about:blank &
-    CHROME_PID=$!
-    echo "[DISPLAY] chrome started (PID $CHROME_PID)" >&2
-    
-    # Wait for Chrome DevTools port
-    sleep 5
-    
-    # Start wayvnc
+
+    # Если есть браузерный модуль, запускаем Chrome внутри GUI
+    if [ "$EVA_MODULE_BROWSER" = "1" ]; then
+        google-chrome-stable --no-sandbox --ozone-platform=wayland --disable-gpu --remote-debugging-port=9222 --new-window about:blank &
+        sleep 5
+    fi
+
     wayvnc -a 0.0.0.0:5900 &
-    WAYVNC_PID=$!
-    echo "[DISPLAY] wayvnc started (PID $WAYVNC_PID)" >&2
-    
-    echo "[DISPLAY] Display stack ready: VNC on :5900, Chrome DevTools on :9222" >&2
-else
-    echo "[DISPLAY] No DRM render devices found, skipping display stack" >&2
+    echo "[MODULE:DESKTOP] Ready (VNC on 5900)" >&2
+
+elif [ "$EVA_MODULE_BROWSER" = "1" ]; then
+    echo "[MODULE:BROWSER] Starting Headless Chrome..." >&2
+    # Headless режим без Wayland (экономия 200MB RAM и CPU)
+    google-chrome-stable --headless=new --no-sandbox --disable-gpu --remote-debugging-port=9222 --window-size=1920,1080 about:blank &
+    sleep 3
+    echo "[MODULE:BROWSER] Ready (CDP on 9222)" >&2
 fi
-# 7. Encode arguments safely for passing through su -c
+
+# 6. Подготовка аргументов
 EV_ARGS=""
 for a in "$@"; do
     if [ -z "$EV_ARGS" ]; then
@@ -122,32 +82,23 @@ for a in "$@"; do
     fi
 done
 export EV_ARGS
-# 8. Drop to chromeuser and exec e-va with stdin redirected from captured file
-exec su -m -s /bin/bash chromeuser -c '
-export PATH="$PATH"
-export EVA_STATUS_PORT="$EVA_STATUS_PORT"
-export EVA_API_KEY="$EVA_API_KEY"
-export EVA_MODEL="$EVA_MODEL"
-export EVA_MAX_TURNS="$EVA_MAX_TURNS"
-export EVA_TEMPERATURE="$EVA_TEMPERATURE"
-export STDIN_FILE="$STDIN_FILE"
-export LLM_API_KEY="$LLM_API_KEY"
-export LLM_BASE_URL="$LLM_BASE_URL"
-export LLM_MODEL="$LLM_MODEL"
-export XDG_RUNTIME_DIR=/tmp/xdg
-export WAYLAND_DISPLAY=wayland-0
-if [ -n "$EV_ARGS" ]; then
-    eval "set -- \$EV_ARGS"
-    if [ -s "$STDIN_FILE" ]; then
-        exec /opt/e-va/e-va "$@" < "$STDIN_FILE"
+
+# 7. Сброс привилегий через gosu (Правильно передает SIGTERM/SIGINT)
+# gosu не создает лишних bash-процессов, в отличие от su -c
+exec gosu agentuser /bin/bash -c '
+    export PATH="$PATH"
+    export XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR"
+    export WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
+    export EVA_TASK_SOURCE="$EVA_TASK_SOURCE"
+    
+    if [ -n "$EV_ARGS" ]; then
+        eval "set -- \$EV_ARGS"
+    fi
+
+    # Передаем stdin из захваченного файла, если он не пустой
+    if [ -s "/tmp/eva_stdin" ]; then
+        exec /opt/e-va/e-va "$@" < /tmp/eva_stdin
     else
         exec /opt/e-va/e-va "$@"
     fi
-else
-    if [ -s "$STDIN_FILE" ]; then
-        exec /opt/e-va/e-va < "$STDIN_FILE"
-    else
-        exec /opt/e-va/e-va
-    fi
-fi
 '

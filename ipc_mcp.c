@@ -8,6 +8,9 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/select.h>
+#include <fcntl.h>
+#include <time.h>
 
 #if LUA_VERSION_NUM < 502
 #define luaL_newlib(L, l) (lua_newtable(L), luaL_register(L, NULL, l))
@@ -16,9 +19,13 @@
 #define MCP_PROC_MT "MCP_Process_Meta"
 
 typedef struct {
-    FILE *in;
-    FILE *out;
+    int in_fd;
+    int out_fd;
     pid_t pid;
+    // Внутренний буфер для чтения строк (защита от partial reads)
+    char *buf;
+    size_t buf_len;
+    size_t buf_cap;
 } MCP_Process;
 
 static int l_spawn_mcp(lua_State *L) {
@@ -32,6 +39,12 @@ static int l_spawn_mcp(lua_State *L) {
         lua_pushstring(L, "System Error: Failed to create pipes");
         return 2;
     }
+    if (pipe(pipe_out) < 0) {
+        close(pipe_in[0]); close(pipe_in[1]);
+        lua_pushnil(L);
+        lua_pushstring(L, "System Error: Failed to create out pipe");
+        return 2;
+    }
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -41,10 +54,17 @@ static int l_spawn_mcp(lua_State *L) {
     }
 
     if (pid == 0) {
+        // --- CHILD PROCESS ---
+        // Создаем новую сессию, чтобы kill(-pid) убил ВСЕ дерево процессов (sh -> node -> mcp)
+        setsid(); 
+        
         close(pipe_in[1]);
         close(pipe_out[0]);
+        
         dup2(pipe_in[0], STDIN_FILENO);
         dup2(pipe_out[1], STDOUT_FILENO);
+        dup2(pipe_out[1], STDERR_FILENO); // ВАЖНО: Пробрасываем ошибки MCP в stdout!
+        
         close(pipe_in[0]);
         close(pipe_out[1]);
 
@@ -52,13 +72,19 @@ static int l_spawn_mcp(lua_State *L) {
         _exit(127);
     }
 
+    // --- PARENT PROCESS ---
     close(pipe_in[0]);
     close(pipe_out[1]);
 
     MCP_Process *proc = (MCP_Process*)lua_newuserdata(L, sizeof(MCP_Process));
     proc->pid = pid;
-    proc->in = fdopen(pipe_in[1], "w");
-    proc->out = fdopen(pipe_out[0], "r");
+    proc->in_fd = pipe_in[1];
+    proc->out_fd = pipe_out[0];
+    
+    // Инициализация буфера
+    proc->buf_cap = 8192;
+    proc->buf = (char*)malloc(proc->buf_cap);
+    proc->buf_len = 0;
 
     luaL_getmetatable(L, MCP_PROC_MT);
     lua_setmetatable(L, -2);
@@ -68,11 +94,13 @@ static int l_spawn_mcp(lua_State *L) {
 
 static int l_mcp_write(lua_State *L) {
     MCP_Process *proc = (MCP_Process*)luaL_checkudata(L, 1, MCP_PROC_MT);
-    const char *payload = luaL_checkstring(L, 2);
+    size_t len;
+    const char *payload = luaL_checklstring(L, 2, &len);
 
-    if (proc->in) {
-        fprintf(proc->in, "%s\n", payload);
-        fflush(proc->in);
+    if (proc->in_fd >= 0) {
+        // Пишем и добавляем \n (MCP stdio transport)
+        write(proc->in_fd, payload, len);
+        write(proc->in_fd, "\n", 1);
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -83,33 +111,77 @@ static int l_mcp_write(lua_State *L) {
 
 static int l_mcp_read(lua_State *L) {
     MCP_Process *proc = (MCP_Process*)luaL_checkudata(L, 1, MCP_PROC_MT);
-    if (!proc || !proc->out) {
+    if (!proc || proc->out_fd < 0) {
         lua_pushnil(L);
         return 1;
     }
 
-    char *line = NULL;
-    size_t len = 0;
+    time_t start_time = time(NULL);
+    int timeout_sec = 30;
 
-    ssize_t read_bytes = getline(&line, &len, proc->out);
+    while (1) {
+        // 1. Ищем \n в уже накопленном буфере
+        char *nl = memchr(proc->buf, '\n', proc->buf_len);
+        if (nl) {
+            size_t line_len = nl - proc->buf + 1;
+            lua_pushlstring(L, proc->buf, line_len);
+            
+            // Сдвигаем остаток буфера в начало
+            memmove(proc->buf, nl + 1, proc->buf_len - line_len);
+            proc->buf_len -= line_len;
+            return 1;
+        }
 
-    if (read_bytes != -1) {
-        lua_pushlstring(L, line, read_bytes);
-        free(line);
-        return 1;
+        // 2. Проверяем таймаут
+        time_t now = time(NULL);
+        int elapsed = difftime(now, start_time);
+        if (elapsed >= timeout_sec) {
+            lua_pushnil(L);
+            lua_pushstring(L, "MCP Read Timeout (30s)");
+            return 2;
+        }
+
+        // 3. Ждем данные через select
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(proc->out_fd, &fds);
+        struct timeval tv = { .tv_sec = timeout_sec - elapsed, .tv_usec = 0 };
+
+        int sel = select(proc->out_fd + 1, &fds, NULL, NULL, &tv);
+        if (sel <= 0) {
+            lua_pushnil(L);
+            lua_pushstring(L, sel == 0 ? "Timeout" : "Select Error");
+            return 2;
+        }
+
+        // 4. Читаем доступные данные в буфер
+        if (proc->buf_len >= proc->buf_cap - 1) {
+            // Реаллокация, если буфер переполнен (защита от огромных JSON)
+            proc->buf_cap *= 2;
+            proc->buf = (char*)realloc(proc->buf, proc->buf_cap);
+        }
+
+        ssize_t n = read(proc->out_fd, proc->buf + proc->buf_len, proc->buf_cap - proc->buf_len - 1);
+        if (n <= 0) {
+            lua_pushnil(L);
+            if (n == 0) lua_pushstring(L, "EOF (MCP server died)");
+            else lua_pushstring(L, "Read Error");
+            return 2;
+        }
+        proc->buf_len += n;
     }
-
-    if (line) free(line);
-    lua_pushnil(L);
-    return 1;
 }
 
 static int l_mcp_gc(lua_State *L) {
     MCP_Process *proc = (MCP_Process*)luaL_checkudata(L, 1, MCP_PROC_MT);
-    if (proc->in) { fclose(proc->in); proc->in = NULL; }
-    if (proc->out) { fclose(proc->out); proc->out = NULL; }
+    if (proc->in_fd >= 0) { close(proc->in_fd); proc->in_fd = -1; }
+    if (proc->out_fd >= 0) { close(proc->out_fd); proc->out_fd = -1; }
+    
+    if (proc->buf) { free(proc->buf); proc->buf = NULL; }
+    
     if (proc->pid > 0) {
-        kill(proc->pid, SIGTERM);
+        // Убиваем ВСЮ группу процессов (благодаря setsid)
+        kill(-proc->pid, SIGTERM); 
         waitpid(proc->pid, NULL, WNOHANG);
         proc->pid = -1;
     }
