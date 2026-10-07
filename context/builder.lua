@@ -120,7 +120,16 @@ function M.get_recency_block(ctx, already_present_paths)
             -- Skip files requested in the current turn (they will appear via tool output)
             elseif ctx.turn_requested_files[path] then
                 -- Skip: file was just read this turn, content coming via tool output
-            elseif ctx.knowledge_base[path] then
+            else
+                -- Auto-rehydrate: if file was known before (e.g., after snapshot restore) but not in KB, re-read from disk
+                if not ctx.knowledge_base[path] and ctx.file_states[path] then
+                    local _full_path = ctx.config.PROJECT_ROOT .. "/" .. path
+                    local _rehydrated = utils.read_file_range(_full_path)
+                    if _rehydrated then
+                        ctx:add_file(path, _rehydrated)
+                    end
+                end
+                if ctx.knowledge_base[path] then
                 local content = ctx.knowledge_base[path]
                 local is_plan_target = plan_target_files[path]
                 -- For files that are BOTH pinned AND in execution_plan: show FULL content
@@ -134,6 +143,7 @@ function M.get_recency_block(ctx, already_present_paths)
                 -- Plan targets always get full content regardless of promoted status
                 table.insert(parts, string.format("<file_context path=\"%s\" status=\"PINNED\">\n%s\n</file_context>",
                     path, content))
+            end
             end
         end
     end

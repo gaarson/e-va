@@ -146,6 +146,12 @@ function M.process_stream(stream, profile, provider, on_token_cb)
     local full_content = table.concat(content_parts)
     local full_text = table.concat(text_parts)
     local full_reason = table.concat(reason_parts)
+
+    -- FALLBACK: If model produced only reasoning (thinking-only response), use it as content
+    if (full_content == "" or full_content:match("^%s*$")) and #full_reason > 0 then
+        logger.info(string.format("[STREAM FALLBACK] Using reasoning_content as output (%d chars). Model produced thinking-only response.", #full_reason))
+        full_content = full_reason
+    end
     if full_content == "" or full_content:match("^%s*$") then
         logger.warn("[STREAM EMPTY] HTTP 200 received but full_content is empty.")
         if last_part then

@@ -366,8 +366,8 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
             failure_reason = "CONTEXT_OVERFLOW"
             logger.warn("[FAILURE CLASSIFIER] Context overflow detected.")
         elseif full_reason ~= "" and full_text == "" then
-            failure_reason = "MODEL_REFUSAL"
-            logger.warn("[FAILURE CLASSIFIER] Model generated reasoning but refused to produce output (possible safety filter).")
+            failure_reason = "THINKING_ONLY"
+            logger.warn("[FAILURE CLASSIFIER] Model produced thinking-only output (reasoning present, no visible content). Stream-level fallback should have handled this.")
         elseif err and (err == "HTTP 408" or err == "HTTP 504" or err:match("timeout") or err:match("TIMEOUT")) then
             failure_reason = "NETWORK_TIMEOUT"
             logger.warn("[FAILURE CLASSIFIER] Network timeout detected.")
