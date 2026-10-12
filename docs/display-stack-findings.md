@@ -25,7 +25,7 @@
 │       ├── wayvnc -a 0.0.0.0:5900 &                                 │
 │       │       └── VNC server on port 5900                           │
 │       │                                                             │
-│       └── su chromeuser → e-va agent                                │
+│       └── gosu agentuser → e-va agent                                │
 │               └── MCP: chrome-devtools-mcp --browserUrl :9222        │
 │                       └── Agent controls Chrome via CDP              │
 └─────────────────────────────────────────────────────────────────────┘
@@ -35,11 +35,12 @@
 | Requirement | Value | Reason |
 |-------------|-------|--------|
 | GPU | **Intel iGPU ONLY** (`renderD128`) | NVIDIA causes "Device or resource busy" if host has active session. NVIDIA drivers conflict with container DRM master acquisition. |
-| User for display stack | **root** | DRM master requires root or video group membership. `chromeuser` cannot acquire DRM. |
+| User for display stack | **root** | DRM master requires root or video group membership. `agentuser` cannot acquire DRM. |
 | Chrome flag | `--disable-gpu` | Software rendering avoids GPU driver issues inside container. |
 | Cage flag | `-x` (no XWayland) | XWayland binary not installed; not needed for Wayland-native apps. |
-| Env var | `WLR_DRM_DEVICES=/dev/dri/renderD128` | Restricts wlroots to Intel render node, avoids NVIDIA probe failures. |
+| Env var | `WLR_DRM_DEVICES=/dev/dri/renderD128` | Default value. Overridable via env var. Restricts wlroots to Intel render node, avoids NVIDIA probe failures. |
 | XDG_RUNTIME_DIR | `/tmp/xdg` (chmod 700) | Required by cage/wlroots for socket placement. |
+| Env var | `WLR_LIBINPUT_NO_DEVICES=1` | Disables libinput probing (no USB input in container). VNC provides input instead. |
 ### ⚠️ CRITICAL WARNING
 **Do NOT pass `--gpus all` or mount `/dev/dri/card1` (NVIDIA) when the host has an active graphical session on NVIDIA.** This will KILL the host desktop session. Always use Intel-only mode on hybrid laptops.
 ---
@@ -140,45 +141,35 @@ return M
 ## 5. init.sh Display Stack Logic
 The `docker/init.sh` script includes conditional display stack startup:
 ```bash
-# Only if DRM devices are available
-if [ -d /dev/dri ] && [ "$(ls /dev/dri/renderD* 2>/dev/null | wc -l)" -gt 0 ]; then
-    echo "[DISPLAY] Starting display stack (cage + chrome + wayvnc)..." >&2
+# Modular display stack — activated via ENV flags set at image build time
+export XDG_RUNTIME_DIR=/tmp/xdg
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+
+if [ "$EVA_MODULE_DESKTOP" = "1" ] && [ -d /dev/dri ] && [ "$(ls /dev/dri/renderD* 2>/dev/null | wc -l)" -gt 0 ]; then
+    echo "[MODULE:DESKTOP] Starting Wayland + VNC..." >&2
+    export WLR_DRM_DEVICES="${WLR_DRM_DEVICES:-/dev/dri/renderD128}"
+    export WLR_LIBINPUT_NO_DEVICES=1
     
-    # Setup XDG runtime dir
-    mkdir -p /tmp/xdg && chmod 700 /tmp/xdg
-    export XDG_RUNTIME_DIR=/tmp/xdg
-    
-    # Start cage (Wayland compositor) - use Intel card only to avoid NVIDIA conflicts
-    export WLR_DRM_DEVICES="/dev/dri/renderD128"
     cage -x &
-    CAGE_PID=$!
-    
-    # Wait for Wayland socket
     sleep 3
     export WAYLAND_DISPLAY=wayland-0
-    
-    # Start Chrome with remote debugging
-    google-chrome-stable \
-        --no-sandbox \
-        --ozone-platform=wayland \
-        --disable-gpu \
-        --remote-debugging-port=9222 \
-        --new-window about:blank &
-    CHROME_PID=$!
-    
-    # Wait for Chrome DevTools port
-    sleep 5
-    
-    # Start wayvnc
+
+    if [ "$EVA_MODULE_BROWSER" = "1" ]; then
+        google-chrome-stable --no-sandbox --ozone-platform=wayland --disable-gpu --remote-debugging-port=9222 --new-window about:blank &
+        sleep 5
+    fi
+
     wayvnc -a 0.0.0.0:5900 &
-    WAYVNC_PID=$!
-    
-    echo "[DISPLAY] Display stack ready: VNC on :5900, Chrome DevTools on :9222" >&2
-else
-    echo "[DISPLAY] No DRM render devices found, skipping display stack" >&2
+    echo "[MODULE:DESKTOP] Ready (VNC on 5900)" >&2
+
+elif [ "$EVA_MODULE_BROWSER" = "1" ]; then
+    echo "[MODULE:BROWSER] Starting Headless Chrome..." >&2
+    google-chrome-stable --headless=new --no-sandbox --disable-gpu --remote-debugging-port=9222 --window-size=1920,1080 about:blank &
+    sleep 3
+    echo "[MODULE:BROWSER] Ready (CDP on 9222)" >&2
 fi
 ```
-If no DRM devices are present (e.g., CI environment without GPU), the display stack is skipped gracefully and the agent runs headless.
+The display stack is modular: `EVA_MODULE_DESKTOP=1` enables the full Wayland+VNC stack (requires DRM render devices), while `EVA_MODULE_BROWSER=1` alone enables headless Chrome without any display server. If neither flag is set (base image), the agent runs fully headless with no browser capabilities.
 ---
 ## 6. Troubleshooting
 | Symptom | Cause | Fix |

@@ -1,9 +1,9 @@
 services:
   eva-sandbox:
-    image: e-va-agent
+    image: e-va-base
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.base
     container_name: eva-sandbox
     volumes:
       - ./docker/sandbox-workspace:/workspace

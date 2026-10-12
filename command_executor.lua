@@ -43,8 +43,8 @@ function M:parse_command(text)
         table.insert(lines, line)
     end
 
-    local start_pat = "^%s*|+%s*COMMAND%s*|+%s*$"
-    local end_pat   = "^%s*|+%s*END_COMMAND%s*|+%s*$"
+    local start_pat = "^%s*|+%s*COMMAND%s*|+%s*\\*$"
+    local end_pat   = "^%s*|+%s*END_COMMAND%s*|+%s*\\*$"
 
     local start_idx = nil
     local end_idx = nil
@@ -79,6 +79,10 @@ function M:parse_command(text)
         table.insert(cmd_lines, lines[i])
     end
 
+    -- Strip trailing backslashes from each body line (LLM tokenizer artifact)
+    for i = 1, #cmd_lines do
+        cmd_lines[i] = cmd_lines[i]:gsub("\\+$", "")
+    end
     -- STRIP OUTER MARKDOWN FENCES ONLY:
     -- Check if the body is wrapped in matching ``` ... ``` fences.
     -- CRITICAL: Never strip backticks that appear inside the payload.

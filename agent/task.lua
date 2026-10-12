@@ -105,7 +105,26 @@ function M.run_pipe_mode(ctx, config, utils, logger, execute_pipeline_fn, run_ag
             ui.printer.pipe_marker("=== PIPE MODE EXIT ===")
             break
         end
-        if trimmed:match("^/") then
+        -- Multi-line input support: === MULTI-LINE START === ... === MULTI-LINE END ===
+        if trimmed == "=== MULTI-LINE START ===" then
+            local ml_lines = {}
+            while true do
+                local ml_line = ui.input.read_line("")
+                if not ml_line then break end
+                local ml_trimmed = ml_line:gsub("^%s*(.-)%s*$", "%1")
+                if ml_trimmed == "=== MULTI-LINE END ===" then
+                    break
+                end
+                table.insert(ml_lines, ml_line)
+            end
+            if #ml_lines > 0 then
+                local multi_task = table.concat(ml_lines, "\n")
+                ui.printer.pipe_marker("=== RESPONSE START ===")
+                M.setup_and_run_task(nil, multi_task, nil, ctx, config, utils, logger, execute_pipeline_fn, run_agent_turn_fn, state_file)
+                ui.printer.pipe_marker("=== RESPONSE END ===")
+                io.flush()
+            end
+        elseif trimmed:match("^/") then
             local cmd = command_parser.parse(trimmed, config)
             if cmd.action == "MESSAGES" then
                 for agent_name, _ in pairs(ctx.history) do

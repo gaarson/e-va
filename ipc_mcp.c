@@ -39,12 +39,6 @@ static int l_spawn_mcp(lua_State *L) {
         lua_pushstring(L, "System Error: Failed to create pipes");
         return 2;
     }
-    if (pipe(pipe_out) < 0) {
-        close(pipe_in[0]); close(pipe_in[1]);
-        lua_pushnil(L);
-        lua_pushstring(L, "System Error: Failed to create out pipe");
-        return 2;
-    }
 
     pid_t pid = fork();
     if (pid < 0) {

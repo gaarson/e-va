@@ -3,6 +3,7 @@
 -- Layers: Budget, Action (exact/fuzzy/sequence), Error, Progress, Semantic, Intervention.
 -- Pure Lua, no external dependencies.
 local M = {}
+local socket = require("socket")
 local EXPLORATION_TOOLS = {
     read_file = true,
     read_chunk = true,
@@ -168,7 +169,7 @@ function M.new(ctx, config)
     self.iteration_count = 0
     self.consecutive_exploration = 0  -- tracks turns with only exploration tools
     self.total_tokens = 0
-    self.start_time = os.clock()
+    self.start_time = socket.gettime()
     self.total_error_count = 0
     self.current_risk = 0.0
     self.is_globally_blocked = false
@@ -179,7 +180,7 @@ end
 -- BUDGET LAYER
 -- ============================================================================
 function M:check_hard_limits()
-    local elapsed = os.clock() - self.start_time
+    local elapsed = socket.gettime() - self.start_time
     local issues = {}
     if self.iteration_count >= self.limits.max_iterations then
         table.insert(issues, string.format("Max iterations reached (%d/%d)", self.iteration_count, self.limits.max_iterations))

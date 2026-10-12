@@ -124,14 +124,14 @@
 
 ### 2.1 Активация (--pipe flag)
 
-**Файл:** `agent/cli.lua:17-18`
+**Файл:** `agent/cli.lua:21-22`
 
 ```lua
 elseif a == "--pipe" then
     is_pipe = true
 ```
 
-Флаг `--pipe` устанавливает `parsed.is_pipe = true`. В `agent/init.lua:60-64`:
+Флаг `--pipe` устанавливает `parsed.is_pipe = true`. В `agent/init.lua:92`:
 
 ```lua
 if parsed.is_pipe then
@@ -153,6 +153,7 @@ end
 | Тип входа | Формат | Действие |
 |-----------|--------|----------|
 | Task instruction | Произвольный текст (не `/`) | Запускает полный pipeline на этот текст |
+| Multi-line task | `=== MULTI-LINE START ===` ... `=== MULTI-LINE END ===` | Все строки между маркерами склеиваются в одну задачу (newline-separated) |
 | Slash-команда | `/command [args]` | Обработка через `command_parser.parse()` |
 | Терминация | `quit` или `exit` | Выход из pipe mode |
 | Пустая строка | `""` | Игнорируется |
@@ -269,7 +270,6 @@ M.STATES = {
 | Несколько задач подряд | Каждая запускает полный pipeline (reset ctx) | `task.lua:133` |
 
 **Ограничения pipe mode:**
-- Нет поддержки multi-line input (только одна строка = одна задача)
 - Нет поддержки `--agent` override внутри pipe session (только при запуске)
 - Stage navigation (`/next_stage`, `/prev_stage`) недоступна
 - Контекст сбрасывается между задачами (`ctx:reset()` в `setup_and_run_task`)
@@ -315,22 +315,18 @@ echo "$RESULT"
 
 ### 3.1 Dockerfile: stages, base image, layers
 
-**Файл:** `docker/Dockerfile` (169 строк)
+**Файлы:** `docker/Dockerfile.base` (73 строки), `docker/Dockerfile.browser` (29 строк), `docker/Dockerfile.desktop` (66 строк)
 
-**Single-stage build** (no multi-stage optimization):
+**Модульная 3-слойная сборка** (base → browser → desktop, каждый слой наследует предыдущий):
 
-| Layer | Content | Size Impact |
-|-------|---------|-------------|
-| Base | `debian:unstable-slim` | ~30MB |
-| System deps | lua5.4, gcc, git, curl, nodejs, npm, luarocks, ripgrep, ffmpeg, imagemagick, Chrome libs | ~500MB |
-| Chrome | google-chrome-stable + wrapper script | ~300MB |
-| User | `chromeuser` (non-root) | negligible |
-| Lua modules | 28 luarocks packages into `/opt/e-va/lua_modules` | ~50MB |
-| Cage/WayVNC | Built from source (Wayland compositor + VNC) | ~20MB |
-| Source code | `COPY . /opt/e-va` | ~5MB |
-| C extensions | `make` → `patcher_core.so`, `ipc_mcp.so` | ~1MB |
-| MCP | `npm install -g chrome-devtools-mcp@latest` | ~50MB |
+| Image | Base | Content | ENV Flag |
+|-------|------|---------|----------|
+| e-va-base | debian:unstable-slim | lua5.4, gcc, git, curl, luarocks, ripgrep, 28 Lua pkgs, source, C ext, agentuser, init.sh | none |
+| e-va-browser | FROM e-va-base:latest | nodejs, npm, Chrome libs, chrome+wrapper, mcp | EVA_MODULE_BROWSER=1 |
+| e-va-desktop | FROM e-va-browser:latest | cage+neatvnc+wayvnc from source | EVA_MODULE_DESKTOP=1 |
 
+
+**Note:** Module activation is controlled by ENV flags set during image build: `EVA_MODULE_BROWSER=1` in Dockerfile.browser, `EVA_MODULE_DESKTOP=1` in Dockerfile.desktop. The base image runs headless by default.
 **Key ENV vars set in image:**
 ```
 LUA_PATH="/opt/e-va/lua_modules/share/lua/5.4/?.lua;..."
@@ -357,7 +353,7 @@ services:
     image: e-va-agent
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.base
     container_name: eva-sandbox
     volumes:
       - ./docker/sandbox-workspace:/workspace
@@ -427,9 +423,9 @@ services:
 
 | Aspect | Implementation |
 |--------|---------------|
-| **User** | `chromeuser` (non-root), created via `useradd -m -s /bin/bash chromeuser` |
-| **Privilege drop** | `init.sh` runs as root → `chown` workspace → `su -m -s /bin/bash chromeuser -c '...'` (preserves env vars) |
-| **Sudo restriction** | Only Chrome commands: `chromeuser ALL=(ALL) NOPASSWD: /usr/bin/google-chrome-stable, /usr/bin/google-chrome-stable-orig` |
+| **User** | `agentuser` (non-root), created via `useradd -m -s /bin/bash agentuser` |
+| **Privilege drop** | `init.sh` runs as root → `chown` workspace → `gosu agentuser -c '...'` (preserves env vars) |
+| **Sudo restriction** | Only Chrome commands: `agentuser ALL=(ALL) NOPASSWD: /usr/bin/google-chrome-stable, /usr/bin/google-chrome-stable-orig` |
 | **Chrome sandbox** | Disabled via wrapper: `--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage` |
 | **Resource limits** | `--memory=4g --cpus=2` (sandbox_run.sh) / `deploy.resources.limits` (compose) |
 | **Network** | `--network host` (sandbox_run.sh) — FULL host network access! |
@@ -440,27 +436,34 @@ services:
 
 ### 3.6 GIT_EVA_URL mechanism (clone at runtime)
 
-**Файл:** `e-va:33`
+**Файл:** `e-va:36-48`
 
 ```bash
 if [ -n "$GIT_EVA_URL" ]; then
     echo "Cloning $GIT_EVA_URL ..."
-    rm -rf /app/*; rm -rf /app/.* 2>/dev/null
+    rm -rf "$AGENT_HOME"/*; rm -rf "$AGENT_HOME"/.* 2>/dev/null
     git clone "$GIT_EVA_URL" /tmp/repo
-    cp -a /tmp/repo/. /app/
+    if [ -n "$GIT_EVA_SHA256" ]; then
+        ACTUAL_HASH=$(tar -C /tmp/repo -cf - . | sha256sum | awk '{print $1}')
+        if [ "$ACTUAL_HASH" != "$GIT_EVA_SHA256" ]; then
+            echo "[FATAL] SHA256 mismatch: expected $GIT_EVA_SHA256, got $ACTUAL_HASH" >&2
+            rm -rf /tmp/repo
+            exit 1
+        fi
+        echo "[OK] SHA256 verified."
+    fi
+    cp -a /tmp/repo/. "$AGENT_HOME"/
     rm -rf /tmp/repo
 fi
 ```
 
-**Purpose:** Allows updating agent code without rebuilding the image. At container startup, if `GIT_EVA_URL` is set, the agent clones the latest code from the specified Git URL into `/app/`.
-
-**Note:** This targets `/app/` but `AGENT_HOME` is set to `/opt/e-va`. This appears to be a legacy/inconsistent path — the actual agent code lives in `/opt/e-va`. This mechanism may be intended for a different deployment scenario or is partially broken.
+**Purpose:** Allows updating agent code without rebuilding the image. At container startup, if `GIT_EVA_URL` is set, the agent clones the latest code from the specified Git URL into `$AGENT_HOME` (`/opt/e-va`). Optional `GIT_EVA_SHA256` env var enables integrity verification before deployment.
 
 ### 3.7 Команды сборки и запуска
 
 ```bash
 # Build (from project root)
-docker build -t e-va-agent -f docker/Dockerfile .
+docker build -t e-va-base -f docker/Dockerfile.base && docker build -t e-va-browser -f docker/Dockerfile.browser && docker build -t e-va-desktop -f docker/Dockerfile.desktop .
 
 # Run one-shot task
 echo "Your task" | docker run -i --rm e-va-agent ./e-va --pipe
@@ -530,7 +533,7 @@ Already documented in Section 2. Key characteristics:
 
 ### 4.3 IPC/MCP (C shared library)
 
-**Файл:** `ipc_mcp.c` (134 строки)
+**Файл:** `ipc_mcp.c` (206 строк)
 
 **Architecture:**
 ```
@@ -592,7 +595,7 @@ The `shell` tool allows the agent to execute arbitrary shell commands within the
 | **HTTP Status Server** | External → Agent (poll/cancel) | HTTP/1.1 JSON | None | Medium | Monitoring, cancellation, health checks |
 | **IPC/MCP** | Agent ↔ MCP Server | Line-based JSON over pipes | None (process-level) | Low | Browser automation, external tool servers |
 | **File-based** | Bidirectional | Files on filesystem | OS permissions | Variable | Config, state persistence, logs, images |
-| **Shell exec** | Agent → OS | POSIX shell | OS user (chromeuser) | Variable | System operations, builds, tests |
+| **Shell exec** | Agent → OS | POSIX shell | OS user (agentuser) | Variable | System operations, builds, tests |
 | **LLM API** | Agent → LLM Server | HTTP streaming (SSE) | Bearer token | High (network) | Core AI reasoning |
 
 ---
@@ -619,7 +622,8 @@ The `shell` tool allows the agent to execute arbitrary shell commands within the
 │  │       │ chown workspace                                  │    │
 │  │       │ capture stdin → /tmp/eva_stdin                   │    │
 │  │       │ source .env                                      │    │
-│  │       │ su chromeuser                                    │    │
+│       │ module check (EVA_MODULE_DESKTOP/BROWSER)              │    │
+│  │       │ gosu agentuser                                    │    │
 │  │       ▼                                                  │    │
 │  │  e-va --pipe .  < /tmp/eva_stdin                         │    │
 │  │       │                                                  │    │
@@ -641,18 +645,18 @@ The `shell` tool allows the agent to execute arbitrary shell commands within the
 
 | Dimension | Isolation Level | Details |
 |-----------|----------------|---------|
-| **Filesystem** | Partial | Workspace isolated via volume mount. Agent code baked into image (read-only effectively since chromeuser can't write to /opt/e-va). BUT: `--network host` means no network isolation. |
+| **Filesystem** | Partial | Workspace isolated via volume mount. Agent code baked into image (read-only effectively since agentuser can't write to /opt/e-va). BUT: `--network host` means no network isolation. |
 | **Network** | NONE | `--network host` gives container direct access to host network stack. Can reach any host service. |
 | **Processes** | Container namespace | Separate PID namespace. `tini` as init. Chrome runs with `--no-sandbox`. |
 | **Resources** | Limited | 4GB RAM, 2 CPUs enforced via cgroups. |
-| **User** | Non-root | `chromeuser` with restricted sudo (Chrome only). |
+| **User** | Non-root | `agentuser` with restricted sudo (Chrome only). |
 | **Time** | Limited | `timeout 3600` in sandbox_run.sh (1 hour max). |
 
 **Security gaps:**
 - `--network host` exposes entire host network
 - No seccomp/apparmor profiles
 - Chrome `--no-sandbox` reduces browser isolation
-- Shell tool can execute any command as chromeuser
+- Shell tool can execute any command as agentuser
 
 ### 5.3 sandbox_run.sh: оркестрация
 
@@ -758,11 +762,11 @@ return M
 | Risk | Severity | Mitigation | Status |
 |------|----------|------------|--------|
 | `--network host` в sandbox_run.sh | **HIGH** | Контейнер имеет полный доступ к сети хоста. Может сканировать порты, атаковать локальные сервисы. | Не исправлено. Compose-файл не использует host network, но sandbox_run.sh — да. |
-| Chrome `--no-sandbox` | **MEDIUM** | Браузер без песочницы. Уязвимости в Chrome могут привести к RCE как chromeuser. | Принято как trade-off для работы в Docker. |
-| Shell tool без полноценной изоляции | **MEDIUM** | Агент может выполнить любую команду как chromeuser. Sanitization блокирует только известные паттерны (sudo, rm -rf /, curl\|sh). | Частично: есть blacklist, но нет whitelist/allowlist. |
+| Chrome `--no-sandbox` | **MEDIUM** | Браузер без песочницы. Уязвимости в Chrome могут привести к RCE как agentuser. | Принято как trade-off для работы в Docker. |
+| Shell tool без полноценной изоляции | **MEDIUM** | Агент может выполнить любую команду как agentuser. Sanitization блокирует только известные паттерны (sudo, rm -rf /, curl\|sh). | Частично: есть blacklist, но нет whitelist/allowlist. |
 | HTTP status server без auth | **LOW** | Любой процесс на хосте может читать статус и отправлять cancel. | Принято: сервер предназначен для локального мониторинга. |
 | `.env` mounted read-only | **LOW** | API keys доступны внутри контейнера. Если агент скомпрометирован — ключи утекают. | Стандартная практика. |
-| `GIT_EVA_URL` — arbitrary code execution | **MEDIUM** | Клонирование произвольного репозитория при старте. Если URL подменён — исполняется злонамеренный код. | Нет верификации checksum/signature. |
+| `GIT_EVA_URL` — arbitrary code execution | **MEDIUM** | Клонирование произвольного репозитория при старте. Если URL подменён — исполняется злонамеренный код. | Поддерживается `GIT_EVA_SHA256` env var для верификации хэша репозитория перед развёртыванием. |
 | Sudoers для Chrome | **LOW** | Ограничен только Chrome бинарником. | Корректно реализовано. |
 | No seccomp/AppArmor profiles | **MEDIUM** | Нет syscall filtering. | Не настроено. |
 
@@ -770,13 +774,11 @@ return M
 
 | Issue | Description | Impact |
 |-------|-------------|--------|
-| **stdin capture race in init.sh** | `timeout 5 cat > "$STDIN_FILE"` — если stdin передаётся медленно (например, через pipe из другого процесса), данные могут быть обрезаны после 5 секунд. | Потеря части задачи. Fallback: `/tmp/eva_task_input` (mounted file). |
+| **stdin capture (no timeout)** | `cat > "$STDIN_CAPTURE" 2/dev/null || true` — блокируется до EOF. При медленном pipe может ждать долго, но данные не теряются. | Потенциальная задержка при очень медленных источниках. Fallback: `/tmp/eva_task_input` (mounted file). |
 | **Status server poll model** | `M.poll()` вызывается из main loop. Если main loop заблокирован (долгий LLM request), HTTP запросы не обрабатываются. | Timeout на `/health`, `/status` во время активных turn'ов. |
 | **Atomic state save** | Используется `tmp + rename`. Корректно для single-process. Но если процесс убивается между write и rename — tmp файл остаётся. | Мелкий: cleanup при следующем запуске. |
 | **Lua GC vs C resources** | `ipc_mcp.so` использует `__gc` для закрытия pipes и kill процесса. Lua GC не детерминирован — MCP процесс может жить дольше необходимого. | Утечка ресурсов при частом создании MCP процессов. |
-| **No timeout on mcp_read** | `getline()` в `ipc_mcp.c` блокируется indefinitely если MCP процесс не отвечает. | Deadlock: агент зависает навсегда. |
 | **Circuit breaker state in memory only** | Сбрасывается при рестарте. | После crash+restart agent "забывает" о предыдущих failures. |
-| **Loop guard `os.clock()`** | Измеряет CPU time, не wall time. Если процесс в sleep/wait — таймер не идёт. | `max_seconds` limit может не сработать при network waits. |
 | **Multi-stage executor max_iterations=3** | Жёсткий лимит. Если patch не сходится за 3 попытки — отказ. | False negative на сложных файлах. |
 
 ### 7.3 Масштабируемость
@@ -798,12 +800,8 @@ return M
 
 | # | Проблема | Рекомендация |
 |---|----------|--------------|
-| 1 | `mcp_read` без timeout → deadlock | Добавить `select()` с timeout перед `getline()` в `ipc_mcp.c` |
-| 2 | `--network host` в sandbox_run.sh | Заменить на `--network bridge` + explicit port mappings |
-| 3 | stdin capture `timeout 5` слишком агрессивен | Увеличить до 30s или использовать signal-based approach |
-| 4 | Loop guard `os.clock()` ≠ wall time | Заменить на `socket.gettime()` для `max_seconds` check |
-| 5 | Status server не отвечает во время LLM call | Вынести в отдельный coroutine/thread (cqueues уже установлен) |
-| 6 | `GIT_EVA_URL` без верификации | Добавить SHA256 checksum verification |
-| 7 | Pipe mode: нет multi-line input | Поддержать heredoc syntax или base64-encoded blocks |
-| 8 | No structured error codes в pipe output | Добавить JSON envelope: `{"type":"error","code":"LLM_UNREACHABLE","msg":"..."}` |
-| 9 | Circuit breaker state volatile | Persist в `.e-va-conf/.circuit_breaker.json` |
+| 1 | `--network host` в sandbox_run.sh | Заменить на `--network bridge` + explicit port mappings |
+| 2 | stdin capture блокируется до EOF без timeout | Добавить optional timeout или signal-based approach для non-interactive sources |
+| 3 | Status server не отвечает во время LLM call | Вынести в отдельный coroutine/thread (cqueues уже установлен) |
+| 4 | No structured error codes в pipe output | Добавить JSON envelope: `{"type":"error","code":"LLM_UNREACHABLE","msg":"..."}` |
+| 5 | Circuit breaker state volatile | Persist в `.e-va-conf/.circuit_breaker.json` |
