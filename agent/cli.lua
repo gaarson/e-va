@@ -41,8 +41,21 @@ function M.parse_args(cli_args, config, logger)
             os.exit(1)
         end
         -- Override pipeline for direct execution
+        local resolved_mode = "interactive"
+        for _, s in ipairs(config.PIPELINE) do
+            if type(s.agents) == "table" then
+                for _, a in ipairs(s.agents) do
+                    if a == target_agent then
+                        resolved_mode = s.mode or "interactive"
+                        break
+                    end
+                end
+            elseif type(s.agents) == "string" and s.agents == target_agent then
+                resolved_mode = s.mode or "interactive"
+            end
+        end
         config.PIPELINE = {
-            { stage = "DIRECT_EXECUTION", agents = { target_agent }, mode = "sequential" }
+            { stage = "DIRECT_EXECUTION", agents = { target_agent }, mode = resolved_mode }
         }
         ui.print_success(string.format("Direct execution mode. Overriding pipeline for agent: %s", target_agent))
     end

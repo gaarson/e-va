@@ -353,6 +353,12 @@ function M.get()
             multi_stage_tools = { "create_file", "patch" },
             prompt_file = "prompts/coder.md",
             allowed_tools = {
+              "search",
+              "explore_tree",
+              "outline",
+              "pin",
+              "unpin",
+              "optimize_context",
               "patch",
               "create_file",
               "read_file",
@@ -366,7 +372,7 @@ function M.get()
     cfg.PIPELINE = {
         -- { stage = "ANALYSIS_AND_PLANNING", agents = { "ANALYZER" }, mode = "sequential" },
         { stage = "REVIEW_AND_CHAT", agents = { "ARCHITECT" }, mode = "interactive" },
-        { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
+        { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "interactive" }
     }
 
     return cfg

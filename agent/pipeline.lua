@@ -55,11 +55,6 @@ function M.execute_pipeline(ctx, config, logger, run_agent_turn_fn, state_file)
         local stage_complete = false
 
         -- Clear local history for new stage (but not knowledge base)
-        for name, _ in pairs(ctx.history) do
-            -- ctx.history[name] = {}
-            -- If this is not a system agent/base, we can think about clearing,
-            -- but simpler to just track that we don't copy previous stage history to current.
-        end
 
         while not stage_complete and turn < MAX_TURNS do
             turn = turn + 1
