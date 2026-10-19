@@ -16,6 +16,6 @@ local function register(registry)
         end
         return { output = "\n[USER REPLY]: " .. ans }
     end,
-    ASK_USER_MANIFEST)
+    ASK_USER_MANIFEST, true)
 end
 return { register = register }

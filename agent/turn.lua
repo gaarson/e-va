@@ -225,7 +225,8 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
     if agent_cfg.use_selective_multi_stage and agent_cfg.multi_stage_tools then
                 local executor_parse = command_executor.new(ctx, agent_name)
         local parsed_cmd, _ = executor_parse:parse_command(content)
-        if parsed_cmd then
+        -- Guard: bare tool name (no colon) = doc request, skip MS routing
+        if parsed_cmd and parsed_cmd:find(":") then
             local tool_name = parsed_cmd:match("^([^:]+)") or parsed_cmd
             tool_name = utils.trim(tool_name)
             local is_multi_stage_tool = false

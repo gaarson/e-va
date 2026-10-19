@@ -200,20 +200,17 @@ function M.get_engine_directives(ctx, agent_cfg)
         local tool_list = table.concat(agent_cfg.multi_stage_tools, ", ")
         multi_stage_note = string.format("\n3. MULTI-STAGE: Tools [%s] go through Intent->Generate->Review. Others execute directly.", tool_list)
     end
-    local strict_syntax = [[
-4. COMMAND SYNTAX (MANDATORY):
-   ALL tool invocations MUST use EXACTLY this format:
-   ||| COMMAND |||
-   tool_name:arguments
-   ||| END_COMMAND |||
-   - Markers must be on their OWN lines.
-   - The number of pipes (|) is flexible: use at least 3, any count works.
-   - NO function-calling JSON. NO plain-text commands without markers.
-   - WRONG: {"tool": "read_file", "args": {"path": "src/main.c"}}
-   - WRONG: read_file:src/main.c (without markers)
-   - RIGHT: ||| COMMAND ||| then newline then read_file:src/main.c then newline then ||| END_COMMAND |||
-]]
-    return string.format("\n==================================================\nENGINE DIRECTIVES:\n1. PIPELINE: %s\n2. ONE COMMAND PER TURN. Use batch tools if needed.%s%s\n==================================================", rule, multi_stage_note, strict_syntax)
+    -- MCP progressive reveal hint (only if mcp_* tools are in allowed set)
+    local has_mcp = false
+    for _, t in ipairs(agent_cfg.allowed_tools or {}) do
+        if t:sub(1, 4) == 'mcp_' then has_mcp = true; break end
+    end
+    local mcp_note = ''
+    if has_mcp then
+        local mcp_num = multi_stage_note ~= '' and 4 or 3
+        mcp_note = string.format('\n%d. MCP TOOLS: Call mcp_<server> bare to list commands. Call mcp_<server>_<cmd> bare for full docs.', mcp_num)
+    end
+    return string.format("\n=== ENGINE ===\n1. PIPELINE: %s\n2. ONE COMMAND PER TURN.%s%s", rule, multi_stage_note, mcp_note)
 end
 -- ============================================================================
 -- LOAD PROMPT

@@ -12,7 +12,11 @@ local TASK_COMPLETE_MANIFEST = {
 }
 local function register(registry)
     registry.register("task_complete", "Signal completion of the current task step", "||| COMMAND |||\ntask_complete\n||| END_COMMAND |||", function(args, ctx, agent_name)
-        if ctx.execution_plan and #ctx.execution_plan > 0 then
+        -- FIX: Ensure execution_plan is initialized to prevent crash if nil
+        if not ctx.execution_plan then
+            ctx.execution_plan = {}
+        end
+        if #ctx.execution_plan > 0 then
             if ctx.current_task_index < #ctx.execution_plan then
                 local old_idx = ctx.current_task_index
                 ctx.current_task_index = ctx.current_task_index + 1
@@ -60,6 +64,6 @@ local function register(registry)
         end
     end,
     nil,
-    TASK_COMPLETE_MANIFEST)
+    TASK_COMPLETE_MANIFEST, true)
 end
 return { register = register }

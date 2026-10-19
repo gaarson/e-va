@@ -285,6 +285,8 @@ end
 function M.add_executed_command(ctx, cmd)
     local normalized = (cmd or ""):gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("^%s+", ""):gsub("%s+$", "")
     if normalized == "" then return end
+    -- Do NOT record bare tool names (no colon) — they are doc requests, idempotent
+    if not normalized:find(":") then return end
     -- Do NOT record commands that match exception patterns (they are ephemeral)
     local exceptions = ctx.flow_config.command_flow.dedup_exceptions or { "task_complete" }
     if _matches_exception(normalized, exceptions) then
