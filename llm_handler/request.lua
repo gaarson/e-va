@@ -10,7 +10,7 @@ local _last_cleanup = nil
 -- Recursively sanitize all string values in a payload table for valid UTF-8 JSON.
 local function _sanitize_payload_strings(t)
     if type(t) == "string" then
-        return encoding.sanitize_for_json(t)
+        return encoding.sanitize_utf8_only(t)
     elseif type(t) == "table" then
         for k, v in pairs(t) do
             t[k] = _sanitize_payload_strings(v)

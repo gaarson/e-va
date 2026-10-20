@@ -99,4 +99,54 @@ function M.sanitize_for_json(str)
     end
     return table.concat(out)
 end
+
+function M.sanitize_utf8_only(str)
+    if type(str) ~= "string" then return tostring(str) end
+    -- Remove null bytes first
+    local cleaned = {}
+    for i = 1, #str do
+        local b = string.byte(str, i)
+        if b ~= 0 then table.insert(cleaned, string.char(b)) end
+    end
+    str = table.concat(cleaned)
+    -- Validate UTF-8, pass control chars through unchanged
+    local out = {}
+    local i = 1
+    while i <= #str do
+        local byte = string.byte(str, i)
+        if byte <= 0x7F then
+            -- ASCII (including control chars): pass through as-is
+            table.insert(out, string.char(byte))
+            i = i + 1
+        elseif byte >= 0xC2 and byte <= 0xDF then
+            if i + 1 <= #str and string.byte(str, i + 1) >= 0x80 and string.byte(str, i + 1) <= 0xBF then
+                table.insert(out, string.sub(str, i, i + 1))
+                i = i + 2
+            else
+                table.insert(out, "?")
+                i = i + 1
+            end
+        elseif byte >= 0xE0 and byte <= 0xEF then
+            if i + 2 <= #str and string.byte(str, i + 1) >= 0x80 and string.byte(str, i + 1) <= 0xBF and string.byte(str, i + 2) >= 0x80 and string.byte(str, i + 2) <= 0xBF then
+                table.insert(out, string.sub(str, i, i + 2))
+                i = i + 3
+            else
+                table.insert(out, "?")
+                i = i + 1
+            end
+        elseif byte >= 0xF0 and byte <= 0xF4 then
+            if i + 3 <= #str and string.byte(str, i + 1) >= 0x80 and string.byte(str, i + 1) <= 0xBF and string.byte(str, i + 2) >= 0x80 and string.byte(str, i + 2) <= 0xBF and string.byte(str, i + 3) >= 0x80 and string.byte(str, i + 3) <= 0xBF then
+                table.insert(out, string.sub(str, i, i + 3))
+                i = i + 4
+            else
+                table.insert(out, "?")
+                i = i + 1
+            end
+        else
+            table.insert(out, "?")
+            i = i + 1
+        end
+    end
+    return table.concat(out)
+end
 return M

@@ -191,7 +191,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
     end
     -- Add result to history as user/system
     if res.output then
-        local sanitized_output = utils.sanitize_for_json(res.output)
+        local sanitized_output = res.output
         history.add_message(ctx, agent_name, "user", sanitized_output)
     end
     return { type = res.signal == "PIPELINE_NEXT_STAGE" and "COMPLETED" or "EXECUTED",

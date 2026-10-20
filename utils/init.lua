@@ -37,6 +37,7 @@ M.explore_directory = directory.explore_directory
 M.base64_encode = encoding.base64_encode
 M.escape_json_string = encoding.escape_json_string
 M.sanitize_for_json = encoding.sanitize_for_json
+M.sanitize_utf8_only = encoding.sanitize_utf8_only
 -- Re-export images functions and state
 M.estimate_image_tokens = images.estimate_image_tokens
 M.get_image_dimensions = images.get_image_dimensions
