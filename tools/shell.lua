@@ -27,8 +27,8 @@ local function truncate_output(res)
 end
 local function register(registry)
     registry.register("shell",
-        "Executes POSIX shell commands. Supports interactive sessions for programs requiring input (sudo, ssh, etc.). Non-interactive: shell:<command>. Interactive start: shell:<command> . Send input: shell:session=<id> input=<text>. Poll: shell:session=<id>. Close: shell:session=<id> close=true.",
-        "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||",
+        "Executes POSIX shell commands with 60s timeout. Supports non-interactive (default), interactive sessions (for sudo/ssh/etc). Circuit breaker: 3 consecutive test/build failures triggers STOP warning.",
+        "||| COMMAND |||\nshell:make test\n||| END_COMMAND |||\n\nMODES:\n1. Non-interactive (default): shell:<command>\n   - 60s hard timeout (configurable via LIMITS.SHELL_TIMEOUT). Output truncated at 1MB.\n   - Polling interval: 100ms, max wait: 90s.\n   - Circuit breaker: if command matches test|make|check|build AND fails 3x consecutively -> STOP warning injected.\n\n2. Interactive session:\n   Start: shell:<command> \n   Send input: shell:session=<id> input=<text>\n   Poll output: shell:session=<id>\n   Close: shell:session=<id> close=true\n   - Max lifetime: 300s, max interactions: 50.\n\nSAFETY:\n- Blocked: sudo, rm -rf /, redirect to /etc/ or /usr/bin/, curl|sh, wget|sh.\n- Warned: chmod 777, writes to /etc/ via flags.\n- User confirmation prompt shown before execution (configurable in ui.security_prompt).",
         function(args, ctx, agent_name)
             args = args or ""
             -- === SESSION MODE: session=<id> ===
@@ -118,9 +118,10 @@ local function register(registry)
             local tmp_script = os.tmpname() .. ".sh"
             local sf = io.open(tmp_script, "w")
             if sf then sf:write("#!/bin/sh\n" .. cmd); sf:close() end
+            local shell_timeout = (ctx.config and ctx.config.LIMITS and ctx.config.LIMITS.SHELL_TIMEOUT) or 60
             local wrapper_script = string.format(
-                "timeout 60 sh '%s' > '%s' 2>&1; echo $? > '%s'",
-                tmp_script, tmp_file, exit_file
+                "timeout %d sh '%s' > '%s' 2>&1; echo $? > '%s'",
+                shell_timeout, tmp_script, tmp_file, exit_file
             )
             os.execute(wrapper_script .. " &")
             local output_chunks = {}
@@ -180,6 +181,6 @@ local function register(registry)
             end
             return { output = output }
         end,
-        SHELL_MANIFEST)
+        nil, SHELL_MANIFEST)
 end
 return { register = register }

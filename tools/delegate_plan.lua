@@ -56,7 +56,7 @@ This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FOR
 ]],
 }
 local function register(registry)
-    registry.register("delegate_plan", "Pass execution plan to next stage (JSON Object)", "||| COMMAND |||\ndelegate_plan:\n{\n  \"plan\": [{\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking\"}],\n  \"memo\": \"Context for coder\"\n}\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("delegate_plan", "Delegates execution plan to next agent (CODER). Auto-loads up to 15 target files into context (max 15000 tokens each) and pins them. Triggers PIPELINE_NEXT_STAGE signal.", "||| COMMAND |||\ndelegate_plan:\n{\n  \"plan\": [{\"file\": \"src/main.c\", \"instruction\": \"Fix bounds checking in array access\"}],\n  \"memo\": \"The CODER agent is BLIND. This memo is their ONLY context. Include: what to do, why, exact file paths, expected behavior, constraints, and any relevant code snippets or patterns.\"\n}\n||| END_COMMAND |||\n\nJSON SCHEMA:\n{\n  \"plan\": [{\"file\": \"<path>\", \"instruction\": \"<atomic task>\"}],\n  \"memo\": \"<rich context string>\"\n}\n\nRULES:\n- 'plan' must be non-empty array. Each item needs 'file' and 'instruction'.\n- 'memo' is CRITICAL: the receiving agent sees ONLY this + auto-loaded files.\n- Instructions must be atomic and verifiable.\n- Backticks in JSON are stripped before parsing.\n\nSIDE-EFFECTS:\n- Auto-loads up to 15 files from plan into knowledge_base (max 15000 tokens/file).\n- All loaded files are PINNED (survive context compression).\n- Sets ctx.execution_plan and ctx.current_task_index=1.\n- Returns signal PIPELINE_NEXT_STAGE (advances pipeline).\n- MS SHORT-FORM: 'delegate_plan:' (no JSON) routes to multi-stage pipeline.", function(args, ctx, agent_name)
         local json_match = utils.trim(args:gsub("`+", ""))
         local status, payload = pcall(function() return json:decode(json_match) end)
         local plan = nil
@@ -77,6 +77,7 @@ local function register(registry)
             end
             -- НОВЫЙ: Автоматически подгружаем файлы из плана
             local loaded_files = {}
+            local skipped_files = {}
             local pinned_files_list = {}
             local max_files = 15 -- Increased from 5 to 15
             local max_tokens_per_file = 15000 -- Increased from 5000 to 15000
@@ -95,6 +96,7 @@ local function register(registry)
                                 table.insert(loaded_files, rel_path)
                                 table.insert(pinned_files_list, string.format("%s (%d tokens)", rel_path, token_count))
                             else
+                                table.insert(skipped_files, rel_path .. " (" .. token_count .. " tokens)")
                                 logger.warn(string.format("[DELEGATE] File %s too large (%d tokens), skipping.", rel_path, token_count))
                             end
                         end
@@ -106,6 +108,9 @@ local function register(registry)
                 payload.pin_files = loaded_files
             end
             local auto_msg = ""
+            if #skipped_files > 0 then
+                auto_msg = auto_msg .. "\n[WARNING] Files too large to auto-load (use read_file manually): " .. table.concat(skipped_files, ", ")
+            end
             if #loaded_files > 0 then
                 auto_msg = " Auto-loaded targets into context: " .. table.concat(loaded_files, ", ")
                 auto_msg = auto_msg .. "\n[PINNED CONFIRMATION] The following files are pinned and prioritized:\n"

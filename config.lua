@@ -73,6 +73,7 @@ function M.get()
         MEMORY_RATIO = 0.8,
         CHARS_PER_TOKEN = 3.5,
         MCP_MAX_OUTPUT_TOKENS = 16000,
+        SHELL_TIMEOUT = 60,           -- seconds, hard timeout for non-interactive shell
     }
 
     cfg.CONTEXT_FLOW = {
