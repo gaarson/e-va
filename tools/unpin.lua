@@ -14,7 +14,7 @@ local UNPIN_MANIFEST = {
 }
 
 local function register(registry)
-    registry.register("unpin", "Unpins a file from permanent memory", "||| COMMAND |||\nunpin:src/core.h\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("unpin", "Removes pin status from a file, making it eligible for context compression/eviction.", "||| COMMAND |||\nunpin:src/core.h\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         if ctx:unpin_file(rel_path) then
             return { output = "\n[SYSTEM]: Unpinned '" .. rel_path .. "'." }

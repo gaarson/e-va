@@ -12,7 +12,7 @@ local PIN_MANIFEST = {
     intent_guideline = "pin: Pins a loaded file in memory so it is never evicted.",
 }
 local function register(registry)
-    registry.register("pin", "Pins a loaded file in memory so it is never evicted", "||| COMMAND |||\npin:src/core.h\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("pin", "Pins a file in knowledge_base so context compression will never evict it. If file not in KB but known in file_states (post-snapshot), lazy-reloads from disk first.", "||| COMMAND |||\npin:src/core.h\n||| END_COMMAND |||\n\nArgs: <relative_path>\n- File must be in knowledge_base OR in file_states (for lazy-reload after snapshot restore).\n- Pinned files are excluded from context compression/eviction.\n- If neither KB nor file_states has the file -> error suggesting read_file first.", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         if not ctx.knowledge_base[rel_path] then
             -- Lazy reload: after snapshot restore, knowledge_base is empty but file_states may have the path

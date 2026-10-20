@@ -12,9 +12,11 @@ local SEARCH_MANIFEST = {
     intent_guideline = "search: Fast RipGrep text search across codebase.",
 }
 local function register(registry)
-    registry.register("search", "Fast RipGrep search", "||| COMMAND |||\nsearch:function_name\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("search", "Fast case-insensitive fixed-string search across codebase (RipGrep). NOT regex. Results truncated at 4000 chars. Repeated identical queries return cached results.", "||| COMMAND |||\nsearch:function_name\n||| END_COMMAND |||\n\nArgs: <query_string>\n- Uses: rg -n -i -C 1 --fixed-strings (case-insensitive, 1 line context, NO regex)\n- Excludes: .git/, .e-va-conf/\n- Output truncated at 4000 characters.\n- Dedup: identical query in same session returns cached result without re-running rg.\n- For regex search, use shell:rg -P 'pattern' <path>", function(args, ctx, agent_name)
         local query = utils.trim(args)
         if query == "" then return { output = "\n[ERROR]: Empty search query." } end
+        -- DEDUP: If this exact query was already executed in this session, return cached result.
+        -- This prevents redundant rg calls when the model retries the same search.
         if ctx:has_searched(query) then return { output = "\n[SEARCH RESULTS for '"..query.."']:\n" .. ctx.search_history[query] } end
         local safe_query = utils.shell_quote(query)
         local safe_root = utils.shell_quote(ctx.config.PROJECT_ROOT)

@@ -18,8 +18,8 @@ local OPTIMIZE_CONTEXT_MANIFEST = {
 
 local function register(registry)
     registry.register("optimize_context",
-        "Optimizes the current context by removing unnecessary files, updating the task summary, pinning/unpinning files, or summarizing conversation history. Use this when the context is getting too large or when you want to ensure critical information is preserved. Supports: remove_files, pin_files, unpin_files, update_summary, summarize_history (with agent_name and keep_count).",
-        "||| COMMAND |||\noptimize_context:{\"remove_files\": [\"path/to/file1.txt\"], \"pin_files\": [\"path/to/core.h\"], \"update_summary\": \"New summary text\", \"summarize_history\": {\"agent_name\": \"architect\", \"keep_count\": 10}}\n||| END_COMMAND |||",
+        "Optimizes context: removes files from KB, pins/unpins files, updates task summary, or summarizes history. Accepts JSON instructions. Optionally runs LLM-driven optimizer if OPTIMIZER_AGENT is configured.",
+        "||| COMMAND |||\noptimize_context:{\"remove_files\": [\"src/old.lua\"], \"pin_files\": [\"src/core.h\"], \"update_summary\": \"Fixed login bug\", \"summarize_history\": {\"agent_name\": \"architect\", \"keep_count\": 10}}\n||| END_COMMAND |||\n\nJSON FIELDS (all optional, combine as needed):\n- remove_files: [\"path1\", \"path2\"] — evict from knowledge_base.\n- pin_files: [\"path1\"] — mark as permanent (never evicted).\n- unpin_files: [\"path1\"] — remove pin status.\n- update_summary: \"text\" — replace task summary.\n- summarize_history: {\"agent_name\": \"<name>\", \"keep_count\": <N>} — compress older turns.\n\nBEHAVIOR:\n- Invalid JSON → error message with format hint.\n- Empty args (no JSON) → returns success with no-op.\n- If config.OPTIMIZER_AGENT is set: additionally runs LLM-driven context analysis.\n- Delegates to context.orchestrator for actual operations.",
         function(args, ctx, agent_name)
             -- ALWAYS parse explicit JSON instructions first
             local instructions = {}
@@ -43,7 +43,7 @@ local function register(registry)
             end
             return { output = "\n[SYSTEM]: Context optimized." }
         end,
-        OPTIMIZE_CONTEXT_MANIFEST)
+        nil, OPTIMIZE_CONTEXT_MANIFEST)
 end
 
 return { register = register }

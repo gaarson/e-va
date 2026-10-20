@@ -14,7 +14,7 @@ local EXPLORE_TREE_MANIFEST = {
 }
 
 local function register(registry)
-    registry.register("explore_tree", "Explore directory structure with depth limit", "||| COMMAND |||\nexplore_tree:src/api:2\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("explore_tree", "Explores directory tree showing files with line counts. Depth defaults to 1 if not specified.", "||| COMMAND |||\nexplore_tree:src/api:2\n||| END_COMMAND |||\n\nArgs: <path>[:<depth>]\n- depth is optional (defaults to 1 if omitted).\n- Shows files with line count, directories as (0 lines).\n- Path is relative to PROJECT_ROOT.\n- Result stored in ctx.file_tree for context management.", function(args, ctx, agent_name)
         local path, depth = args:match("^(.-):(%d+)$")
         if not path then
             path = utils.trim(args)

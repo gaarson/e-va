@@ -51,7 +51,7 @@ This tool is marked [MS] (Multi-Stage). When you see this tag, use the SHORT-FOR
 ]],
 }
 local function register(registry)
-    registry.register("create_file", "Creates a new file with the given content.", "||| COMMAND |||\ncreate_file:src/new_module.lua\n\nlocal M = {}\nreturn M\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("create_file", "Creates a new file (or overwrites existing). Auto-creates parent directories. Creates .bak backup if file already exists. Multi-stage: use short-form create_file:file/path for MS pipeline.", "||| COMMAND |||\ncreate_file:src/new_module.lua\n\nlocal M = {}\nreturn M\n||| END_COMMAND |||\n\nFORMAT:\n- Line 1 after create_file: = file path.\n- All remaining lines = file content (verbatim, no fences).\n\nBEHAVIOR:\n- Auto-creates parent directories (mkdir -p).\n- If file exists: creates .bak backup (if config.CREATE_BACKUPS ~= false), then overwrites.\n- On success: signal MUTATION_SUCCESS.\n- MS SHORT-FORM: create_file:file/path (no content) -> routes to multi-stage pipeline.", function(args, ctx, agent_name)
         local lines = {}
         for line in args:gmatch("([^\n]*)\n?") do
             table.insert(lines, line)

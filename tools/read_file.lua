@@ -23,7 +23,7 @@ local READ_FILE_MANIFEST = {
     intent_guideline = "read_file: Loads full file content into context for analysis.",
 }
 local function register(registry)
-    registry.register("read_file", "Loads full file into memory", "||| COMMAND |||\nread_file:src/main.c\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("read_file", "Loads full file content into context for analysis. Cached after first read (subsequent reads are zero-I/O). For large files (>2000 bytes), use read_chunk for specific line ranges.", "||| COMMAND |||\nread_file:src/main.c\n||| END_COMMAND |||", function(args, ctx, agent_name)
         local rel_path = utils.normalize_path(ctx.config.PROJECT_ROOT, args)
         if ctx.knowledge_base[rel_path] then
             -- Cache hit: re-inject content so LLM actually sees it (may have been pruned from history).
@@ -50,7 +50,7 @@ local function register(registry)
                 if file_size > 2000 then
                     hint = string.format("\nTip: This file is %d bytes. Use `read_chunk:%s:start-end` to inspect specific sections if needed.", file_size, rel_path)
                 end
-                return { output = "\n[SYSTEM]: Successfully loaded '" .. rel_path .. "' into memory.\n\n" .. file_context_xml .. hint .. "\n." }
+                return { output = "\n[SYSTEM]: Successfully loaded '" .. rel_path .. "' into memory.\n\n" .. file_context_xml .. hint }
             else
                 return { output = "\n[ERROR]: " .. tostring(err) }
             end

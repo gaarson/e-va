@@ -11,7 +11,7 @@ local TASK_COMPLETE_MANIFEST = {
     intent_guideline = "task_complete: Signals that the current task is finished.",
 }
 local function register(registry)
-    registry.register("task_complete", "Signal completion of the current task step", "||| COMMAND |||\ntask_complete\n||| END_COMMAND |||", function(args, ctx, agent_name)
+    registry.register("task_complete", "Advances execution plan by one step, or signals ALL tasks complete if at last step. If no execution_plan exists, immediately signals PIPELINE_NEXT_STAGE.", "||| COMMAND |||\ntask_complete\n||| END_COMMAND |||\n\nNo arguments required.\n\nBEHAVIOR:\n- If execution_plan exists and current_task_index < total: advances to next step, reports new target file.\n- If at last step: generates completion report (all steps + modified files), returns PIPELINE_NEXT_STAGE.\n- If NO execution_plan: immediately returns PIPELINE_NEXT_STAGE (Task marked as complete).\n- Valid without args (no_arg_ok=true).", function(args, ctx, agent_name)
         -- FIX: Ensure execution_plan is initialized to prevent crash if nil
         if not ctx.execution_plan then
             ctx.execution_plan = {}
