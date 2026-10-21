@@ -314,12 +314,9 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
         local result_summary = ""
         if step.result then
             result_summary = tostring(step.result)
-            if #result_summary > 500 then
-                result_summary = result_summary:sub(1, 500) .. "...[truncated]"
-            end
         end
         ctx:add_message(agent_name, "system", string.format(
-            "[MULTI-STAGE RESULT] Tool: %s. Iterations: %d.\n%s",
+            "[MULTI-STAGE RESULT] Tool: %s. Iterations: %d.\nCHANGE HAS BEEN APPLIED TO DISK SUCCESSFULLY. DO NOT REPEAT THIS OPERATION.\n%s",
             tool_name, step.iterations or 0, result_summary
         ))
         multi_exec:save_state()

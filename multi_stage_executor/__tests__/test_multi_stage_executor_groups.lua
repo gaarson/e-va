@@ -86,7 +86,7 @@ end)
 -- TEST GROUP 2: Patch execution result includes file content for review
 -- ============================================================================
 describe("GROUP 2: Patch execution result enrichment", function()
-    it("Patch tool includes file content after patching", function()
+    it("Patch tool result contains raw output without full-file enrichment", function()
         local ctx = mock_ctx()
         ctx.knowledge_base["src/test.lua"] = "local x = 1\nlocal y = 2\nlocal z = 3\n"
         local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
@@ -94,8 +94,8 @@ describe("GROUP 2: Patch execution result enrichment", function()
         exec.payload = "src/test.lua\n<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 10\n>>>>>>> REPLACE"
         exec.state = multi_stage.STATES.COMMAND_READY
         local result = exec:feed_execution_result({ output = "[SUCCESS]: Applied 1 patch block(s) to src/test.lua.", signal = "MUTATION_SUCCESS" })
-        assert.truthy(exec.last_result:find("<file_content_after_patch"), "Includes file_content_after_patch tag")
-        assert.truthy(exec.last_result:find("local x = 1"), "Contains original file content")
+        assert.truthy(exec.last_result:find("Applied 1 patch block"), "Contains success message")
+        assert.falsy(exec.last_result:find("<file_content_after_patch"), "Should NOT include full file content enrichment")
     end)
 
     it("Non-patch tool does NOT include file content enrichment", function()
@@ -725,23 +725,23 @@ end)
 -- TEST GROUP 14: Review prompt includes tool-specific checks
 -- ============================================================================
 describe("GROUP 14: Review prompt tool-specific checks", function()
-    it("Patch review prompt mentions file_content_after_patch", function()
+    it("Patch review prompt mentions SEARCH blocks and diff", function()
         local ctx = mock_ctx()
         local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
         exec.intent = { TOOL = "patch", raw = "test" }
         exec.payload = "some payload"
         exec.last_result = "some result"
         local prompt = exec:build_review_prompt()
-        assert.truthy(prompt:find("file_content_after_patch"), "Patch review prompt mentions file_content_after_patch")
         assert.truthy(prompt:find("SEARCH block"), "Patch review prompt mentions SEARCH blocks")
+        assert.falsy(prompt:find("file_content_after_patch"), "Should NOT reference removed file_content_after_patch")
     end)
 
-    it("create_file review prompt mentions file creation", function()
+    it("create_file review prompt mentions content validation", function()
         local ctx = mock_ctx()
         local exec = multi_stage.new(ctx, "TEST_AGENT", { max_iterations = 3 })
         exec.intent = { TOOL = "create_file", raw = "test" }
         local prompt = exec:build_review_prompt()
-        assert.truthy(prompt:find("file_content_after_create"), "create_file review prompt mentions file_content_after_create")
+        assert.falsy(prompt:find("file_content_after_create"), "Should NOT reference removed file_content_after_create")
     end)
 
     it("delegate_plan review prompt mentions JSON and memo", function()

@@ -117,6 +117,7 @@ Rules:
 
 M.DEFAULT_GENERATE_SYSTEM = [[
 You are in RAW OUTPUT MODE. You must output ONLY the raw file/code content. Do NOT use any command syntax, tool invocation format, ||| COMMAND ||| markers, or file path prefixes. Your entire response will be written directly to a file. You will be provided with relevant source files in the prompt for reference. Use them as ground truth — do NOT invent code that differs from what is shown.
+If a file is marked with status="CURRENT_STATE_AFTER_PREVIOUS_ATTEMPT", it shows what the PREVIOUS (incorrect) attempt produced. Use it ONLY to understand what went wrong and what the current state is. Do NOT reproduce that content as your output unless the correction explicitly says to keep parts of it.
 {context_block}
 CRITICAL RULE:
 Your output will be INSERTED DIRECTLY AS THE TOOL'S PAYLOAD.

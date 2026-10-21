@@ -143,6 +143,16 @@ function M:build_generate_system_context()
     if tool_hint ~= "" then
         hint_block = "\n\n" .. tool_hint
     end
+    -- Normalize file_path for KB key comparison
+    local norm_file_path = self.file_path or ''
+    if norm_file_path ~= '' and self.ctx and self.ctx.config and self.ctx.config.PROJECT_ROOT then
+        norm_file_path = utils.normalize_path(self.ctx.config.PROJECT_ROOT, norm_file_path)
+    end
+    -- Determine file block status attribute (revision iterations mark previous state)
+    local file_status_attr = ''
+    if self.iteration > 1 then
+        file_status_attr = ' status="CURRENT_STATE_AFTER_PREVIOUS_ATTEMPT"'
+    end
     -- Build context block from knowledge_base (relevant source files)
     local context_block = ''
     local max_context_chars = 16000
@@ -152,7 +162,7 @@ function M:build_generate_system_context()
         local kb = self.ctx.knowledge_base
         local intent_text = self.intent_raw or ''
         local task_text = self.task or ''
-        local file_path = self.file_path or ''
+        local file_path = norm_file_path
         for path, file_content in pairs(kb) do
             if total_len < max_context_chars then
                 local is_relevant = false
@@ -170,7 +180,7 @@ function M:build_generate_system_context()
                     if #fc > remaining - 50 then
                         fc = fc:sub(1, math.max(remaining - 50, 0)) .. '\n...[truncated]'
                     end
-                    local block = string.format('<file path="%s">\n%s\n</file>', path, fc)
+                    local block = string.format('<file path="%s"%s>\n%s\n</file>', path, file_status_attr, fc)
                     collected[#collected + 1] = block
                     total_len = total_len + #block
                 end
@@ -181,13 +191,13 @@ function M:build_generate_system_context()
     if self.file_path and self.file_path ~= '' then
         local already_included = false
         for _, block in ipairs(collected) do
-            if block:find(self.file_path, 1, true) then
+            if block:find(norm_file_path, 1, true) then
                 already_included = true
                 break
             end
         end
         if not already_included and self.ctx and self.ctx.config and self.ctx.config.PROJECT_ROOT then
-            local full_path = self.ctx.config.PROJECT_ROOT .. '/' .. self.file_path
+            local full_path = self.ctx.config.PROJECT_ROOT .. '/' .. norm_file_path
             local f = io.open(full_path, 'r')
             if f then
                 local fc = f:read('*a')
@@ -197,7 +207,7 @@ function M:build_generate_system_context()
                     if #fc > remaining - 50 then
                         fc = fc:sub(1, math.max(remaining - 50, 0)) .. '\n...[truncated]'
                     end
-                    local block = string.format('<file path="%s">\n%s\n</file>', self.file_path, fc)
+                    local block = string.format('<file path="%s"%s>\n%s\n</file>', norm_file_path, file_status_attr, fc)
                     collected[#collected + 1] = block
                 end
             end

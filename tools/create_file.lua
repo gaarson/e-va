@@ -7,25 +7,6 @@ local CREATE_FILE_MANIFEST = {
         end
         return true, nil
     end,
-    enrich_result = function(output_str, ctx, payload, intent, file_path)
-        local fp = file_path or ""
-        if fp == "" and payload then
-            local first_line = payload:match("^[^\r\n]+")
-            if first_line and utils.trim(first_line) ~= "" then
-                fp = utils.trim(first_line)
-            end
-        end
-        if fp == "" then return output_str end
-        local normalized = fp
-        if not fp:match("^/") then
-            normalized = utils.normalize_path(ctx.config.PROJECT_ROOT, fp)
-        end
-        local content = ctx.knowledge_base[normalized]
-        if content then
-            return output_str .. string.format("\n\n<file_content_after_create path=\"%s\">\n%s\n</file_content_after_create>", normalized, content)
-        end
-        return output_str .. string.format("\n\n[file_content_after_create path=\"%s\"] File not found in knowledge_base.", normalized)
-    end,
     generate_hint = [[
 PAYLOAD FORMAT FOR `create_file`:
 Output ONLY the full file content. DO NOT include the file path.
@@ -42,7 +23,7 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `create_file`:
 - [ ] Does the file content match the stated intent/goal?
 - [ ] Are there any obvious bugs or issues in the generated code?
 - [ ] If the file is a module, does it have a proper return statement?
-- [ ] Does the <file_content_after_create> block reflect the intended content?
+
 - [ ] IF USING PARTIAL VERDICT: List which sections passed and which failed. Only revise the failed sections.
 ]],
     intent_guideline = "- `create_file`: Use when creating a NEW file. Specify the full file path.",

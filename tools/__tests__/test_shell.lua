@@ -18,7 +18,7 @@ local shell_module = require("tools.shell")
 local captured = {}
 do
     local mock_registry = {
-        register = function(name, desc, usage, h, man)
+        register = function(name, desc, usage, h, ms_doc, man)
             captured.handler = h
             captured.manifest = man
             captured.name = name

@@ -278,7 +278,7 @@ describe("multi_stage_executor.lua - Execution Result Handling", function()
         assert.equals(result.stage, "review", "should transition to review stage")
         assert.truthy(executor.last_result:find("Command output here", 1, true), "last_result should contain string output")
     end)
-    it("feed_execution_result enriches patch result with file content from knowledge_base", function()
+    it("feed_execution_result does NOT enrich patch result with full file content", function()
         local ctx = make_mock_ctx()
         ctx.knowledge_base["src/main.c"] = "int main() { return 0; }\n"
         local executor = multi_stage.new(ctx, "test_agent")
@@ -288,8 +288,8 @@ describe("multi_stage_executor.lua - Execution Result Handling", function()
         executor.state = multi_stage.STATES.COMMAND_READY
         local result = executor:feed_execution_result({ output = "Applied 1 patch block(s) to src/main.c" })
         assert.equals(result.stage, "review", "should transition to review stage")
-        assert.truthy(executor.last_result:find("<file_content_after_patch", 1, true), "should inject file content after patch")
-        assert.truthy(executor.last_result:find("int main()", 1, true), "file content should be included")
+        assert.truthy(executor.last_result:find("Applied 1 patch block", 1, true), "should contain success message")
+        assert.falsy(executor.last_result:find("<file_content_after_patch", 1, true), "should NOT inject full file content")
     end)
 end)
 -- ============================================================
@@ -597,7 +597,7 @@ describe("multi_stage_executor.lua - Manifest Integration", function()
         -- Should trigger regeneration or error
         assert.is_true(result.stage == "generate" or result.stage == "error", "invalid payload should fail validation")
     end)
-    it("manifest.enrich_result is called for patch tool", function()
+    it("patch tool no longer has enrich_result (diff-only output)", function()
         local ctx = make_mock_ctx()
         ctx.knowledge_base["src/main.c"] = "int main() { return 0; }\n"
         local executor = multi_stage.new(ctx, "test_agent")
@@ -608,8 +608,8 @@ describe("multi_stage_executor.lua - Manifest Integration", function()
         executor.state = multi_stage.STATES.COMMAND_READY
         local result = executor:feed_execution_result({ output = "Applied 1 patch block(s) to src/main.c" })
         assert.equals(result.stage, "review", "should transition to review stage")
-        -- manifest.enrich_result for patch injects file content
-        assert.truthy(executor.last_result:find("<file_content_after_patch", 1, true), "enrich_result should inject file content")
+        -- enrich_result removed: no full-file injection
+        assert.falsy(executor.last_result:find("<file_content_after_patch", 1, true), "should NOT inject file content")
     end)
     it("manifest.generate_hint is injected into generate prompt", function()
         local ctx = make_mock_ctx()

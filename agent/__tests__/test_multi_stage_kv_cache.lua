@@ -318,7 +318,7 @@ describe("Multi-Stage KV-Cache Fork-and-Rollback", function()
             assert.truthy(summary.content:find("[MULTI-STAGE ERROR]"))
             assert.truthy(summary.content:find("Failed:"))
         end)
-        it("long results are truncated to 500 chars", function()
+        it("long results are included in full without truncation", function()
             local ctx = make_mock_ctx({ { role = "user", content = "Big task" } })
             local long_executor = make_mock_executor_full_flow()
             local orig_feed = long_executor.feed_response
@@ -337,8 +337,11 @@ describe("Multi-Stage KV-Cache Fork-and-Rollback", function()
             )
             local final_history = ctx.history.test_agent
             local summary = final_history[#final_history]
-            assert.is_true(#summary.content < 700, "Should be truncated, got: " .. #summary.content)
-            assert.truthy(summary.content:find("%.%.%.%[truncated%]"))
+            -- Full result should be present (no truncation)
+            assert.is_true(#summary.content > 2000, "Full result should be included, got: " .. #summary.content)
+            assert.falsy(summary.content:find("%.%.%.%[truncated%]"), "Should NOT be truncated")
+            -- Explicit DO-NOT-REPEAT instruction must be present
+            assert.truthy(summary.content:find("DO NOT REPEAT THIS OPERATION"))
         end)
     end)
     describe("Multi-Iteration Flow", function()

@@ -15,31 +15,7 @@ local PATCH_MANIFEST = {
         end
         return true, nil
     end,
-    enrich_result = function(output_str, ctx, payload, intent, file_path)
-        local file_paths_list = {}
-        if file_path and file_path ~= "" then
-            file_paths_list[#file_paths_list + 1] = file_path
-        elseif payload then
-            local first_line = payload:match("^[^\r\n]+")
-            if first_line and utils.trim(first_line) ~= "" then
-                file_paths_list[#file_paths_list + 1] = utils.trim(first_line)
-            end
-        end
-        local extra = ""
-        for _, fp in ipairs(file_paths_list) do
-            local normalized = fp
-            if not fp:match("^/") then
-                normalized = utils.normalize_path(ctx.config.PROJECT_ROOT, fp)
-            end
-            local content = ctx.knowledge_base[normalized]
-            if content then
-                extra = extra .. string.format("\n\n<file_content_after_patch path=\"%s\">\n%s\n</file_content_after_patch>", normalized, content)
-            else
-                extra = extra .. string.format("\n\n[file_content_after_patch path=\"%s\"] File not found in knowledge_base.", normalized)
-            end
-        end
-        return output_str .. extra
-    end,
+
     generate_hint = [[
 PAYLOAD FORMAT FOR `patch`:
 Output ONLY SEARCH/REPLACE diff blocks. DO NOT include the file path.
@@ -72,11 +48,7 @@ TOOL-SPECIFIC REVIEW CHECKS FOR `patch`:
 - [ ] Did the execution result confirm successful patching (no [PATCH FAILED])?
 - [ ] Are the changed lines syntactically valid for the target language?
 - [ ] If revision was requested, were the reviewer's corrections applied correctly?
-- [ ] Does the <file_content_after_patch> block reflect the intended changes?
-- [ ] IF <file_content_after_patch> IS PRESENT IN THE EXECUTION RESULT:
-     Compare the file content AFTER patching against the intended changes.
-     Verify that the REPLACE blocks were actually applied correctly in the resulting file.
-     Check that no unintended side effects occurred (e.g., broken indentation, missing lines).
+
 - [ ] IF --- UNIFIED DIFF --- IS PRESENT IN THE EXECUTION RESULT:
      Verify the diff accurately represents the changes made.
      Confirm that removed lines (-) and added lines (+) match the intended modification.
