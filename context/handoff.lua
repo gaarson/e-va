@@ -3,11 +3,9 @@
 -- All functions take ctx (the context_flow instance) as the first argument.
 local M = {}
 local utils = require("utils")
-local history = require("context.history")
+local manager = require("context.manager")
 local builder = require("context.builder")
 local json = require("JSON")
-local summarization = require("optimizer.summarization")
-local comp_helpers = require("context_compressor.helpers")
 -- ============================================================================
 -- GENERATE HANDOFF MEMO
 -- ============================================================================
@@ -192,26 +190,15 @@ function M.clear_history_for_stage(ctx, strategy)
                         table.insert(msgs_to_summarize, msg)
                     end
                 end
-                -- Attempt LLM summarization of removed messages
+                -- Deterministic summarization (no LLM call)
                 local summary_text = ""
                 if #msgs_to_summarize > 0 then
-                    local cfg = ctx.config or {}
-                    local ok, result = pcall(summarization.summarize_conversation_segment, msgs_to_summarize, nil, cfg)
-                    if ok and result and #result > 0 then
-                        summary_text = result
-                    else
-                        -- Fallback: use context_compressor.helpers._summarize_message for each removed message
-                        local fallback_parts = {}
-                        for _, msg in ipairs(msgs_to_summarize) do
-                            local part = comp_helpers._summarize_message(msg, nil)
-                            if part and #part > 0 then
-                                table.insert(fallback_parts, part)
-                            end
-                        end
-                        if #fallback_parts > 0 then
-                            summary_text = table.concat(fallback_parts, ". ")
-                        end
+                    local parts = {}
+                    for _, msg in ipairs(msgs_to_summarize) do
+                        local first_line = (msg.content or ""):match("^(.-)\n") or (msg.content or ""):sub(1, 80)
+                        table.insert(parts, string.format("[%s] %s", msg.role or "?", first_line:sub(1, 80)))
                     end
+                    summary_text = "[HISTORY SUMMARY: " .. #msgs_to_summarize .. " messages removed]\n" .. table.concat(parts, "\n")
                 end
                 -- Build the new history: task anchor (if found) + summary + kept messages
                 local new_hist = {}
@@ -311,7 +298,7 @@ function M.inject_handoff_files(ctx, agent_name)
     local files_to_pass = M.get_handoff_files(ctx)
     if not next(files_to_pass) then return end
     local parts = {}
-    local hist = history.get_history(ctx, agent_name)
+    local hist = manager.get_history(ctx, agent_name)
     local handoff_cfg = ctx.config.HANDOFF or {}
     local lazy_mode = handoff_cfg.lazy_mode or false
     local max_handoff_file_size = handoff_cfg.max_handoff_file_size or 50000
@@ -381,7 +368,7 @@ function M.inject_handoff_files(ctx, agent_name)
                 path, status, content
             ))
             -- Pin only full-content files (lazy files don't need pinning)
-            history.pin_file(ctx, path)
+            manager.pin_file(ctx, path)
         end
         -- Evict from KB if configured (file is already in agent's history)
         if evict then
@@ -424,7 +411,7 @@ function M.inject_handoff_files(ctx, agent_name)
             lazy_files_section = lazy_files_section .. "</LAZY_HANDOFF_FILES>"
         end
         local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n") .. pinned_targets_section .. lazy_files_section
-        history.add_message(ctx, agent_name, "user", block)
+        manager.add_message(ctx, agent_name, "user", block)
     end
 end
 return M

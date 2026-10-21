@@ -4,8 +4,22 @@
 local M = {}
 local utils = require("utils")
 local config_mod = require("context.config")
-local strategies = require("context.strategies")
 local images = require("context.images")
+--- Single injection strategy: stable_append (KV-cache friendly).
+--- Appends dynamic content as a separate user message at the end.
+local function _stable_append(messages, recency, digest)
+    local block = recency
+    if digest and digest ~= "" then block = block .. "\n\n" .. digest end
+    if block == "" then return end
+    -- Remove any previous dynamic_context message to avoid accumulation
+    for i = #messages, 1, -1 do
+        if messages[i].role == "user" and messages[i].content:match("^<dynamic_context>") then
+            table.remove(messages, i)
+            break
+        end
+    end
+    table.insert(messages, { role = "user", content = "<dynamic_context>\n" .. block .. "\n</dynamic_context>" })
+end
 -- ============================================================================
 -- CONTEXT BUILDING
 -- ============================================================================
@@ -51,8 +65,7 @@ function M.build_context(ctx, agent_name, agent_cfg, available_tokens)
     local recency = M.get_recency_block(ctx, already_present_paths)
     local recency_cost = estimate(recency)
     -- 5. Inject recency
-    local inject_fn = strategies.INJECTION_STRATEGIES[ctx.flow_config.context_injection.mode] or strategies.INJECTION_STRATEGIES.append_to_last_user
-    inject_fn(chat_buffer, recency, "")
+    _stable_append(chat_buffer, recency, "")
     -- Add handoff or initiation
     if #history == 0 then
         local init_msg = ctx.handoff_memo and

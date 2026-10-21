@@ -4,7 +4,7 @@
 local M = {}
 local utils = require("utils")
 local registry = require("tool_registry")
-local history = require("context.history")
+local manager = require("context.manager")
 -- ============================================================================
 -- VALIDATE TOOL RESPONSE (helper)
 -- ============================================================================
@@ -34,7 +34,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
     local cmd, parse_err = executor:parse_command(raw_content)
     -- 1. No command -> conversation
     if not cmd then
-        history.add_message(ctx, agent_name, "assistant", utils.trim(raw_content))
+        manager.add_message(ctx, agent_name, "assistant", utils.trim(raw_content))
         return { type = "CONVERSATION", hint = parse_err }
     end
     -- 2. Validation
@@ -47,10 +47,10 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
         return { type = "RETRY", message = string.format("Command rejected: %s. Output exactly one valid command.", val_err) }
     end
     -- 2.5. Deduplication check: block duplicate commands
-    if history.is_duplicate_command(ctx, cmd) then
+    if manager.is_duplicate_command(ctx, cmd) then
         -- Find the previous output of this command from history so the model can see the result
         local prev_output = ""
-        local hist = history.get_history(ctx, agent_name)
+        local hist = manager.get_history(ctx, agent_name)
         -- Search backwards through history for the last user message that contains output from this command
         local tool_name = cmd:match("^([^:]+)")
         for j = #hist, 1, -1 do
@@ -85,7 +85,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
             cmd,
             prev_output_section
         )
-        history.add_message(ctx, agent_name, "user", dup_msg)
+        manager.add_message(ctx, agent_name, "user", dup_msg)
         return { type = "DUPLICATE", message = dup_msg }
     end
     -- 2.6. Circuit breaker check: block tools in cooldown
@@ -104,7 +104,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
                         "Please wait %d turn(s) before retrying this tool. Try a different approach or tool.",
                         tool_name_cb, remaining
                     )
-                    history.add_message(ctx, agent_name, "user", cb_msg)
+                    manager.add_message(ctx, agent_name, "user", cb_msg)
                     return { type = "CIRCUIT_BREAKER", message = cb_msg }
                 end
             end
@@ -120,7 +120,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
         local logger = require("logger")
         logger.error(string.format("[COMMAND_FLOW] registry.execute threw an error for tool '%s': %s",
             tool_name or "unknown", tostring(res_or_err)))
-        history.add_message(ctx, agent_name, "user",
+        manager.add_message(ctx, agent_name, "user",
             string.format("[SYSTEM: TOOL ERROR] Tool '%s' encountered an internal error: %s",
                 tool_name or "unknown", tostring(res_or_err)))
         return { type = "ERROR", message = "Tool execution failed: " .. tostring(res_or_err) }
@@ -132,7 +132,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
         local logger = require("logger")
         logger.error(string.format("[COMMAND_FLOW] Invalid tool response from '%s': %s",
             tool_name or "unknown", val_err))
-        history.add_message(ctx, agent_name, "user",
+        manager.add_message(ctx, agent_name, "user",
             string.format("[SYSTEM: TOOL ERROR] Tool '%s' returned invalid response: %s",
                 tool_name or "unknown", val_err))
         return { type = "ERROR", message = "Invalid tool response: " .. val_err }
@@ -145,17 +145,17 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
     end
     local trimmed_hist = utils.trim(hist_content)
     if trimmed_hist ~= "" then
-        history.add_message(ctx, agent_name, "assistant", trimmed_hist)
+        manager.add_message(ctx, agent_name, "assistant", trimmed_hist)
     end
     -- If response was only a command, add system marker to preserve role alternation
     if trimmed_hist == "" and cmd then
-        history.add_message(ctx, agent_name, "assistant", "[SYSTEM: Executing command without additional reasoning]")
+        manager.add_message(ctx, agent_name, "assistant", "[SYSTEM: Executing command without additional reasoning]")
     end
     if ctx.flow_config.command_flow.auto_squash_on_mutation then
-        history.squash_last_mutation(ctx, agent_name)
+        manager.squash_last_mutation(ctx, agent_name)
     end
     -- Record this command as executed for dedup purposes
-    history.add_executed_command(ctx, cmd)
+    manager.add_executed_command(ctx, cmd)
     -- 3.5. Circuit breaker: track failures and successes
     if cb_config and cb_config.enabled and tool_name then
         local is_failure = false
@@ -177,7 +177,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
                         "It will be blocked for %d turns. Consider alternative approaches.",
                         tool_name, cb_entry.failures, cb_config.cooldown_turns
                     )
-                    history.add_message(ctx, agent_name, "user", warn_msg)
+                    manager.add_message(ctx, agent_name, "user", warn_msg)
                 end
             else
                 ctx.circuit_breaker_state[tool_name] = cb_entry
@@ -192,7 +192,7 @@ function M.process_turn_response(ctx, agent_name, raw_content, executor)
     -- Add result to history as user/system
     if res.output then
         local sanitized_output = res.output
-        history.add_message(ctx, agent_name, "user", sanitized_output)
+        manager.add_message(ctx, agent_name, "user", sanitized_output)
     end
     return { type = res.signal == "PIPELINE_NEXT_STAGE" and "COMPLETED" or "EXECUTED",
              tool = tool_name, output = res.output, signal = res.signal }

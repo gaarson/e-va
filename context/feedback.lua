@@ -2,7 +2,7 @@
 -- Coder feedback loop extracted from context_flow.lua.
 -- All functions take ctx (the context_flow instance) as the first argument.
 local M = {}
-local history = require("context.history")
+local manager = require("context.manager")
 -- ============================================================================
 -- RECORD TASK SUCCESS
 -- ============================================================================
@@ -116,6 +116,6 @@ end
 -- ============================================================================
 function M.inject_feedback_as_message(ctx, agent_name, feedback_text)
     if not feedback_text or feedback_text == "" then return end
-    history.add_message(ctx, agent_name, "system", "[CODER FEEDBACK]\n" .. feedback_text)
+    manager.add_message(ctx, agent_name, "system", "[CODER FEEDBACK]\n" .. feedback_text)
 end
 return M

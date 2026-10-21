@@ -1,4 +1,3 @@
-
 #!/bin/bash
 PROJECT_ROOT="$(pwd)"
 # Load .env file if it exists (parse KEY=VALUE lines and export them)

@@ -6,7 +6,6 @@ local llm = require("llm_handler")
 local logger = require("logger")
 local status_server = require("status_server")
 local context_optimizer = require("context_optimizer")
-local optimizer = require("optimizer")
 local multi_stage_executor = require("multi_stage_executor")
 local multi_stage = require("agent.multi_stage")
 local tool_registry = require("tool_registry")
@@ -74,7 +73,7 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         utils = utils,
         llm = llm,
         context_optimizer = context_optimizer,
-        optimizer = optimizer,
+        
         registry = tool_registry
     }
     ctx.current_turn = turn
@@ -403,17 +402,6 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
         status_server.add_log(string.format("Turn %d: Tool error - %s", turn, result.message or "unknown"))
     end
 
-    -- PROACTIVE CONTEXT OPTIMIZATION
-    if ctx:should_squash(agent_name) then
-        optimizer.analyze_and_optimize(ctx, config)
-        local last_res = optimizer.get_last_result()
-        if last_res then
-            logger.info(string.format("[OPTIMIZER] Last result: summary='%s', removed=%d, pinned=%d",
-                last_res.new_summary or "N/A",
-                #last_res.files_to_remove,
-                #last_res.files_to_pin))
-        end
-    end
 
     -- 3. Handle result
     if result.type == "COMPLETED" then

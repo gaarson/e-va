@@ -276,22 +276,6 @@ function M.get()
         -- }
     }
 
-    -- Добавь в возвращаемую таблицу cfg:
-    cfg.OPTIMIZER_AGENT = {
-        name = "OPTIMIZER",
-        url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
-        token = get_api_key(),
-        -- is_reasoning = true,
-        model = resolve_env("LLM_MODEL", "local_model"),
-        -- model = "local_model",
-        -- is_reasoning = true,
-        params = {
-            stream = true,
-            temperature = 0.1,
-            chat_template_kwargs = {enable_thinking = false, preserve_thinking = false},
-            max_tokens = 16384
-        }
-    }
 
     cfg.AGENTS = {
         ANALYZER = {

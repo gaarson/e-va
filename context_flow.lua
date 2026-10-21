@@ -1,31 +1,24 @@
 -- context_flow.lua
 -- Thin facade delegating to submodules.
 -- Submodules: config, strategies, history, command_flow, state, feedback,
---             handoff, orchestrator, tokenizer, images, builder.
+--             handoff, manager, tokenizer, images, builder.
 
 local M = {}
-
 local utils = require("utils")
 local config      = require("context.config")
-local strategies  = require("context.strategies")
-local history     = require("context.history")
+local manager     = require("context.manager")
 local cmd_flow    = require("context.command_flow")
 local state       = require("context.state")
 local feedback    = require("context.feedback")
 local handoff     = require("context.handoff")
-local orchestrator= require("context.orchestrator")
 local tokenizer   = require("context.tokenizer")
 local images      = require("context.images")
 local builder     = require("context.builder")
-
 -- ============================================================================
 -- CONSTANTS (re-exported from submodules)
 -- ============================================================================
 M.DEFAULT_CONFIG      = config.DEFAULT_CONFIG
-M.IMPORTANCE_SCORES   = strategies.IMPORTANCE_SCORES
 M.MODEL_DIVISORS      = tokenizer.MODEL_DIVISORS
-M.PRUNE_STRATEGIES    = strategies.PRUNE_STRATEGIES
-M.INJECTION_STRATEGIES= strategies.INJECTION_STRATEGIES
 
 -- ============================================================================
 -- CONSTRUCTOR
@@ -77,70 +70,70 @@ function M.new(flow_config, full_config)
 end
 
 -- ============================================================================
--- HISTORY / KNOWLEDGE BASE (delegates to context.history)
+-- HISTORY / KNOWLEDGE BASE (delegates to context.manager)
 -- ============================================================================
 function M:add_message(agent_name, role, content)
-    return history.add_message(self, agent_name, role, content)
+    return manager.add_message(self, agent_name, role, content)
 end
 function M:get_history(agent_name)
-    return history.get_history(self, agent_name)
+    return manager.get_history(self, agent_name)
 end
 function M:prune_history(agent_name)
-    return history.prune_history(self, agent_name)
+    return manager.prune_history(self, agent_name)
 end
 function M:compress_history(agent_name)
-    return history.compress_history(self, agent_name)
+    return manager.compress_history(self, agent_name)
 end
 function M:squash_last_mutation(agent_name)
-    return history.squash_last_mutation(self, agent_name)
+    return manager.squash_last_mutation(self, agent_name)
 end
 function M:add_file(path, content)
-    return history.add_file(self, path, content)
+    return manager.add_file(self, path, content)
 end
 function M:pin_file(path)
-    return history.pin_file(self, path)
+    return manager.pin_file(self, path)
 end
 function M:unpin_file(path)
-    return history.unpin_file(self, path)
+    return manager.unpin_file(self, path)
 end
 function M:add_tool_output(tool_name, output)
-    return history.add_tool_output(self, tool_name, output)
+    return manager.add_tool_output(self, tool_name, output)
 end
 function M:track_requested_file(path)
-    return history.track_requested_file(self, path)
+    return manager.track_requested_file(self, path)
 end
 function M:clear_turn_requested_files()
-    return history.clear_turn_requested_files(self)
+    return manager.clear_turn_requested_files(self)
 end
 function M:is_duplicate_command(cmd)
-    return history.is_duplicate_command(self, cmd)
+    return manager.is_duplicate_command(self, cmd)
 end
 function M:add_executed_command(cmd)
-    return history.add_executed_command(self, cmd)
+    return manager.add_executed_command(self, cmd)
 end
 function M:should_squash(agent_name)
-    return history.should_squash(self, agent_name)
+    return manager.should_squash(self, agent_name)
 end
 function M:drop_last_message(agent_name)
-    return history.drop_last_message(self, agent_name)
+    return manager.drop_last_message(self, agent_name)
 end
 function M:replace_last_assistant_message(agent_name, new_content)
-    return history.replace_last_assistant_message(self, agent_name, new_content)
+    return manager.replace_last_assistant_message(self, agent_name, new_content)
 end
 function M:add_thought(turn, thought_text)
-    return history.add_thought(self, turn, thought_text)
+    return manager.add_thought(self, turn, thought_text)
 end
 function M:get_thoughts_digest()
-    return history.get_thoughts_digest(self)
+    return manager.get_thoughts_digest(self)
 end
 function M:touch_file(path)
-    return history.touch_file(self, path)
+    return manager.touch_file(self, path)
 end
 function M:has_searched(query)
-    return history.has_searched(self, query)
+    return manager.has_searched(self, query)
 end
 function M:add_search_result(query, result)
-    return history.add_search_result(self, query, result)
+    return manager.add_search_result(self, query, result)
 end
 
 -- ============================================================================
@@ -272,10 +265,10 @@ function M:sync_files()
 end
 
 -- ============================================================================
--- ORCHESTRATOR (delegates to context.orchestrator)
+-- OPTIMIZE CONTEXT (delegates to context.manager)
 -- ============================================================================
 function M:optimize_context(instructions)
-    return orchestrator.optimize_context(self, instructions)
+    return manager.optimize_context(self, instructions)
 end
 
 -- ============================================================================
