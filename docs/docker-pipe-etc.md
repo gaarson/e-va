@@ -132,6 +132,7 @@ elseif a == "--pipe" then
 ```
 
 Флаг `--pipe` устанавливает `parsed.is_pipe = true`. В `agent/init.lua:92`:
+ Флаг `--debug` (agent/cli.lua:23-24) включает verbose-логирование через `logger.set_debug(true)` (init.lua:88-90).
 
 ```lua
 if parsed.is_pipe then
@@ -249,7 +250,7 @@ M.STATES = {
 1. **Явный:** `quit` или `exit` как отдельная строка stdin → `break` из while loop
 2. **Slash-команда:** `/abort` → `break`
 3. **EOF:** `read_line` возвращает `nil` при закрытии stdin → `break`
-4. **SIGTERM/SIGINT:** Обработчик в `agent/init.lua:33-36` → flush logs → `os.exit(143/144)`
+4. **SIGTERM/SIGINT:** Функция `_signal_handler()` в `agent/init.lua:51-57` (flush logs + status_server.stop + os.exit). **ВНИМАНИЕ:** функция НЕ зарегистрирована через signal.signal() — это dead code. Реальная обработка сигналов: C-level `patcher_core.setup_sigint()` (init.lua:73) + переопределённый `os.exit` (init.lua:45-50)
 5. **MAX_TURNS:** Достигнут лимит `config.PIPELINE_SETTINGS.MAX_TURNS` (default 420) → `os.exit(1)`
 
 **Docker-specific:** `STOPSIGNAL SIGQUIT` в Dockerfile. `tini` как PID 1 корректно reap'ит zombie-процессы.
@@ -261,7 +262,7 @@ M.STATES = {
 | Пустая строка в stdin | Игнорируется, цикл продолжается | `task.lua:103` |
 | Строка начинается с `/` но не является валидной командой | Возвращает `cmd.action == "ERROR"` с сообщением | `task.lua:126-127` |
 | LLM недоступен | 5 retries с exponential backoff (5s→10s→20s→40s→80s), затем FATAL | `turn.lua:115-131` |
-| Пустой ответ от LLM | Классификация причины + recovery strategy | `turn.lua:248-270` |
+| Пустой ответ от LLM | Классификация причины + recovery strategy (multi_stage dispatcher) | `turn.lua:381` → `agent/multi_stage.lua:134` (`recover_from_empty_response`) |
 | Duplicate command | Блокируется, inject warning, AUTO_LOOP | `command_flow.lua` |
 | Circuit breaker (3 consecutive failures) | Tool в cooldown на 5 turns | `config.lua: CIRCUIT_BREAKER` |
 | Loop guard (risk ≥ 0.85) | Глобальный блок, circuit breaker message | `loop_guard.lua` |
@@ -321,7 +322,7 @@ echo "$RESULT"
 
 | Image | Base | Content | ENV Flag |
 |-------|------|---------|----------|
-| e-va-base | debian:unstable-slim | lua5.4, gcc, git, curl, luarocks, ripgrep, 28 Lua pkgs, source, C ext, agentuser, init.sh | none |
+| e-va-base | debian:unstable-slim | lua5.4, gcc, git, curl, luarocks, ripgrep, 26 Lua pkgs, source, C ext, agentuser, init.sh | none |
 | e-va-browser | FROM e-va-base:latest | nodejs, npm, Chrome libs, chrome+wrapper, mcp | EVA_MODULE_BROWSER=1 |
 | e-va-desktop | FROM e-va-browser:latest | cage+neatvnc+wayvnc from source | EVA_MODULE_DESKTOP=1 |
 
@@ -407,7 +408,7 @@ services:
 | `LLM_BASE_URL` | .env / runtime | `http://localhost:8000/v1/chat/completions` | LLM endpoint |
 | `LLM_MODEL` | .env / runtime | `default-model` | Model identifier |
 | `EVA_STATUS_PORT` | Dockerfile ENV / runtime | `8080` | Status server port |
-| `CHROME_PATH` | Dockerfile ENV | `/usr/bin/google-chrome-stable` | Chrome binary path |
+| `CHROME_PATH` | Dockerfile.browser ENV | `/usr/bin/google-chrome-stable` | Chrome binary path (browser layer only) |
 | `LUA_PATH` | Dockerfile ENV | (see above) | Lua module search path |
 | `LUA_CPATH` | Dockerfile ENV | (see above) | Lua C module search path |
 | `GIT_EVA_URL` | Runtime env | — | If set, clones repo at startup |
@@ -725,12 +726,13 @@ The `shell` tool allows the agent to execute arbitrary shell commands within the
 | `CONTEXT_FLOW.command_flow` | strict_parsing=true, max_retries=3, dedup_exceptions=[...] | Command parsing behavior |
 | `PIPELINE_SETTINGS` | MAX_TURNS=420, ABORT_ON_FATAL=true | Pipeline limits |
 | `HANDOFF` | enabled=true, clear_history="smart", max_memo_tokens=12000 | Stage transition data passing |
+ | `HANDOFF.feedback_to_architect` | enabled=true, max_feedback_tokens=8192, sections=[tasks_completed,tasks_failed,errors_encountered,plan_deviations,recommendations] | CODER sends error summaries back to ARCHITECT for plan adjustment |
 | `CIRCUIT_BREAKER` | threshold=3, cooldown_turns=5 | Tool failure handling |
 | `IMAGE_CONFIG` | max_images_per_turn=10, max_image_dimension=1024 | Image processing |
 | `AGENTS.ANALYZER` | is_reasoning=true, allowed_tools=[read,search,shell,delegate_plan,...] | Analysis agent config |
-| `AGENTS.ARCHITECT` | is_reasoning=true, allowed_tools=[read,search,shell,delegate_plan,ask_user,...] | Planning agent config |
+| `AGENTS.ARCHITECT` | is_reasoning=true, allowed_tools=[read_file,read_chunk,search,explore_tree,shell,delegate_plan,task_complete,outline,pin,unpin,optimize_context] | Planning agent config |
 | `AGENTS.CODER` | is_reasoning=false, multi_stage_tools=[create_file,patch], allowed_tools=[patch,create_file,read,shell,task_complete] | Implementation agent config |
-| `PIPELINE` | [{REVIEW_AND_CHAT, ARCHITECT, interactive}, {IMPLEMENTATION, CODER, sequential}] | Stage definitions |
+| `PIPELINE` | [{REVIEW_AND_CHAT, ARCHITECT, interactive}, {IMPLEMENTATION, CODER, interactive}] | Stage definitions |
 
 ### 6.3 .e-va-conf: runtime config
 
