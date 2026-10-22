@@ -326,6 +326,16 @@ end
 
 function M.is_duplicate_command(ctx, cmd)
     local normalized = _normalize_command(cmd)
+    -- Check dedup_exceptions: commands matching any exception are never considered duplicates
+    local exceptions = ctx.flow_config and ctx.flow_config.command_flow and ctx.flow_config.command_flow.dedup_exceptions or {}
+    for _, exc in ipairs(exceptions) do
+        if exc:sub(-1) == "*" then
+            local prefix = exc:sub(1, -2):lower()
+            if normalized:sub(1, #prefix) == prefix then return false end
+        else
+            if normalized == exc:lower() then return false end
+        end
+    end
     for _, executed in ipairs(ctx.executed_commands or {}) do
         if _normalize_command(executed) == normalized then
             return true
@@ -336,8 +346,7 @@ end
 
 function M.add_executed_command(ctx, cmd)
     ctx.executed_commands = ctx.executed_commands or {}
-    -- Only track commands that contain a colon (tool:action format)
-    if cmd and cmd:match(":") then
+    if cmd and cmd ~= "" then
         table.insert(ctx.executed_commands, cmd)
         -- Keep last 50 commands
         while #ctx.executed_commands > 50 do

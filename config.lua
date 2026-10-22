@@ -80,9 +80,6 @@ function M.get()
         storage = {
             max_history_messages = 100,
             max_history_tokens = 50000,
-            squash_threshold_messages = 80,
-            squash_threshold_tokens = 100000,
-            dedup_tool_outputs = true,
             include_pinned_in_recency = true,
         },
         context_injection = {
@@ -93,11 +90,9 @@ function M.get()
             max_search_digest_tokens = 20000,
         },
         command_flow = {
-            strict_parsing = true,
             max_retries = 3,
             auto_squash_on_mutation = true,
             continuation_prompt = "check maybe you stuck or what maybe command invalid, dont forget optimize context sometime",
-            reinforcement_interval = 5,
             -- Commands exempt from dedup. Patterns ending with '*' are treated as prefix wildcards
             -- (e.g., "mcp_browser_*" exempts all mcp_browser_* variants like mcp_browser_go_to, mcp_browser_click, etc.)
             -- "shell*" exempts all shell:* commands (shell:ls, shell:npm run build, etc.)
@@ -110,21 +105,7 @@ function M.get()
             system_prompt_estimate = 6000,
             reserved_output = 5000,
         },
-        -- Compression configuration
-        compression = {
-            enabled = true,
-            zone1_size = 5,        -- Recent messages: verbatim
-            zone2_size = 10,        -- Middle messages: light compression
-            max_tool_output_bytes = 8192,
-            compress_thinking_blocks = true,
-            preserve_errors = true,
-            llm_summarization = {
-                enabled = true,
-                min_message_length = 3000,  -- Only summarize very long messages with LLM
-                rate_limit_seconds = 600,
-                max_summaries_per_turn = 3,
-            },
-        },
+
         model_profiles = {
             reasoning = {
                 context_injection = { mode = "separate_message" },
@@ -286,8 +267,6 @@ function M.get()
             model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
-            -- use_selective_multi_stage = true,
-            -- multi_stage_tools = { "delegate_plan" },
             allowed_tools = {
               "read_file",
               "read_chunk",
@@ -310,8 +289,6 @@ function M.get()
             model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
-            -- use_selective_multi_stage = true,
-            -- multi_stage_tools = { "delegate_plan" },
             allowed_tools = {
               "read_file",
               "read_chunk",
@@ -344,6 +321,7 @@ function M.get()
               "pin",
               "unpin",
               "optimize_context",
+              "delegate_plan",
               "patch",
               "create_file",
               "read_file",
