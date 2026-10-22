@@ -35,6 +35,8 @@ classify_test() {
     echo "standalone"
   fi
 }
+# Reset coverage stats to avoid stale entries from previous runs
+rm -f luacov.stats.out luacov.report.out
 echo ">>> Running tests with coverage..."
 OVERALL_STATUS=0
 if [ $# -eq 0 ]; then
@@ -121,6 +123,8 @@ echo ">>> Generating coverage report..."
 ./lua_modules/bin/luacov
 echo "========================================="
 echo "Coverage Summary:"
-grep -E "^/home|^\.e-va|^config|^test_file|^-+$|^Total" luacov.report.out 2>/dev/null || echo "(no coverage data)"
+grep -E "^/home|^\.e-va|^config|^test_file|^-+$|^Total" luacov.report.out 2>/dev/null | \
+  sed "s|^$PROJECT_ROOT/||" | \
+  awk '!seen[$1]++' || echo "(no coverage data)"
 echo "========================================="
 exit $OVERALL_STATUS

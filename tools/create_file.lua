@@ -79,7 +79,6 @@ local function register(registry)
         if w_ok then
             ctx:add_file(rel_path, file_content)
             ctx.file_states[rel_path] = "RECENTLY_MODIFIED"
-            ctx:squash_last_mutation(agent_name)
             return { output = string.format("\n[SUCCESS]: Created file %s (%d bytes).", rel_path, #file_content), signal = "MUTATION_SUCCESS" }
         else
             return { output = "\n[DISK ERROR]: " .. tostring(w_err) }

@@ -315,6 +315,17 @@ function M.run_multi_stage_loop(multi_exec, agent_name, agent_cfg, last_user_msg
         if step.result then
             result_summary = tostring(step.result)
         end
+        -- FIX (MS re-creation loop): record executed command for dedup so a re-issued
+        -- create_file/patch is blocked on the next turn instead of recreating.
+        -- NOTE: no assistant marker added here — tests assert history grows by exactly 1
+        -- (the system summary) after rollback, so we must not add extra messages.
+        local ms_cmd_str = tool_name
+        if multi_exec.file_path and multi_exec.file_path ~= "" then
+            ms_cmd_str = tool_name .. ":" .. multi_exec.file_path
+        end
+        if ctx.add_executed_command then
+            ctx:add_executed_command(ms_cmd_str)
+        end
         ctx:add_message(agent_name, "system", string.format(
             "[MULTI-STAGE RESULT] Tool: %s. Iterations: %d.\nCHANGE HAS BEEN APPLIED TO DISK SUCCESSFULLY. DO NOT REPEAT THIS OPERATION.\n%s",
             tool_name, step.iterations or 0, result_summary

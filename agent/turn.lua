@@ -237,6 +237,14 @@ function M.run_agent_turn(agent_name, agent_cfg, turn, ctx, config, save_state)
             end
             if is_multi_stage_tool then
                 logger.info(string.format("[SELECTIVE MULTI-STAGE] Routing tool '%s' through multi-stage executor", tool_name))
+                -- FIX (MS re-creation loop): dedup guard BEFORE dispatching to run_multi_stage_loop.
+                if ctx:is_duplicate_command(parsed_cmd) then
+                    logger.warn(string.format("[SELECTIVE MULTI-STAGE] Duplicate MS command blocked: %s", parsed_cmd))
+                    ctx:add_message(agent_name, "user",
+                        "[SYSTEM: DUPLICATE COMMAND BLOCKED] You already executed this command successfully (multi-stage). Do NOT repeat it. Proceed to the next step.")
+                    save_state()
+                    return "AUTO_LOOP"
+                end
                 local file_path = nil
                 local has_payload = false
                 if tool_name == "patch" then
