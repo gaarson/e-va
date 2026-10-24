@@ -4,3 +4,9 @@ luacov.report.out
 luacov.stats.out
 .e-va_state_TEST_RUN.json
 .e-va-conf
+.env
+sandbox-workspace/test_*.txt
+sandbox-workspace/test_*.png
+docs
+
+*.so

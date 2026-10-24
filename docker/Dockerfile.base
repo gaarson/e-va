@@ -1,0 +1,73 @@
+FROM debian:unstable-slim
+LABEL org.opencontainers.image.title="E-va Base Agent"
+
+STOPSIGNAL SIGQUIT
+SHELL ["/bin/bash", "-c"]
+
+# Системные зависимости (без Node.js, Chrome, Wayland)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini gosu sudo git curl wget ca-certificates \
+    lua5.4 liblua5.4-dev gcc make luarocks \
+    ripgrep dnsutils \
+    libssl-dev \
+    libcrypt-dev \
+    m4 \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --set lua-interpreter /usr/bin/lua5.4 || true
+
+ENV LUA_INCDIR=/usr/include/lua5.4
+ENV LUA_LIBDIR=/usr/lib/x86_64-linux-gnu
+
+# ПОЛНЫЙ СПИСОК Lua модулей, необходимых для работы ядра агента
+RUN mkdir -p /opt/e-va/lua_modules && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules basexx && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules binaryheap && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules busted && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules compat53 && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules cqueues && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules datafile && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules dkjson && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules fifo && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules http && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules inspect && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules json-lua && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lpeg && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lpeg_patterns && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lua-cjson && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lua-term && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules lua_cliargs && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luacov && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luafilesystem && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luaossl && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luassert && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luasocket && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luasystem && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules mediator_lua && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules penlight && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules say && \
+    luarocks --lua-version=5.4 install --tree /opt/e-va/lua_modules luaposix
+
+# Копируем исходники агента
+COPY . /opt/e-va
+WORKDIR /opt/e-va
+
+# Компилируем C-экстеншены (включая ipc_mcp.so)
+RUN make && chmod +x /opt/e-va/e-va
+
+ENV LUA_PATH="/opt/e-va/lua_modules/share/lua/5.4/?.lua;/opt/e-va/lua_modules/share/lua/5.4/?/init.lua"
+ENV LUA_CPATH="/opt/e-va/lua_modules/lib/lua/5.4/?.so"
+ENV AGENT_HOME=/opt/e-va
+ENV PROJECT_ROOT=/workspace
+ENV EVA_STATUS_PORT=8080
+
+# Создаем пользователя и workspace
+RUN useradd -m -s /bin/bash agentuser && \
+    mkdir -p /workspace /opt/e-va/logs && \
+    chown -R agentuser:agentuser /workspace /opt/e-va/logs
+
+COPY docker/init.sh /opt/e-va/init.sh
+RUN chmod +x /opt/e-va/init.sh
+
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/e-va/init.sh"]
+CMD ["--pipe", "."]

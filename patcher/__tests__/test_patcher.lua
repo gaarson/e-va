@@ -1,0 +1,603 @@
+local patcher = require("patcher")
+
+-- Helper: create a mock ctx with knowledge_base
+local function mock_ctx(content)
+    return {
+        knowledge_base = { ["test_file.lua"] = content },
+        config = { PROJECT_ROOT = ".", CREATE_BACKUPS = false },
+        file_states = {},
+        add_file = function(self, path, c) self.knowledge_base[path] = c end,
+        squash_last_mutation = function() end,
+    }
+end
+-- Helper: simulate the patch tool handler
+local function run_patch(patch_tool, args, ctx)
+    local reg = { tools = {} }
+    local function register(name, desc, usage, handler)
+        reg.tools[name] = { exec = handler }
+    end
+    reg.register = register
+    patch_tool.register(reg)
+    return reg.tools["patch"].exec(args, ctx, "TEST_AGENT")
+end
+
+local patcher = require("patcher")
+
+describe("Patcher - Basic Functionality", function()
+
+    it("should apply a simple SEARCH/REPLACE block", function()
+        local original = "line1\nline2\nline3"
+        local patch = [[<<<<<<< SEARCH
+
+line2
+
+=======
+
+LINE2
+
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.equals("line1\nLINE2\nline3", result)
+    end)
+
+    it("should handle multiple SEARCH/REPLACE blocks", function()
+        local original = "aaa\nbbb\nccc\nddd"
+        local patch = [[<<<<<<< SEARCH
+aaa
+=======
+AAA
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+ccc
+=======
+CCC
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.equals("AAA\nbbb\nCCC\nddd", result)
+    end)
+
+    it("should reject empty SEARCH block", function()
+        local original = "line1\nline2"
+        local patch = [[<<<<<<< SEARCH
+
+=======
+
+replacement
+
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_false(success)
+        assert.truthy(result:match("empty"))
+    end)
+
+    it("should reject identical SEARCH and REPLACE blocks", function()
+        local original = "line1\nline2"
+        local patch = [[<<<<<<< SEARCH
+
+line1
+
+=======
+
+line1
+
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_false(success)
+        assert.truthy(result:match("identical"))
+    end)
+end)
+
+
+describe("Patcher - Nested Conflict Markers Bug Fix", function()
+
+    it("should handle content containing <<<<<<< SEARCH inside REPLACE block", function()
+        local original = "function foo()\n    return 1\nend"
+        local patch = [[<<<<<<< SEARCH
+
+function foo()
+
+    return 1
+
+end
+
+=======
+
+function foo()
+
+    -- example: <<<<<<< SEARCH is a marker
+
+    return 2
+
+end
+
+>>>>>>> REPLACE]]
+
+        local success, result, changes = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.truthy(result:match("<<<<<<< SEARCH is a marker"))
+        assert.equals(1, changes)
+    end)
+
+    it("should handle content containing >>>>>>> REPLACE inside SEARCH block", function()
+        local original = "local x = 1"
+        local patch = [[<<<<<<< SEARCH
+
+local x = 1
+
+=======
+
+local x = 2
+
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.equals("local x = 2", result)
+    end)
+
+    it("should handle ======= inside SEARCH block content", function()
+        local original = "a == b"
+        local patch = [[<<<<<<< SEARCH
+a == b
+=======
+a ~= b
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.equals("a ~= b", result)
+    end)
+
+    it("should handle multiple conflict markers in content", function()
+        local original = "old_code"
+        local patch = [[<<<<<<< SEARCH
+old_code
+=======
+<<<<<<< SEARCH
+=======
+>>>>>>> REPLACE
+new_code
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+
+        assert.is_true(success)
+        assert.equals("<<<<<<< SEARCH\n=======", result)
+    end)
+end)
+
+describe("Patcher - Delimiter Exact Matching", function()
+
+    it("should NOT treat '<<<<<<< SEARCH extra' as a delimiter", function()
+        local original = "start\nmiddle\nend"
+        local patch = [[<<<<<<< SEARCH
+middle
+=======
+<<<<<<< SEARCH extra content here
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.truthy(result:match("<<<<<<< SEARCH extra content here"))
+    end)
+
+    it("should NOT treat '>>>>>>> something' as a closing delimiter", function()
+        local original = "line1"
+        local patch = [[<<<<<<< SEARCH
+line1
+=======
+>>>>>>> something else
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.equals(">>>>>>> something else", result)
+    end)
+
+    it("should require exact '>>>>>>> REPLACE' as closing delimiter", function()
+        local original = "x"
+        local patch = [[<<<<<<< SEARCH
+x
+=======
+y
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.equals("y", result)
+    end)
+end)
+
+
+describe("Patcher - Edge Cases", function()
+
+    it("should handle missing closing delimiter gracefully", function()
+        local original = "line1"
+        local patch = [[<<<<<<< SEARCH
+line1
+=======
+replacement]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+        assert.equals("replacement", result)
+    end)
+
+    it("should handle whitespace-only lines in blocks", function()
+        local original = "a\n\nb"
+
+        local patch = [[<<<<<<< SEARCH
+
+a
+
+
+b
+
+=======
+
+A
+
+
+B
+
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+    end)
+
+    it("should handle no valid blocks", function()
+        local original = "content"
+        local patch = "no blocks here"
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_false(success)
+        assert.truthy(result:match("No valid"))
+    end)
+
+    it("should handle ambiguous matches", function()
+
+        local original = "x\nx\nx"
+
+        local patch = [[<<<<<<< SEARCH
+
+x
+
+=======
+
+y
+
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_false(success)
+        assert.truthy(result:match("AMBIGUOUS"))
+    end)
+end)
+
+
+describe("Patcher - Fuzzy Matching", function()
+    it("should handle whitespace differences", function()
+        local original = "  indented  "
+        local patch = [[<<<<<<< SEARCH
+indented
+=======
+replaced
+>>>>>>> REPLACE]]
+
+        local success, result = patcher.apply_patch(original, patch)
+        assert.is_true(success)
+    end)
+end)
+-- ============================================================================
+-- Consolidated: cases below merged from tools/__tests__/test_patcher.lua
+-- ============================================================================
+describe("patcher.apply_patch — Basic functionality", function()
+    it("should apply a simple single-line replacement", function()
+        local content = "local x = 1\nlocal y = 2\nlocal z = 3"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert.are.equal("local x = 99\nlocal y = 2\nlocal z = 3", new_content)
+    end)
+    it("should apply a multi-line replacement", function()
+        local content = "function foo()\n    return 1\nend\nfunction bar()\n    return 2\nend"
+        local patch = "<<<<<<< SEARCH\nfunction foo()\n    return 1\nend\n=======\nfunction foo()\n    return 42\nend\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("return 42"))
+        assert(new_content:find("function bar"))
+    end)
+    it("should apply multiple patches in one call", function()
+        local content = "local a = 1\nlocal b = 2\nlocal c = 3"
+        local patch = "<<<<<<< SEARCH\nlocal a = 1\n=======\nlocal a = 10\n>>>>>>> REPLACE\n<<<<<<< SEARCH\nlocal c = 3\n=======\nlocal c = 30\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(2, changes)
+        assert(new_content:find("local a = 10"))
+        assert(new_content:find("local c = 30"))
+    end)
+    it("should handle insertion (empty SEARCH is rejected, but replacing a marker works)", function()
+        local content = "START\nEND"
+        local patch = "<<<<<<< SEARCH\nSTART\n=======\nSTART\nINSERTED_LINE\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("INSERTED_LINE"))
+    end)
+    it("should handle deletion (empty REPLACE)", function()
+        local content = "KEEP\nDELETE_ME\nALSO_KEEP"
+        local patch = "<<<<<<< SEARCH\nDELETE_ME\n=======\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(not new_content:find("DELETE_ME"))
+        assert(new_content:find("KEEP"))
+        assert(new_content:find("ALSO_KEEP"))
+    end)
+end)
+describe("patcher.apply_patch — Fuzzy matching (whitespace tolerance)", function()
+    it("should tolerate leading whitespace differences", function()
+        local content = "    local x = 1\n    local y = 2"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local ok, new_content = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert(new_content:find("local x = 99"))
+    end)
+    it("should tolerate trailing whitespace differences", function()
+        local content = "local x = 1   \nlocal y = 2"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local ok, new_content = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert(new_content:find("local x = 99"))
+    end)
+    it("should tolerate mixed tabs/spaces", function()
+        local content = "\tlocal x = 1\n    local y = 2"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local ok, new_content = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert(new_content:find("local x = 99"))
+    end)
+end)
+describe("patcher.apply_patch — Edge cases", function()
+    it("should reject empty SEARCH block", function()
+        local content = "some content"
+        local patch = "<<<<<<< SEARCH\n\n=======\nsomething\n>>>>>>> REPLACE"
+        local ok, err = patcher.apply_patch(content, patch)
+        assert.are_false(ok)
+        assert(err:find("empty or whitespace-only", 1, true))
+    end)
+    it("should reject zero-op patch (SEARCH == REPLACE)", function()
+        local content = "local x = 1"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 1\n>>>>>>> REPLACE"
+        local ok, err = patcher.apply_patch(content, patch)
+        assert.are_false(ok)
+        assert(err:find("EXACTLY identical", 1, true))
+    end)
+    it("should fail when block not found", function()
+        local content = "local x = 1\nlocal y = 2"
+        local patch = "<<<<<<< SEARCH\nlocal nonexistent = 999\n=======\nlocal replaced = 1\n>>>>>>> REPLACE"
+        local ok, err = patcher.apply_patch(content, patch)
+        assert.are_false(ok)
+        assert(err:find("not found", 1, true))
+    end)
+    it("should detect AMBIGUOUS MATCH", function()
+        local content = "local x = 1\nlocal y = 2\nlocal x = 1\nlocal z = 3"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local ok, err = patcher.apply_patch(content, patch)
+        assert.are_false(ok)
+        assert(err:find("AMBIGUOUS", 1, true))
+    end)
+    it("should resolve ambiguity with more context lines", function()
+        local content = "local x = 1\nlocal y = 2\nlocal x = 1\nlocal z = 3"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\nlocal z = 3\n=======\nlocal x = 99\nlocal z = 3\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        -- Only the second occurrence should be replaced
+        assert(new_content:find("local x = 1\nlocal y = 2"))
+        assert(new_content:find("local x = 99\nlocal z = 3"))
+    end)
+    it("should handle missing closing >>>>>>> REPLACE (fallback)", function()
+        local content = "local x = 1\nlocal y = 2"
+        local patch = "<<<<<<< SEARCH\nlocal y = 2\n=======\nBBB_NEW"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("BBB_NEW"))
+    end)
+    it("should handle CRLF line endings", function()
+        local content = "local x = 1\r\nlocal y = 2\r\nlocal z = 3"
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("local x = 99"))
+    end)
+    it("should handle empty content", function()
+        local ok, err = patcher.apply_patch("", "some patch")
+        assert.are_false(ok)
+    end)
+    it("should handle nil content", function()
+        local ok, err = patcher.apply_patch(nil, "some patch")
+        assert.are_false(ok)
+        assert(err:find("No content provided", 1, true))
+    end)
+    it("should handle no valid blocks found", function()
+        local content = "some content"
+        local patch = "just some random text without any markers"
+        local ok, err = patcher.apply_patch(content, patch)
+        assert.are_false(ok)
+        assert(err:find("No valid SEARCH/REPLACE blocks", 1, true))
+    end)
+end)
+describe("patcher.apply_patch — Real-world scenarios", function()
+    it("should patch a Lua function with proper indentation", function()
+        local content = "local function calculate(a, b)\n    local sum = a + b\n    return sum\nend\nlocal function other()\n    return true\nend"
+        local patch = "<<<<<<< SEARCH\nlocal function calculate(a, b)\n    local sum = a + b\n    return sum\nend\n=======\nlocal function calculate(a, b)\n    local product = a * b\n    return product\nend\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("local product = a * b", 1, true))
+        assert(not new_content:find("local sum = a + b"))
+        assert(new_content:find("local function other"))
+    end)
+    it("should patch a C struct definition", function()
+        local content = "typedef struct {\n    int x;\n    int y;\n    int z;\n} Point3D;\nvoid draw(Point3D p) {\n    printf(\"%d,%d,%d\", p.x, p.y, p.z);\n}"
+        local patch = "<<<<<<< SEARCH\ntypedef struct {\n    int x;\n    int y;\n    int z;\n} Point3D;\n=======\ntypedef struct {\n    float x;\n    float y;\n    float z;\n    float w;\n} Point4D;\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("float x"))
+        assert(new_content:find("Point4D"))
+    end)
+    it("should handle patching near file boundaries (beginning)", function()
+        local content = "#!/usr/bin/env lua\nlocal x = 1\nlocal y = 2"
+        local patch = "<<<<<<< SEARCH\n#!/usr/bin/env lua\nlocal x = 1\n=======\n#!/usr/bin/env lua\nlocal x = 100\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("local x = 100"))
+    end)
+    it("should handle patching near file boundaries (end)", function()
+        local content = "local a = 1\nlocal b = 2\nreturn a + b"
+        local patch = "<<<<<<< SEARCH\nlocal b = 2\nreturn a + b\n=======\nlocal b = 2\nreturn a * b\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("return a * b", 1, true))
+    end)
+    it("should handle unicode content", function()
+        local content = 'local greeting = "Привет мир"\nlocal name = "测试"'
+        local patch = '<<<<<<< SEARCH\nlocal greeting = "Привет мир"\n=======\nlocal greeting = "Hello World"\n>>>>>>> REPLACE'
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("Hello World"))
+    end)
+    it("should handle very long lines", function()
+        local long_line = "local data = " .. string.rep("x", 5000)
+        local content = long_line .. "\nlocal next = 1"
+        local patch = "<<<<<<< SEARCH\n" .. long_line .. "\n=======\nlocal data = nil\n>>>>>>> REPLACE"
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("local data = nil"))
+    end)
+end)
+describe("patch tool handler (tools/patch.lua) — Integration", function()
+    local patch_tool = require("tools.patch")
+    it("should reject empty args", function()
+        local ctx = mock_ctx("content")
+        local result = run_patch(patch_tool, "", ctx)
+        assert(result.output:find("Invalid patch syntax", 1, true))
+    end)
+    it("should reject file not found", function()
+        local ctx = mock_ctx(nil)
+        ctx.knowledge_base = {}
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local result = run_patch(patch_tool, "nonexistent_file.lua\n" .. patch, ctx)
+        assert(result.output:find("not found", 1, true))
+    end)
+    it("should succeed with valid patch", function()
+        local ctx = mock_ctx("local x = 1\nlocal y = 2")
+        local patch_body = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local result = run_patch(patch_tool, "test_file.lua\n" .. patch_body, ctx)
+        assert(result.output:find("SUCCESS", 1, true))
+        assert.are.equal("MUTATION_SUCCESS", result.signal)
+        assert.are.equal("RECENTLY_MODIFIED", ctx.file_states["test_file.lua"])
+    end)
+    it("should load file from disk if not in knowledge_base", function()
+        local utils = require("utils")
+        local tmpfile = os.tmpname()
+        local f = io.open(tmpfile, "w")
+        f:write("local x = 1\nlocal y = 2")
+        f:close()
+        local ctx = {
+            knowledge_base = {},
+            config = { PROJECT_ROOT = ".", CREATE_BACKUPS = false },
+            file_states = {},
+            add_file = function(self, path, c) self.knowledge_base[path] = c end,
+            squash_last_mutation = function() end,
+        }
+        local patch_body = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local result = run_patch(patch_tool, tmpfile .. "\n" .. patch_body, ctx)
+        assert(result.output:find("SUCCESS", 1, true))
+        os.remove(tmpfile)
+    end)
+end)
+describe("patcher.apply_patch — Performance tests", function()
+    it("should terminate quickly on large non-matching input", function()
+        -- Create a large file with 2000 lines
+        local lines = {}
+        for i = 1, 2000 do
+            table.insert(lines, string.format("local var_%d = %d", i, i))
+        end
+        local content = table.concat(lines, "\n")
+        -- Search for something that doesn't exist
+        local patch = "<<<<<<< SEARCH\nlocal nonexistent_var = 99999\n=======\nlocal replaced = 1\n>>>>>>> REPLACE"
+        local start_time = os.clock()
+        local ok, err = patcher.apply_patch(content, patch)
+        local elapsed = os.clock() - start_time
+        assert.are_false(ok)
+        assert(elapsed < 2.0, string.format("Took %.2fs, should be under 2s", elapsed))
+    end)
+    it("should handle files with many small differences without hanging", function()
+        -- Create old and new versions with many small differences
+        local old_lines = {}
+        local new_lines = {}
+        for i = 1, 500 do
+            if i % 10 == 0 then
+                table.insert(old_lines, string.format("local val_%d = OLD", i))
+                table.insert(new_lines, string.format("local val_%d = NEW", i))
+            else
+                table.insert(old_lines, string.format("local common_%d = %d", i, i))
+                table.insert(new_lines, string.format("local common_%d = %d", i, i))
+            end
+        end
+        local start_time = os.clock()
+        local diff = patcher.generate_unified_diff(old_lines, new_lines, "test.lua")
+        local elapsed = os.clock() - start_time
+        assert(diff ~= nil)
+        assert(diff ~= "")
+        assert(elapsed < 2.0, string.format("Diff generation took %.2fs, should be under 2s", elapsed))
+    end)
+    it("should handle large files (1000+ lines) with non-matching search blocks within reasonable time", function()
+        local lines = {}
+        for i = 1, 1500 do
+            table.insert(lines, string.format("line_%d = some_content_here_%d", i, i))
+        end
+        local content = table.concat(lines, "\n")
+        local patch = "<<<<<<< SEARCH\nline_999 = some_content_here_999\n=======\nline_999 = REPLACED\n>>>>>>> REPLACE"
+        local start_time = os.clock()
+        local ok, new_content, changes = patcher.apply_patch(content, patch)
+        local elapsed = os.clock() - start_time
+        assert.are_true(ok)
+        assert.are.equal(1, changes)
+        assert(new_content:find("REPLACED"))
+        assert(elapsed < 3.0, string.format("Large file patch took %.2fs, should be under 3s", elapsed))
+    end)
+    it("should detect ambiguous match quickly", function()
+        -- Create content with many duplicate lines
+        local lines = {}
+        for i = 1, 1000 do
+            table.insert(lines, "local x = 1")
+        end
+        local content = table.concat(lines, "\n")
+        local patch = "<<<<<<< SEARCH\nlocal x = 1\n=======\nlocal x = 99\n>>>>>>> REPLACE"
+        local start_time = os.clock()
+        local ok, err = patcher.apply_patch(content, patch)
+        local elapsed = os.clock() - start_time
+        assert.are_false(ok)
+        assert(err:find("AMBIGUOUS", 1, true))
+        assert(elapsed < 2.0, string.format("Ambiguous detection took %.2fs, should be under 2s", elapsed))
+    end)
+end)

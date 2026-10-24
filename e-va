@@ -1,5 +1,10 @@
 #!/bin/bash
-
+# --- Version Flag ---
+if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
+    echo "E-va Agent v1.0.0"
+    exit 0
+fi
+# --- AGENT_HOME Resolution & Validation ---
 SOURCE="${BASH_SOURCE}"
 while [ -h "$SOURCE" ]; do
   DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
@@ -7,6 +12,51 @@ while [ -h "$SOURCE" ]; do
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 AGENT_HOME="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+if [ ! -d "$AGENT_HOME" ]; then
+    echo "[FATAL] AGENT_HOME ($AGENT_HOME) does not exist." >&2
+    exit 1
+fi
+if [ ! -f "$AGENT_HOME/agent.lua" ]; then
+    echo "[FATAL] Core file agent.lua not found in $AGENT_HOME." >&2
+    exit 1
+fi
+if [ ! -f "$AGENT_HOME/config.lua" ]; then
+    echo "[FATAL] Core file config.lua not found in $AGENT_HOME." >&2
+    exit 1
+fi
+# --- SAFETY CHECK: Protect Core Agent Files ---
+# Ensure AGENT_HOME is not writable by the current user to prevent accidental self-modification
+# In Docker, AGENT_HOME (/opt/e-va) is owned by root, so this should pass for chromeuser.
+# If running locally as root, this check helps prevent destructive edits.
+if [ -w "$AGENT_HOME" ]; then
+    echo "[WARNING] AGENT_HOME ($AGENT_HOME) is writable by current user." >&2
+    echo "[WARNING] This poses a risk of accidental self-modification." >&2
+    # We do not exit here to allow local development flexibility, but we log the warning.
+fi
+if [ -n "$GIT_EVA_URL" ]; then
+    echo "Cloning $GIT_EVA_URL ..."
+    rm -rf "$AGENT_HOME"/*; rm -rf "$AGENT_HOME"/.* 2>/dev/null
+    git clone "$GIT_EVA_URL" /tmp/repo
+    if [ -n "$GIT_EVA_SHA256" ]; then
+        ACTUAL_HASH=$(tar -C /tmp/repo -cf - . | sha256sum | awk '{print $1}')
+        if [ "$ACTUAL_HASH" != "$GIT_EVA_SHA256" ]; then
+            echo "[FATAL] SHA256 mismatch: expected $GIT_EVA_SHA256, got $ACTUAL_HASH" >&2
+            rm -rf /tmp/repo
+            exit 1
+        fi
+        echo "[OK] SHA256 verified."
+    fi
+    cp -a /tmp/repo/. "$AGENT_HOME"/
+    rm -rf /tmp/repo
+fi
+
+# --- PIPE MODE DOCUMENTATION ---
+# The --pipe flag enables continuous stdin/stdout mode for external communication.
+# Usage examples:
+#   echo "analyze this code" | docker run -i e-va-agent ./e-va --pipe
+#   docker run -it e-va-agent ./e-va --pipe  (for interactive session)
+# Termination: Send 'quit' or 'exit' via stdin.
+# --------------------------------------------------
 
 PROJECT_ROOT="$(pwd)"
 
@@ -23,5 +73,9 @@ LUA_VERSION=$(lua -v 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
 export LUA_PATH="$PROJECT_ROOT/.e-va-conf/?.lua;$AGENT_HOME/?.lua;$AGENT_HOME/?/init.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?.lua;$AGENT_HOME/lua_modules/share/lua/${LUA_VERSION}/?/init.lua;;"
 export LUA_CPATH="$AGENT_HOME/?.so;$AGENT_HOME/lua_modules/lib/lua/${LUA_VERSION}/?.so;;"
-
+# --- TTY Detection & Auto-Mode Hint ---
+if [ -t 0 ] && [ $# -eq 0 ]; then
+    echo "No arguments provided. Starting interactive TUI mode..."
+    echo "Tip: Use --pipe for programmatic access, or provide a task instruction."
+fi
 exec lua "$AGENT_HOME/agent.lua" "$@"

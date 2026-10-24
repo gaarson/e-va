@@ -1,16 +1,20 @@
-return {
-   exclude = {
-      "lua_modules",
-      "spec",
-   },
-   include = {
-      "agent",
-      "context",
-      "llm_providers",
-      "llm_handler",
-      "logger",
-      "patcher",
-      "tool_registry",
-      "utils",
-   }
+
+luacov_flag = "count"
+
+
+exclude = {
+
+    "lua_modules/",
+
+    "/usr/",
+
+    "/tmp/",
+
+    "luarocks",
+
+    "__tests__/",
+
+    "/test_",
+
 }
+

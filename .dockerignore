@@ -1,0 +1,22 @@
+# Build artifacts and test files
+luacov.report.out
+luacov.stats.out
+*.patch
+run_tests.sh
+test_api.sh
+test_file.lua
+api_tester.lua
+# Directories
+logs/
+spec/
+examples/
+.git/
+.e-va-conf/
+lua_modules/
+# Environment files
+.env
+.env.local
+# Secrets and keys
+*.key
+*.pem
+secrets/

@@ -1,0 +1,66 @@
+# ==========================================
+# STAGE 1: Сборка GUI-стека (Грязный образ)
+# ==========================================
+FROM debian:unstable-slim AS gui-builder
+
+# Build deps для cage, wayvnc и neatvnc
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    meson \
+    ninja-build \
+    git \
+    ca-certificates \
+    pkg-config \
+    gcc \
+    libwlroots-0.20-dev \
+    libaml-dev \
+    libneatvnc-dev \
+    libjansson-dev \
+    libpixman-1-dev \
+    libwayland-dev \
+    libgbm-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 1. Build and install cage from local source
+COPY docker/cage /tmp/cage
+WORKDIR /tmp/cage
+RUN meson setup build && ninja -C build && ninja -C build install
+
+# 2. Build neatvnc from source (apt version 1.0.1 is too old, wayvnc needs >=1.1)
+RUN git clone --depth 1 https://github.com/any1/neatvnc.git /tmp/neatvnc && \
+    cd /tmp/neatvnc && \
+    meson setup build --prefix=/usr --libdir=lib/x86_64-linux-gnu && \
+    ninja -C build && \
+    ninja -C build install && \
+    ldconfig && \
+    rm -rf /tmp/neatvnc
+
+# 3. Build and install wayvnc from local source
+COPY docker/wayvnc /tmp/wayvnc
+WORKDIR /tmp/wayvnc
+RUN PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$PKG_CONFIG_PATH \
+    meson setup build && \
+    ninja -C build && \
+    ninja -C build install
+
+# ==========================================
+# STAGE 2: Финальный Desktop-образ
+# ==========================================
+FROM e-va-browser:latest
+LABEL org.opencontainers.image.title="E-va Desktop Agent"
+
+# Копируем скомпилированные бинарники
+COPY --from=gui-builder /usr/local/bin/cage /usr/bin/cage
+COPY --from=gui-builder /usr/local/bin/wayvnc /usr/bin/wayvnc
+
+# Копируем специфичные библиотеки glob-паттернами
+COPY --from=gui-builder /usr/lib/x86_64-linux-gnu/libwlroots*.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=gui-builder /usr/lib/x86_64-linux-gnu/libneatvnc*.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=gui-builder /usr/lib/x86_64-linux-gnu/libaml*.so* /usr/lib/x86_64-linux-gnu/
+
+# Обновляем кэш динамических библиотек
+RUN ldconfig
+
+ENV EVA_MODULE_DESKTOP=1
+
+EXPOSE 5900 9222 8080

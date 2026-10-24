@@ -1,93 +1,344 @@
 local M = {}
 local os = require("os")
 local utils = require("utils")
-
+-- Cache for .env file values (fallback when os.getenv is empty)
+local _env_cache = {}
+--- Resolve an environment variable, falling back to .env file parsing.
+-- Tries os.getenv first, then parses .env files from known paths.
+local function resolve_env(key, default)
+    local val = os.getenv(key)
+    if val and val ~= "" then
+        return val
+    end
+    -- Check cache first
+    if _env_cache[key] then
+        return _env_cache[key]
+    end
+    -- Parse .env files from known paths
+    local env_paths = {
+        os.getenv("ENV_PATH"),
+        os.getenv("AGENT_HOME") and os.getenv("AGENT_HOME") .. "/.env",
+        os.getenv("PROJECT_ROOT") and os.getenv("PROJECT_ROOT") .. "/.env",
+        "./.env",
+    }
+    for _, path in ipairs(env_paths) do
+        if path then
+            local f = io.open(path, "r")
+            if f then
+                for line in f:lines() do
+                    line = line:gsub("^%s+", ""):gsub("%s+$", "")
+                    if line ~= "" and not line:match("^#") then
+                        local k, v = line:match("^([A-Za-z_][A-Za-z0-9_]*)=(.*)")
+                        if k and v then
+                            v = v:gsub('^"', ''):gsub('"$', ''):gsub("^'", ''):gsub("'", "$")
+                            _env_cache[k] = v
+                        end
+                    end
+                end
+                f:close()
+            end
+        end
+    end
+    val = _env_cache[key]
+    if val and val ~= "" then
+        return val
+    end
+    return default
+end
+local function get_api_key()
+    local key = os.getenv("LLM_API_KEY")
+    if not key or key == "" then
+        key = os.getenv("OPENAI_API_KEY")
+    end
+    if not key or key == "" then
+        return "UNSET_LLM_API_KEY"
+    end
+    return key
+end
 function M.get()
     local cfg = {}
     cfg.PROJECT_ROOT = os.getenv("PROJECT_ROOT") or "."
 
     cfg.MCP_SERVERS = {}
 
+    -- FOR DOCKER
+    -- MCP_SERVERS = {
+    --     browser = "npx -y chrome-devtools-mcp@latest --headless=new --isolated --screenshot-format=jpeg --screenshot-quality=70 --screenshot-max-width=1024 --screenshot-max-height=768 --no-usage-statistics --no-performance-crux"
+    -- }
+
     cfg.LIMITS = {
-        MAX_CONTEXT = 150000,
+        MAX_CONTEXT = 160000,
         RESERVED_OUTPUT = 5000,
         SYSTEM_PROMPT_ESTIMATE = 6000,
         MEMORY_RATIO = 0.8,
-        CHARS_PER_TOKEN = 3.5
+        CHARS_PER_TOKEN = 3.5,
+        MCP_MAX_OUTPUT_TOKENS = 16000,
+        SHELL_TIMEOUT = 60,           -- seconds, hard timeout for non-interactive shell
+    }
+
+    cfg.CONTEXT_FLOW = {
+        storage = {
+            max_history_messages = 100,
+            max_history_tokens = 50000,
+            include_pinned_in_recency = true,
+        },
+        context_injection = {
+            mode = "append_to_last_user", -- Меняйте на "separate_message" для моделей с коротким контекстом
+            recency_block_enabled = true,
+            search_digest_enabled = true,
+            max_recency_tokens = 20000,
+            max_search_digest_tokens = 20000,
+        },
+        compression = {
+            max_tool_output_bytes = 131072,
+        },
+        command_flow = {
+            max_retries = 3,
+            auto_squash_on_mutation = true,
+            continuation_prompt = "check maybe you stuck or what maybe command invalid, dont forget optimize context sometime",
+            -- Commands exempt from dedup. Patterns ending with '*' are treated as prefix wildcards
+            -- (e.g., "mcp_browser_*" exempts all mcp_browser_* variants like mcp_browser_go_to, mcp_browser_click, etc.)
+            -- "shell*" exempts all shell:* commands (shell:ls, shell:npm run build, etc.)
+            -- "task_complete*" exempts task_complete and task_complete:... variants
+            -- "delegate_plan*" exempts delegate_plan and delegate_plan:... variants
+            dedup_exceptions = { "task_complete*", "delegate_plan*", "shell*", "mcp_browser_*", "search*", "read_file*", "read_chunk*" },
+        },
+        token_estimation = {
+            chars_per_token = 3.5,
+            system_prompt_estimate = 6000,
+            reserved_output = 5000,
+        },
+
+        model_profiles = {
+            reasoning = {
+                context_injection = { mode = "separate_message" },
+                command_flow = { strict_parsing = true, max_retries = 5 },
+                storage = { squash_threshold_tokens = 90000 }
+            },
+            coding = {
+                context_injection = { mode = "append_to_last_user", max_recency_tokens = 50000 },
+                command_flow = { auto_squash_on_mutation = true, reinforcement_interval = 3 },
+                storage = { max_history_tokens = 40000 }
+            }
+        }
     }
 
     cfg.PIPELINE_SETTINGS = {
-        MAX_TURNS = 150,
-        ABORT_ON_FATAL = true
+        MAX_TURNS = 420,
+        ABORT_ON_FATAL = true,
+        CONTEXT_INJECTION_MODE = "separate_message" -- "separate_message" or "append_to_last_user"
     }
 
+    cfg.HANDOFF = {
+        enabled = true,
+        clear_history = "smart",
+        preserve_task_anchor = true,
+        memo_sections = { "execution_plan", "decisions", "files_modified", "remaining_tasks", "pinned_files" },
+        max_memo_tokens = 12000,
+        pass_knowledge_base = true,        -- Передавать все файлы из базы знаний
+        pass_pinned_files = true,          -- Передавать зафиксированные файлы
+        pass_requested_files = true,       -- Передавать файлы, запрошенные на предыдущем этапе
+        pass_recent_tool_outputs = false,   -- Передавать результаты последних инструментов
+        auto_load_plan_files = true,       -- Автоматически подгружать файлы из плана
+        max_knowledge_base_files = 100,    -- Increased from 50 to 100
+        pin_plan_targets = true,           -- NEW: Automatically pin all execution plan target files
+        max_delegate_file_tokens = 15000,  -- NEW: Max tokens per file for delegate_plan auto-loading
+        -- NEW: Enable CODER to send error summaries back to ARCHITECT for plan adjustment
+        feedback_to_architect = true,
+        feedback_sections = { "tasks_completed", "tasks_failed", "errors_encountered", "plan_deviations", "recommendations" },
+        max_feedback_tokens = 8192,
+    }
+    -- Circuit breaker configuration for tool failures
+    cfg.CIRCUIT_BREAKER = {
+        enabled = true,
+        threshold = 3,           -- Number of consecutive failures before triggering
+        cooldown_turns = 5,      -- Number of turns to wait before retrying the failed tool
+        warning_message = true,  -- Whether to inject a warning message to the agent
+    }
     cfg.TASKS = {}
 
     cfg.CREATE_BACKUPS = false
-    cfg.PICTURES_DIR = nil -- e.g., '.e-va-conf/pictures'
-
-    local BASE_PARAMS = {
-        stream = true,
-        stop = { "<|im_end|>", "<|im_start|>" }
+    -- ========================================================================
+    -- PICTURES_DIR: Directory for screenshots and images.
+    --
+    -- Pipeline architecture (entry point → processing → injection):
+    --   1. agent/turn.lua: Calls ctx:load_images() every turn.
+    --   2. context/images.lua: Orchestrates loading, filtering, trimming, injection,
+    --      and token estimation. Calls utils.load_images_from_dir() for I/O.
+    --   3. utils/images.lua: Low-level I/O, compression (ffmpeg/ImageMagick),
+    --      base64 encoding, hashing, dimension detection.
+    --
+    -- Full pipeline per turn:
+    --   scan → compress → base64 encode → age-filter → budget-filter → dedup →
+    --   inject into last user message as multipart content.
+    -- ========================================================================
+    cfg.PICTURES_DIR = ".e-va-conf/pictures"
+    -- ========================================================================
+    -- IMAGE_CONFIG: Configuration for image processing pipeline.
+    -- ========================================================================
+    cfg.IMAGE_CONFIG = {
+        -- max_images_per_turn: Hard cap on images sent per turn.
+        -- Used by trim_images() Phase 2 (count budget) and add_image() as rejection threshold.
+        -- When exceeded, oldest images (head of array) are removed first.
+        max_images_per_turn = 10,
+        -- max_images_base64_bytes: Total base64 size budget for all images (default 4MB).
+        -- Used by load_images() budget filter AND trim_images() Phase 3 (byte budget).
+        -- Images are sorted newest-first; oldest are dropped when budget is exceeded.
+        -- Reduced to 4MB since compressed images are significantly smaller than originals.
+        max_images_base64_bytes = 4 * 1024 * 1024,
+        -- auto_purge_after_turn: When true, M.purge_images() is called after each turn,
+        -- clearing ctx.images, ctx.images_loaded, and ctx.last_sent_image_hashes.
+        -- Default false preserves visual context across turns for continuity.
+        -- For manual purge, call M.purge_images().
+        auto_purge_after_turn = false,
+        -- max_image_age_hours: Images older than this (checked via stat mtime in load_images())
+        -- are silently skipped during directory scan. Default 168 hours (7 days).
+        -- Prevents loading stale screenshots no longer relevant to the current task.
+        max_image_age_hours = 168,
+        -- tokens_per_base64_byte: NOTE — this coefficient is currently UNUSED for actual
+        -- token estimation. Actual estimation in inject_images_into_messages() uses the
+        -- OpenAI tile-based model:
+        --   low-res (short side < 768px, both sides <= 2048px) = 85 tokens flat
+        --   high-res = 85 + 170 * num_512x512_tiles (capped at 4x4 = 16 tiles)
+        -- This field exists as a fallback/reserved parameter for future use.
+        tokens_per_base64_byte = 0.004,
+        -- max_image_dimension: Maximum pixel dimension for the longest side during compression.
+        -- Passed to compress_image() as max_dim. Images exceeding this on any axis are
+        -- resized via ffmpeg (primary) or ImageMagick (fallback). Quality is hardcoded at 60.
+        -- Files < 200KB or already within bounds are skipped. Value 512px chosen for
+        -- aggressive token economy (Option A).
+        max_image_dimension = 1024,
     }
 
+    -- Source .env file early to populate cache for AGENT_DEFAULTS
+    resolve_env("LLM_BASE_URL", "")
+    local BASE_PARAMS = {
+        stream = true,
+    }
     local SAMPLERS = {
         ANALYTICAL = {
             max_tokens = 16384,
-            temperature = 0.1,
-            top_p = 0.45,
-            min_p = 0.05,
-            smoothing_factor = 0.2,
-            repetition_penalty = 1.05,
-            token_healing = true,
-            temperature_last = true
+            temperature = 0.3,
+            top_p = 0.95,
+            top_k = 20,
+            min_p = 0.0,
+            chat_template_kwargs = {
+              enable_thinking = true,
+              preserve_thinking = false,
+            },
+            thinking_token_budget = 4096,
+            reasoning_effort = "low",
+            -- enable_thinking = true,
+            presence_penalty = 1.5,
+            repetition_penalty = 1.0
         },
         ENGINEERING = {
             max_tokens = 16384,
-            temperature = 0.55,
-            top_p = 0.95,
-            min_p = 0.1,
-            smoothing_factor = 0.2,
-            repetition_penalty = 1.1,
-            presence_penalty = 0.1,
-            token_healing = true,
-            temperature_last = true
+            temperature = 0.2,
+            top_p = 0.80,
+            top_k = 20,
+            min_p = 0.0,
+            thinking_token_budget = 4096,
+            reasoning_effort = "low",
+            chat_template_kwargs = {enable_thinking = true, preserve_thinking = false},
+            presence_penalty = 1.5,
+            repetition_penalty = 1.0
         }
     }
 
     cfg.AGENT_DEFAULTS = {
-        url = os.getenv("LLM_URL") or "http://localhost:8000/v1/chat/completions",
-        model = os.getenv("LLM_MODEL") or "default-model",
+        url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
+        model = resolve_env("LLM_MODEL", "default-model"),
+        token = get_api_key(),
         is_reasoning = false,
-        params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL)
+        min_max_tokens = 1024,
+        params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
+        -- reasoning_config = {
+        --     auto_toggle = true, -- Разрешить агенту самому включать/выключать мысли
+        --     complexity_threshold = 0.7, -- Если оценка сложности > 0.7, включаем мысли
+        --     max_thought_tokens = 2048 -- Лимит токенов на один блок мыслей
+        -- }
     }
 
+
     cfg.AGENTS = {
-        ARCHITECT = {
-            name = "ARCHITECT",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
+        ANALYZER = {
+            name = "ANALYZER",
+            url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
+            token = get_api_key(),
             is_reasoning = true,
-            model = "Qwen3.5-27B-exl3-4.0bpw",
+            model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
             prompt_file = "prompts/architect.md",
             allowed_tools = {
-              "read_file", "read_chunk", "search", "mcp_browser_*", "explore_tree", "shell", "delegate_plan", "ask_user", "task_complete", "outline", "pin", "unpin" }
+              "read_file",
+              "read_chunk",
+              "search",
+              "explore_tree",
+              "shell",
+              "delegate_plan",
+              "task_complete",
+              "outline",
+              "pin",
+              "unpin",
+              "optimize_context",
+            }
+        },
+        ARCHITECT = {
+            name = "ARCHITECT",
+            url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
+            token = get_api_key(),
+            is_reasoning = true,
+            model = resolve_env("LLM_MODEL", "local_model"),
+            params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ANALYTICAL),
+            prompt_file = "prompts/architect.md",
+            allowed_tools = {
+              "read_file",
+              "read_chunk",
+              "search",
+              "explore_tree",
+              "shell",
+              "delegate_plan",
+              "task_complete",
+              "outline",
+              "pin",
+              "unpin",
+              "task_complete",
+              "optimize_context",
+            }
         },
         CODER = {
             name = "CODER",
-            url = "http://192.168.0.102:8000/v1/chat/completions",
-            is_reasoning = true,
-            model = "Qwen3.5-27B-exl3-4.0bpw",
+            url = resolve_env("LLM_BASE_URL", "http://localhost:8000/v1/chat/completions"),
+            token = get_api_key(),
+            is_reasoning = false,
+            model = resolve_env("LLM_MODEL", "local_model"),
             params = utils.deep_merge(BASE_PARAMS, SAMPLERS.ENGINEERING),
+            use_selective_multi_stage = true,
+            multi_stage_tools = { "create_file", "patch" },
             prompt_file = "prompts/coder.md",
-            allowed_tools = { "patch", "create_file", "shell", "read_file", "read_chunk", "search", "rollback", "cleanup_baks", "task_complete", "outline", "pin", "unpin" }
+            allowed_tools = {
+              "search",
+              "explore_tree",
+              "outline",
+              "pin",
+              "unpin",
+              "optimize_context",
+              "delegate_plan",
+              "patch",
+              "create_file",
+              "read_file",
+              "shell",
+              "read_chunk",
+              "task_complete",
+            }
         }
     }
 
     cfg.PIPELINE = {
-        { stage = "ANALYSIS_AND_PLANNING", agents = { "ARCHITECT" }, mode = "sequential" },
+        -- { stage = "ANALYSIS_AND_PLANNING", agents = { "ANALYZER" }, mode = "sequential" },
         { stage = "REVIEW_AND_CHAT", agents = { "ARCHITECT" }, mode = "interactive" },
-        { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "sequential" }
+        { stage = "IMPLEMENTATION", agents = { "CODER" }, mode = "interactive" }
     }
 
     return cfg
