@@ -8,3 +8,5 @@ luacov.stats.out
 sandbox-workspace/test_*.txt
 sandbox-workspace/test_*.png
 docs
+
+*.so
