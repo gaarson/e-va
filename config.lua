@@ -89,6 +89,9 @@ function M.get()
             max_recency_tokens = 20000,
             max_search_digest_tokens = 20000,
         },
+        compression = {
+            max_tool_output_bytes = 131072,
+        },
         command_flow = {
             max_retries = 3,
             auto_squash_on_mutation = true,

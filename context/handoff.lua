@@ -391,7 +391,12 @@ function M.inject_handoff_files(ctx, agent_name)
             inject_file(path, ctx.knowledge_base[path])
         end
     end
-    if #parts > 0 then
+    if #parts > 0 or ctx.handoff_memo then
+        -- Prepend handoff memo so it's always visible to the next stage
+        local block_prefix = ""
+        if ctx.handoff_memo then
+            block_prefix = "[HANDOFF MEMO FROM PREVIOUS STAGE]\n" .. ctx.handoff_memo .. "\n\n"
+        end
         -- Build PINNED_TARGETS summary section
         local pinned_targets_section = ""
         if #pinned_targets > 0 then
@@ -410,7 +415,7 @@ function M.inject_handoff_files(ctx, agent_name)
             end
             lazy_files_section = lazy_files_section .. "</LAZY_HANDOFF_FILES>"
         end
-        local block = "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n") .. pinned_targets_section .. lazy_files_section
+        local block = block_prefix .. "\n[HANDOFF CONTEXT - Files from previous stage]\n" .. table.concat(parts, "\n\n") .. pinned_targets_section .. lazy_files_section
         manager.add_message(ctx, agent_name, "user", block)
     end
 end
